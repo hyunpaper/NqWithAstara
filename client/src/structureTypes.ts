@@ -585,6 +585,12 @@ const CODE_TEXT: Record<string, string> = {
   AFTER_ENTRY_CUTOFF: "장 마감 전 신규 진입 차단 시간대입니다",
   ACTIVE_ENTRY_WIRING_PENDING:
     "active 모드라도 신규 진입 배선은 아직 연결되지 않았습니다 (D6 범위)",
+
+  // v5 진입 관측 (D6 active 배선)
+  V5_ENTRY_COMMITTED: "v5 구조 계획으로 진입을 생성했습니다",
+  V5_ENTRY_BLOCKED_BY_OPEN_TRADE: "이 종목에 OPEN 거래가 있어 신규 진입을 보류했습니다",
+  V5_ENTRY_PLAN_INVALID: "동결 계획의 가격 순서가 성립하지 않아 진입을 거절했습니다",
+  V5_ENTRY_PORT_UNAVAILABLE: "진입 포트가 배선되지 않아 진입을 보류했습니다 (설정 문제)",
 };
 
 /** 코드 하나를 문장으로. 접미 카운트(`...x3`)와 `CODE:detail` 형태를 함께 처리한다. */
