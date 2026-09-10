@@ -15,10 +15,11 @@ using Xunit;
 /// - 확정 HIGH 2 + LOW 2가 가장 빨리 갖춰지는 지그재그(H@b2, L@b4, H@b6, L@b8)도
 ///   마지막 피벗의 우측 확인이 bucket 10 종료 = 세션 시작 후 55분이다.
 /// - 단방향(단조) 세션은 반대쪽 로컬 극값이 생기지 않아 피벗 0개가 수 시간 지속될 수 있고,
-///   그동안 현재 정책은 모든 후보 유형(REBOUND 포함)의 READY를 차단한다.
+///   그동안 추세 정렬이 필수인 유형(PULLBACK/BREAKOUT)의 READY가 차단된다(#33 이후 REBOUND는 스코프 밖).
 ///
-/// 이 파일은 정책을 바꾸지 않는다. §8(REBOUND는 높은 추세 점수를 요구하지 않음, CounterTrend=true)과
-/// §9.4(REBOUND는 alignmentQuality 제외)와의 긴장은 별도 이슈(#33)의 범위다.
+/// #30 시점에는 이 차단이 전 유형(REBOUND 포함)에 일괄 적용됐다. 이슈 #33(D7)이 §8(REBOUND는 높은
+/// 추세 점수를 요구하지 않음, CounterTrend=true)·§9.4(REBOUND는 alignmentQuality 제외)와의 모순을 해소해
+/// 차단을 PULLBACK/BREAKOUT으로 한정했고, 이 파일의 REBOUND 기대값은 그에 맞게 갱신됐다(각 테스트 주석 참조).
 /// </summary>
 public sealed class StructureBottleneckVerificationTests
 {
@@ -180,13 +181,13 @@ public sealed class StructureBottleneckVerificationTests
     }
 
     /// <summary>
-    /// 현재 정책 고정: REBOUND도 같은 사유 하나로 거절된다. §8은 REBOUND에 높은 추세 점수를 요구하지 않고
-    /// (CounterTrend=true), §9.4는 REBOUND 품질에서 alignmentQuality를 제외하는데도 추세 근거 검증용
-    /// 차단이 일괄 적용된다 — 이 긴장의 해소(정책 조정)는 이 이슈 범위 밖이며 별도 이슈 #33에서 다룬다.
-    /// 이 테스트는 "지금은 이렇게 동작한다"를 고정한다.
+    /// [#33(D7)에서 기대값 갱신] #30 시점에는 이 REBOUND가 MISSING_5M_STRUCTURE 단독으로 거절됐다
+    /// (INTC 23:51 사례 재현). §8은 REBOUND에 높은 추세 점수를 요구하지 않고(CounterTrend=true) §9.4는
+    /// alignmentQuality를 제외하므로 그 일괄 차단은 설계 모순이었고, #33이 차단을 PULLBACK/BREAKOUT으로
+    /// 한정했다. 이제 같은 fixture가 READY에 도달하고, 코호트 분리 집계용 관측 note가 남는다.
     /// </summary>
     [Fact]
-    public void AReboundIsCurrentlyRejectedSolelyForMissingFiveMinuteStructure()
+    public void AReboundReachesReadyDespiteMissingFiveMinuteStructureAndCarriesTheCohortNote()
     {
         var (bars, zones, episodes, analysisAsOf) = ReboundScenario();
         var trend = Trend(bars, analysisAsOf);
@@ -202,40 +203,92 @@ public sealed class StructureBottleneckVerificationTests
         Assert.Equal(SetupKind.Rebound, candidate.Kind);
         Assert.True(candidate.CounterTrend);
         Assert.DoesNotContain("alignmentQuality", candidate.Quality.UsedComponents);   // §9.4: 추세 정렬 비필수
-        Assert.Equal(CandidateDisposition.Rejected, candidate.Disposition);
-        Assert.Equal(new[] { TrendEvaluator.BlockerMissing5mStructure }, candidate.RejectionCodes.ToArray());
-        Assert.True(candidate.Planning.Viable);
-        Assert.True(candidate.Quality.ReadyAllowed);
+        Assert.Equal(CandidateDisposition.Ready, candidate.Disposition);
+        Assert.Empty(candidate.RejectionCodes);
+        Assert.Contains(SetupDetector.NoteReadyWithout5mStructure, candidate.Notes);
+        Assert.NotNull(candidate.Plan);
+        Assert.Equal(candidate.EventId, result.PreferredCandidateId);
+        // TrendAssessment 산출과 표시용 ReadyBlockers는 그대로다 — 소비 지점(후보 거절)만 유형별 스코프다.
+        Assert.Contains(TrendEvaluator.BlockerMissing5mStructure, result.ReadyBlockers);
     }
 
     /// <summary>
-    /// 현재 정책 문서화: MISSING_5M_STRUCTURE는 유형을 가리지 않고 PULLBACK/BREAKOUT/REBOUND의
-    /// READY를 모두 차단한다(§16B). 유형별 영향: PULLBACK/BREAKOUT은 alignmentQuality가 필수라
-    /// 추세 근거 검증과 정합적이고, REBOUND는 §8/§9.4 설계 의도와 긴장이 있다(#33 참조).
+    /// [#33(D7)에서 기대값 갱신] #30 시점에는 전 유형이 차단됐다. 조정 후: MISSING_5M_STRUCTURE는
+    /// alignmentQuality(추세 정렬)가 필수인 PULLBACK/BREAKOUT만 거절하고, REBOUND는 스코프 밖이다
+    /// (구조 결측 note를 달고 나머지 게이트 통과 시 READY).
     /// </summary>
     [Fact]
-    public void TheStructureBlockerCurrentlyRejectsEveryCandidateKind()
+    public void TheStructureBlockerRejectsOnlyTheAlignmentRequiredKinds()
     {
         var (bars, zones, episodes, analysisAsOf) = ReboundScenario();
         var atr = SessionAtr.At(bars, SessionAtr.Series(bars, P), bars[^1].Start);
 
-        // 눌림 저점(99.10)이 지지 하단 아래라 이 fixture는 PULLBACK과 REBOUND를 동시에 만든다.
-        foreach (var state in new[] { TrendState.Up, TrendState.Range })
-        {
-            var trend = D2.Trend(state, 40, structureDirection: null,
-                readyBlockers: TrendEvaluator.BlockerMissing5mStructure);
-            var result = SetupDetector.Detect(SetupDetectionRequest.Create(Fx.Symbol, Fx.SessionStart, Fx.SessionEnd,
-                analysisAsOf, analysisAsOf, bars, zones, episodes, trend, atr, 100.00m, analysisAsOf,
-                D2.Quote(99.99m, 100.01m, 31)), P);
+        // 눌림 저점(99.10)이 지지 하단 아래라 이 fixture는 UP에서 PULLBACK과 REBOUND를 동시에 만든다.
+        var trend = D2.Trend(TrendState.Up, 40, structureDirection: null,
+            readyBlockers: TrendEvaluator.BlockerMissing5mStructure);
+        var result = SetupDetector.Detect(SetupDetectionRequest.Create(Fx.Symbol, Fx.SessionStart, Fx.SessionEnd,
+            analysisAsOf, analysisAsOf, bars, zones, episodes, trend, atr, 100.00m, analysisAsOf,
+            D2.Quote(99.99m, 100.01m, 31)), P);
 
-            Assert.NotEmpty(result.Candidates);
-            Assert.All(result.Candidates, candidate =>
-            {
-                Assert.Equal(CandidateDisposition.Rejected, candidate.Disposition);
-                Assert.Contains(TrendEvaluator.BlockerMissing5mStructure, candidate.RejectionCodes);
-            });
-            Assert.Null(result.PreferredCandidateId);
-        }
+        var pullback = result.Candidates.Single(x => x.Kind == SetupKind.Pullback);
+        Assert.Equal(CandidateDisposition.Rejected, pullback.Disposition);
+        Assert.Contains(TrendEvaluator.BlockerMissing5mStructure, pullback.RejectionCodes);
+        Assert.DoesNotContain(SetupDetector.NoteReadyWithout5mStructure, pullback.Notes);
+
+        var rebound = result.Candidates.Single(x => x.Kind == SetupKind.Rebound);
+        Assert.Equal(CandidateDisposition.Ready, rebound.Disposition);
+        Assert.DoesNotContain(TrendEvaluator.BlockerMissing5mStructure, rebound.RejectionCodes);
+        Assert.Contains(SetupDetector.NoteReadyWithout5mStructure, rebound.Notes);
+        Assert.Equal(rebound.EventId, result.PreferredCandidateId);
+    }
+
+    /// <summary>
+    /// #33(D7) 경계 고정: REBOUND 면제는 MISSING_5M_STRUCTURE 하나뿐이다. trend 자체가 계산 불가한
+    /// TREND_UNAVAILABLE은 REBOUND도 그대로 차단한다(가격 family 유효·trend not null이 전제 조건).
+    /// </summary>
+    [Fact]
+    public void TrendUnavailableStillBlocksAReboundEvenAfterTheScopeChange()
+    {
+        var (bars, zones, episodes, analysisAsOf) = ReboundScenario();
+        var atr = SessionAtr.At(bars, SessionAtr.Series(bars, P), bars[^1].Start);
+
+        // TrendEvaluator가 계산 불가일 때 내보내는 조합 그대로: UNKNOWN + 두 blocker.
+        var trend = D2.Trend(TrendState.Unknown, null, structureDirection: null,
+            readyBlockers: [TrendEvaluator.BlockerTrendUnavailable, TrendEvaluator.BlockerMissing5mStructure]);
+        var result = SetupDetector.Detect(SetupDetectionRequest.Create(Fx.Symbol, Fx.SessionStart, Fx.SessionEnd,
+            analysisAsOf, analysisAsOf, bars, zones, episodes, trend, atr, 100.00m, analysisAsOf,
+            D2.Quote(99.99m, 100.01m, 31)), P);
+
+        var rebound = result.Candidates.Single(x => x.Kind == SetupKind.Rebound);
+        Assert.Equal(CandidateDisposition.Rejected, rebound.Disposition);
+        Assert.Contains(TrendEvaluator.BlockerTrendUnavailable, rebound.RejectionCodes);
+        Assert.DoesNotContain(TrendEvaluator.BlockerMissing5mStructure, rebound.RejectionCodes);
+        Assert.Null(result.PreferredCandidateId);
+    }
+
+    /// <summary>
+    /// #33(D7) 경계 고정: 구조 결측이어도 나머지 게이트는 REBOUND에 전부 유지된다.
+    /// 목표 구조가 없으면(§9.2) 여전히 거절이고, 관측 note는 면제 표식으로 남는다.
+    /// </summary>
+    [Fact]
+    public void AReboundWithoutStructureStillKeepsEveryOtherGate()
+    {
+        var (bars, zones, episodes, analysisAsOf) = ReboundScenario();
+        var trend = Trend(bars, analysisAsOf);
+        var atr = SessionAtr.At(bars, SessionAtr.Series(bars, P), bars[^1].Start);
+
+        // 목표 저항을 빼면 NO_TARGET_STRUCTURE로 거절된다 — 구조 결측 면제가 다른 게이트를 열지 않는다.
+        var withoutTarget = zones.Where(x => x.Role == ZoneRole.Support).ToImmutableArray();
+        var result = SetupDetector.Detect(SetupDetectionRequest.Create(Fx.Symbol, Fx.SessionStart, Fx.SessionEnd,
+            analysisAsOf, analysisAsOf, bars, withoutTarget, episodes, trend, atr, 100.00m, analysisAsOf,
+            D2.Quote(99.99m, 100.01m, 31)), P);
+
+        var rebound = result.Candidates.Single(x => x.Kind == SetupKind.Rebound);
+        Assert.Equal(CandidateDisposition.Rejected, rebound.Disposition);
+        Assert.Contains(StructuralPlanner.NoTargetStructure, rebound.RejectionCodes);
+        Assert.DoesNotContain(TrendEvaluator.BlockerMissing5mStructure, rebound.RejectionCodes);
+        Assert.Null(rebound.Plan);
+        Assert.Null(result.PreferredCandidateId);
     }
 
     // ══ ① 피벗 규칙 — plateau 제외와 확인 지연(미래 누출 방지) ══
