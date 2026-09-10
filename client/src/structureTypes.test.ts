@@ -9,6 +9,8 @@ import {
   clock,
   codeText,
   codeTexts,
+  missingComponentText,
+  missingComponentTexts,
   num1,
   num2,
   num3,
@@ -269,5 +271,69 @@ describe("codeTexts", () => {
   it("null은 빈 배열, 빈 코드는 걸러낸다", () => {
     expect(codeTexts(null)).toEqual([]);
     expect(codeTexts(["MISSING_QUOTE", ""])).toEqual(["실시간 호가가 없습니다"]);
+  });
+});
+
+// 이슈 #25 — missingComponents 표시 계약.
+// missingComponents는 경고/이벤트 코드가 아니라 계산 구성요소 이름이며,
+// "계산에 필요한 근거 부족"으로 설명한다. 코드 사전(codeText)과 분리된 경로다.
+describe("missingComponentText — 결측 컴포넌트 전용 사전 (이슈 #25)", () => {
+  // 서버 전수 대조: TrendEvaluator.cs가 trend.missingComponents에 넣는 7종.
+  const TREND_KEYS = [
+    "structureDirection",
+    "atr1m",
+    "vwap",
+    "efficiency",
+    "emaDirection",
+    "slopeDirection",
+    "vwapDirection",
+  ];
+  // ZoneEvaluator.cs가 구간 강도 missingComponents(DTO: missingEvidence)에 넣는 4종.
+  const ZONE_KEYS = ["touchEvidence", "reactionEvidence", "recency", "confluence"];
+
+  it("서버가 내보내는 알려진 결측 키 전부가 사전에 등록되어 fallback을 타지 않는다", () => {
+    for (const key of [...TREND_KEYS, ...ZONE_KEYS]) {
+      const text = missingComponentText(key);
+      expect(text, key).not.toContain("설명이 등록되지 않은");
+      expect(text, key).not.toContain("원문 표시");
+      // 한국어 설명이어야 한다 (키 이름만 되돌려주지 않는다).
+      expect(text, key).toMatch(/[가-힣]/);
+    }
+  });
+
+  it("structureDirection은 확정 5분 피벗 구조 부족으로 설명한다", () => {
+    const text = missingComponentText("structureDirection");
+    expect(text).toContain("확정 5분 피벗");
+    expect(text).toContain("부족");
+    // 코드 fallback 문구("설명이 등록되지 않은 코드")로 새지 않는다.
+    expect(text).not.toContain("코드");
+  });
+
+  it("결측은 근거 부족이지 계산 오류가 아니다 — 오류/실패 단어를 쓰지 않는다", () => {
+    for (const key of [...TREND_KEYS, ...ZONE_KEYS]) {
+      const text = missingComponentText(key);
+      expect(text, key).not.toContain("오류");
+      expect(text, key).not.toContain("실패");
+    }
+  });
+
+  it("모르는 새 키는 감추지 않고 원문을 보존한다(§19-9)", () => {
+    expect(missingComponentText("brandNewComponent")).toBe(
+      "brandNewComponent — 설명이 등록되지 않은 결측 요소입니다 (원문 표시)",
+    );
+  });
+
+  it("빈 문자열·공백은 빈 문자열", () => {
+    expect(missingComponentText("")).toBe("");
+    expect(missingComponentText("   ")).toBe("");
+  });
+});
+
+describe("missingComponentTexts", () => {
+  it("null은 빈 배열, 빈 이름은 걸러낸다", () => {
+    expect(missingComponentTexts(null)).toEqual([]);
+    expect(missingComponentTexts(["vwap", ""])).toEqual([
+      "VWAP — 세션 거래량이 아직 없어 VWAP을 계산하지 못했습니다",
+    ]);
   });
 });
