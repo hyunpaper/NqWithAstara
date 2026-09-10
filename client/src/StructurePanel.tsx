@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Layers } from "lucide-react";
 import StructureChart, { ChartBar } from "./StructureChart";
 import PlanExplanation from "./PlanExplanation";
+// 이슈 #26: 라이브 목록(App)과 같은 비교 함수를 공용 모듈에서 가져와 두 화면의 정렬이 갈라지지 않게 한다(§3).
+import { compareByTrendStrength, compareByV5State } from "./structureSort";
 import {
   StructureResponse,
   StructureSummary,
@@ -44,12 +46,6 @@ type Fetched = {
 };
 
 const POLL_MS = 15000;
-
-const qualitySort = (a: number | null | undefined, b: number | null | undefined) => {
-  const av = a == null || !Number.isFinite(a) ? Number.NEGATIVE_INFINITY : a;
-  const bv = b == null || !Number.isFinite(b) ? Number.NEGATIVE_INFINITY : b;
-  return bv - av;
-};
 
 const trendClass = (state: string | null | undefined) => {
   switch ((state ?? "").toUpperCase()) {
@@ -178,22 +174,10 @@ export default function StructurePanel({
     watchlist.find((w) => w.symbol === symbol)?.name ?? "";
 
   const ordered = useMemo(() => {
+    // 기본 정렬: v5 상태 우선순위 → EntryQuality ↓ → |SignedTrend| ↓ → symbol(§13·이슈 #26 §3).
+    // 추세 강도 정렬은 방향이 아니라 |SignedTrend| 크기다. 비교 함수는 App 라이브 목록과 공용이다.
     const copy = [...rows];
-    copy.sort((a, b) => {
-      if (sort === "trend") {
-        const diff = qualitySort(a.signedTrend, b.signedTrend);
-        if (diff !== 0) return diff;
-        return a.symbol.localeCompare(b.symbol);
-      }
-      // 기본 정렬: READY 우선 → EntryQuality 내림차순 → symbol(§13).
-      const rank = (row: StructureSummaryRow) =>
-        candidateGroup(row.candidateState) === "ready" ? 0 : 1;
-      const rankDiff = rank(a) - rank(b);
-      if (rankDiff !== 0) return rankDiff;
-      const qDiff = qualitySort(a.entryQuality, b.entryQuality);
-      if (qDiff !== 0) return qDiff;
-      return a.symbol.localeCompare(b.symbol);
-    });
+    copy.sort(sort === "trend" ? compareByTrendStrength : compareByV5State);
     return copy;
   }, [rows, sort]);
 
@@ -281,14 +265,14 @@ export default function StructurePanel({
               <button
                 className={sort === "ready" ? "on" : ""}
                 onClick={() => setSort("ready")}
-                title="READY 우선 → 진입 품질 내림차순 → 심볼"
+                title="v5 상태 우선 → 진입 품질 → 추세 강도 → 심볼"
               >
                 기본
               </button>
               <button
                 className={sort === "trend" ? "on" : ""}
                 onClick={() => setSort("trend")}
-                title="추세 강도 내림차순 → 심볼"
+                title="추세 강도(절대값) 내림차순 → 심볼"
               >
                 추세 강도
               </button>

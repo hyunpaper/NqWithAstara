@@ -205,6 +205,8 @@ export type StructureSummaryRow = {
   candidateState?: string | null;
   preferredCandidateId?: string | null;
   entryQuality?: number | null;
+  /** 이슈 #26: 대표 후보의 종류(PULLBACK/BREAKOUT/REBOUND). 대표 후보가 없으면 null이다. */
+  preferredKind?: string | null;
   analysisAsOf?: string | null;
   quoteAt?: string | null;
   warnings?: string[] | null;
@@ -352,6 +354,30 @@ export const setupKindLabel = (kind: string | null | undefined): string => {
       return kind ? `${kind} (미등록)` : "—";
   }
 };
+
+// ── 이슈 #26: 라이브 목록 v5 열 전용 표기 ────────────────────────────────────
+// SignedTrend/EntryQuality를 v4 scoreStyle 색상·`/100` 포맷·매수/매도 문구에 절대 연결하지 않는다(§2).
+// %·승률·확률·성공 단어를 쓰지 않으며, 결측을 0으로 위장하지 않는다(스냅샷 테스트로 고정).
+
+/** SignedTrend 전용 렌더 문자열: 부호 화살표 + 부호 있는 값(소수 1자리) + 추세 상태 라벨. null이면 "추세 미산정". */
+export const signedTrendText = (
+  state: string | null | undefined,
+  signedTrend: number | null | undefined,
+): string => {
+  if (signedTrend == null || !Number.isFinite(signedTrend)) return "추세 미산정";
+  const arrow = signedTrend > 0 ? "▲" : signedTrend < 0 ? "▼" : "—";
+  const sign = signedTrend > 0 ? "+" : signedTrend < 0 ? "−" : "";
+  return `${arrow} ${sign}${Math.abs(signedTrend).toFixed(1)} ${trendStateLabel(state)}`;
+};
+
+/** EntryQuality 표기: 대표 후보가 없거나 값이 결측이면 "미평가" 고정 — null을 0으로 만들지 않는다(§2-4). */
+export const entryQualityText = (
+  preferredCandidateId: string | null | undefined,
+  entryQuality: number | null | undefined,
+): string =>
+  !preferredCandidateId || entryQuality == null || !Number.isFinite(entryQuality)
+    ? "미평가"
+    : entryQuality.toFixed(1);
 
 /** D3 계약 문서는 `FLIPPED_*`, 실제 직렬화는 enum 이름 그대로인 `FLIPPEDSUPPORT`다. 둘 다 받는다. */
 const normalizeRole = (role: string | null | undefined): string =>
