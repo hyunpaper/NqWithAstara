@@ -25,7 +25,10 @@ import {
 import { useVisiblePolling } from "./useVisiblePolling";
 import LiquidityPanel from "./LiquidityPanel";
 import StructurePanel from "./StructurePanel";
+import SimStructurePanel from "./SimStructurePanel";
 import type { StructureSummary } from "./structureTypes";
+import type { StructureCohortReport, TradeStructure } from "./dashboardTypes";
+import { tradeEntryTooltip } from "./dashboardTypes";
 
 type Bar = { time: string; close: number; ema?: number; vwap?: number };
 type Indicators = {
@@ -141,6 +144,8 @@ type SimTradeRow = {
   logic?: string | null;
   exitEstimated?: boolean | null;
   lastPriceAt?: string | null;
+  /** 이슈 #27: v5 거래의 진입 시점 동결 컨텍스트(§11). v4/legacy 거래에는 없다. */
+  structure?: TradeStructure | null;
 };
 type SimProfile = {
   count: number;
@@ -176,6 +181,8 @@ type SimData = {
     analysis: SimAnalysis | null;
     byKind?: { kind: string; stats: SimStats }[];
   }[];
+  /** 이슈 #27: v5 동결 근거 기준 코호트 집계(additive). 구버전 서버에는 없을 수 있다. */
+  structure?: StructureCohortReport | null;
 };
 type Metrics = {
   symbol: string;
@@ -1296,7 +1303,9 @@ const kindLabel = (k: string) =>
       ? "과매도 반등"
       : k === "BREAKOUT"
         ? "돌파"
-        : k;
+        : k === "PULLBACK"
+          ? "눌림목"
+          : k;
 const simStatusLabel = (s: string) =>
   s === "OPEN"
     ? "진행 중"
@@ -1391,6 +1400,8 @@ function Dashboard() {
       )}
       {cohort && s.closed < 10 && !analysis?.sampleWarning && <div className="sample-warning">청산 {s.closed}건의 작은 표본입니다. 현재 수치는 잠정 관찰값이며 규칙 변경 근거로 확정하기 어렵습니다.</div>}
       {analysis?.sampleWarning && <div className="sample-warning">{analysis.sampleWarning}</div>}
+      {/* 이슈 #27: v5 동결 근거 코호트 — 집계는 전부 서버(Domain) 소유 */}
+      <SimStructurePanel report={data.structure} />
       {analysis && (
         <section className="panel metrics-panel">
           <div className="panel-head">
@@ -1559,14 +1570,9 @@ function Dashboard() {
                   <td>
                     <b>{t.symbol}</b>
                   </td>
-                  <td
-                    className="has-tip"
-                    title={[
-                      `점수 ${t.score ?? "—"} · σ ${t.extSigma ?? "—"} · 거래량 ${t.relVolume ?? "—"}× · 매수비중 ${t.buyShare ?? "—"}% · RSI ${t.rsi ?? "—"}`,
-                      ...(t.reasons ?? []),
-                    ].join("\n")}
-                  >
+                  <td className="has-tip" title={tradeEntryTooltip(t)}>
                     {kindLabel(t.kind)}
+                    {t.structure && <small className="estimated-exit">v5 동결</small>}
                   </td>
                   <td>{money(t.entryPrice)}</td>
                   <td title={t.stopBasis || undefined}>{money(t.stop)}</td>
