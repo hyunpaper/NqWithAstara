@@ -1,0 +1,61 @@
+# Dependencies and generated output (at any depth)
+node_modules/
+dist/
+bin/
+obj/
+App_Data/
+.runtime/
+
+# Local logs and diagnostics
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local AI/assistant state
+.claude/
+.codex/
+.clodex/
+.ai/
+.cursor/
+.continue/
+
+# Environment files and local credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+tossapi.txt
+tossss.txt
+
+# ASP.NET local configuration. Commit only the documented example.
+appsettings.json
+appsettings.*.json
+!appsettings.example.json
+
+# IDE and OS state
+*.user
+*.suo
+.vs/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+TestResults/
+coverage/
+
+# Local working docs and launchers (never commit)
+*.cmd
+/WORK-LOG*.md
+/ITERATIONS.md
+/REVIEW-*.md
+/STRUCTURE-ENGINE-*.md
+/REPOSITORY-IMPORT.md
+/ARCHITECTURE.md
+/CONTRIBUTING.md
+/research/
+server/README.md
