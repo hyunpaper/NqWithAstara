@@ -9,6 +9,7 @@ import {
   clock,
   codeText,
   codeTexts,
+  missingComponentTexts,
   num1,
   num2,
   num3,
@@ -120,12 +121,19 @@ export default function PlanExplanation({ analysis, candidate }: Props) {
             5분 확정 피벗이 부족합니다 — 피벗 확인 대기 (추세 구조 근거 없음)
           </p>
         )}
+        {/* missingComponents는 경고 코드가 아니라 "계산 근거가 부족해 생략한 요소" 이름이다.
+            코드 사전(codeTexts)이 아닌 결측 전용 사전으로 설명한다. 값 0은 결측이 아니다(§16A). */}
         {arr(trend?.missingComponents).length > 0 && (
-          <ul className="se-list">
-            {codeTexts(trend?.missingComponents).map((text, i) => (
-              <li key={i}>{text}</li>
-            ))}
-          </ul>
+          <>
+            <p className="se-line se-dim">
+              계산 근거가 아직 부족해 생략한 요소 (계산 오류·0점이 아닙니다):
+            </p>
+            <ul className="se-list">
+              {missingComponentTexts(trend?.missingComponents).map((text, i) => (
+                <li key={i}>{text}</li>
+              ))}
+            </ul>
+          </>
         )}
         {trendBlockers.length > 0 && (
           <ul className="se-list">

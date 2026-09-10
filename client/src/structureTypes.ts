@@ -593,6 +593,44 @@ const CODE_TEXT: Record<string, string> = {
   V5_ENTRY_PORT_UNAVAILABLE: "진입 포트가 배선되지 않아 진입을 보류했습니다 (설정 문제)",
 };
 
+// ── 결측 컴포넌트 이름 → 한국어 설명 ────────────────────────────────────────
+// missingComponents는 경고/이벤트 "코드"(SCREAMING_SNAKE)가 아니라 계산 구성요소
+// "이름"(camelCase)이다. 의미는 "이 요소를 계산할 근거(확정 봉·피벗·유효 ATR 등)가
+// 아직 부족해 계산에서 생략했다"이며, 계산 오류나 0점이 아니다(§16A: 결측을 0으로
+// 대체하지 않는다. 값 0은 유효한 값이고 결측이 아니다).
+// 출처 전수 대조: server/Domain/Structure/TrendEvaluator.cs (추세 7종),
+// server/Domain/Structure/ZoneEvaluator.cs (구간 강도 4종).
+
+const MISSING_COMPONENT_TEXT: Record<string, string> = {
+  // 추세(TrendEvaluator) — trend.missingComponents
+  structureDirection:
+    "구조 방향 — 구조 방향을 계산할 확정 5분 피벗 구조가 아직 부족합니다 (피벗 확인 대기)",
+  atr1m: "1분 ATR — 유효한 ATR(>0)이 아직 없어 ATR로 정규화하는 요소를 계산하지 못했습니다",
+  vwap: "VWAP — 세션 거래량이 아직 없어 VWAP을 계산하지 못했습니다",
+  efficiency: "추세 효율 — 경로 효율을 계산할 완료 봉이 아직 부족합니다",
+  emaDirection: "EMA 정렬 방향 — EMA(9·21) 또는 유효 ATR이 아직 부족합니다",
+  slopeDirection: "EMA 기울기 방향 — 기울기 비교 구간의 완료 봉 또는 유효 ATR이 아직 부족합니다",
+  vwapDirection: "VWAP 대비 방향 — VWAP 또는 유효 ATR이 아직 없어 계산하지 못했습니다",
+  // 구간 강도(ZoneEvaluator) — zone.missingEvidence (기하평균에서 생략된 요소)
+  touchEvidence: "접촉 증거 — 완료된 접촉 반응이 아직 없어 계산하지 못했습니다",
+  reactionEvidence: "반응 증거 — 반응 크기를 정규화할 완료 반응·ATR이 아직 없습니다",
+  recency: "최근성 — 최근성을 계산할 확정 원천이 아직 없습니다",
+  confluence: "증거 중첩 — 이 구간을 지지하는 원천 계열이 아직 없습니다",
+};
+
+/**
+ * 결측 컴포넌트 이름 하나를 "계산 근거 부족" 설명으로. 코드 사전(codeText)과 분리된
+ * 별도 경로다(§19-9: 모르는 이름은 감추지 않고 원문 그대로 노출).
+ */
+export const missingComponentText = (name: string): string => {
+  const raw = (name ?? "").trim();
+  if (!raw) return "";
+  return MISSING_COMPONENT_TEXT[raw] ?? `${raw} — 설명이 등록되지 않은 결측 요소입니다 (원문 표시)`;
+};
+
+export const missingComponentTexts = (names: string[] | null | undefined): string[] =>
+  arr(names).map(missingComponentText).filter((x) => x.length > 0);
+
 /** 코드 하나를 문장으로. 접미 카운트(`...x3`)와 `CODE:detail` 형태를 함께 처리한다. */
 export const codeText = (code: string): string => {
   const raw = (code ?? "").trim();
