@@ -550,6 +550,10 @@ public sealed class StructureAnalysisService(
                     entryQuality = view?.Candidates
                         .Where(x => x.EventId == view.PreferredCandidateId)
                         .Select(x => x.EntryQuality).FirstOrDefault(),
+                    // 이슈 #26: 대표 후보의 종류(PULLBACK/BREAKOUT/REBOUND). 새 계산 없이 후보 값을 옮긴다.
+                    preferredKind = view?.Candidates
+                        .Where(x => x.EventId == view.PreferredCandidateId)
+                        .Select(x => x.Kind).FirstOrDefault(),
                     analysisAsOf = view?.AnalysisAsOf,
                     quoteAt = view?.QuoteAt,
                     warnings = view?.Warnings ?? []
