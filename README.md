@@ -124,7 +124,7 @@ flowchart LR
 | 분류 | 라벨 |
 |---|---|
 | 성격 | `bug` `feature` `refactor` `test` `ci` `docs` `chore` `hotfix` |
-| 영역 | `back-end` `front-end` `common` |
+| 영역 | `BE` `FE` `COMMON` |
 | 도메인 | `structure-engine` `simulation` |
 | 메타 | `priority-high` `blocked` `agent:claude` `agent:codex` |
 
