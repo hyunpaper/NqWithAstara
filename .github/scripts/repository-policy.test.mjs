@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { inspectContent, inspectPath, normalizePath } from './repository-policy.mjs';
 
-const ignoreFile = new URL('../.gitignore', import.meta.url);
+const ignoreFile = new URL('../../.gitignore', import.meta.url);
 
 function checkIgnored(paths) {
   const root = mkdtempSync(join(tmpdir(), 'astra-policy-'));
@@ -41,5 +41,5 @@ test('secret parser recognizes only high-confidence forms', () => {
   assert.equal(inspectContent('config.txt', `token=${'ghp_' + 'a'.repeat(36)}`)[0].rule, 'GitHub token');
   assert.equal(inspectContent('config.txt', `id=${'AKIA' + 'A'.repeat(16)}`)[0].rule, 'AWS access key');
   assert.equal(inspectContent('config.txt', 'AKIA-short and ghp_short').length, 0);
-  assert.deepEqual(inspectContent('scripts/repository-policy.mjs', `token=${'ghp_' + 'a'.repeat(36)}`), []);
+  assert.deepEqual(inspectContent('.github/scripts/repository-policy.mjs', `token=${'ghp_' + 'a'.repeat(36)}`), []);
 });

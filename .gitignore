@@ -49,6 +49,7 @@ TestResults/
 coverage/
 
 # Local working docs and launchers (never commit)
+/scripts/
 *.cmd
 /WORK-LOG*.md
 /ITERATIONS.md
