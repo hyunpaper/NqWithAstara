@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  push:
+    branches: [master, develop]
+  pull_request:
+    branches: [master, develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  init:
+    name: init
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Validate repository policy
+        run: |
+          node scripts/repository-policy.mjs
+          node --test scripts/repository-policy.test.mjs
+
+      - name: Validate pull request branches
+        if: github.event_name == 'pull_request'
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        shell: bash
+        run: |
+          branch_pattern='^(feature|fix|refactor|release)/(BE|FE|COMMON)/[a-z0-9]+(-[a-z0-9]+)*$'
+          release_pattern='^release/(BE|FE|COMMON)/[a-z0-9]+(-[a-z0-9]+)*$'
+
+          if [[ "$BASE_REF" == "develop" && "$HEAD_REF" =~ $branch_pattern ]]; then
+            exit 0
+          fi
+          if [[ "$BASE_REF" == "master" && "$HEAD_REF" =~ $release_pattern ]]; then
+            exit 0
+          fi
+
+          echo "Invalid pull request route: $HEAD_REF -> $BASE_REF"
+          echo "develop accepts <feature|fix|refactor|release>/<BE|FE|COMMON>/<kebab-slug>."
+          echo "master accepts only release/<BE|FE|COMMON>/<kebab-slug>."
+          exit 1
+
+      - name: Restore server dependencies
+        run: dotnet restore server/tests/Astra.Server.Tests.csproj
+
+      - name: Install client dependencies
+        working-directory: client
+        run: npm ci
+
+  build:
+    name: build
+    needs: init
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Build client
+        working-directory: client
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build server tests
+        run: dotnet build server/tests/Astra.Server.Tests.csproj --configuration Release
+
+      - name: Upload compiled server tests
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-tests
+          path: server/tests/bin/Release/net9.0/
+          if-no-files-found: error
+          retention-days: 1
+
+  test:
+    name: test
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Validate repository policy
+        run: |
+          node scripts/repository-policy.mjs
+          node --test scripts/repository-policy.test.mjs
+
+      - name: Download compiled server tests
+        uses: actions/download-artifact@v4
+        with:
+          name: server-tests
+          path: artifacts/server-tests
+
+      - name: Run server tests
+        run: dotnet vstest artifacts/server-tests/Astra.Server.Tests.dll --Logger:"trx;LogFileName=server-tests.trx" --ResultsDirectory:test-results
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 7
