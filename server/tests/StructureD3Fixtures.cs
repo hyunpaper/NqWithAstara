@@ -134,6 +134,9 @@ sealed class RecordingStore : ILocalStore
     public List<string> Writes { get; } = [];
     public bool RejectWrites { get; set; }
 
+    /// <summary>테스트 시작 상태를 심는다(예: active 전환 시점에 이미 열려 있던 v4 거래).</summary>
+    public void Seed(params SimTrade[] trades) => Trades = trades.ToList();
+
     public async Task<T> Read<T>(string file, T fallback)
     {
         await _gate.WaitAsync();

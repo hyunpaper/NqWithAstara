@@ -1,0 +1,110 @@
+using Astra.Server.Domain.Structure;
+
+namespace Astra.Server.Domain;
+
+// v5 구조 엔진 D6 — 설계 §18 active 배선의 Domain 절반.
+// active에서 신규 시뮬 거래는 v5 구조 계획(StructuralPlanner)이 소유하고, 체결 시점의 FrozenPlan을 함께 저장한다.
+// 여기서는 계획을 만들지 않는다. 성립한 StructuralTradePlan을 받아 거래로 옮길 뿐이며,
+// 구조 근거가 없을 때의 폴백(ATR 배수·1.5R 역산)은 존재하지 않는다(§19-5).
+// 청산은 새로 만들지 않는다. v5 거래도 기존 SimulationEngine의 봉 replay·gap stop·same-bar stop-first·EOD를
+// 그대로 재사용하되, v4 전용 score<40 CUT만 v5에 적용하지 않는다(§10).
+
+/// <summary>구조 진입 시도의 결과 구분. 실패는 이유를 남기고 v4로 자동 fallback하지 않는다(§16B).</summary>
+public enum StructuralEntryOutcome
+{
+    /// <summary>새 v5 거래가 생성됐다.</summary>
+    Entered,
+    /// <summary>같은 EntryEventId의 거래가 이미 존재한다(재시도·재시작 멱등성). 새 거래를 만들지 않는다.</summary>
+    AlreadyEntered,
+    /// <summary>해당 종목에 OPEN 거래가 있다. 한 종목 OPEN 하나 제한은 버전 공통이다(§18).</summary>
+    BlockedByOpenTrade,
+    /// <summary>동결 계획의 가격 순서(0 &lt; Stop &lt; Entry &lt; Target)가 성립하지 않는다. 거래를 만들지 않는다.</summary>
+    InvalidPlan
+}
+
+/// <summary>
+/// 구조 진입 요청. 거래 숫자(진입가·손절·목표)는 전부 <see cref="FrozenStructureContext.PlanSnapshot"/>에서 오며
+/// 다른 어디서도 만들지 않는다. EnteredAt/SessionEnd는 Application이 명시적으로 전달한다(§4).
+/// </summary>
+public sealed record StructuralEntryRequest(string Symbol, DateTimeOffset TriggerBarStart,
+    DateTimeOffset EnteredAt, DateTimeOffset SessionEnd, FrozenStructureContext Context);
+
+public sealed record StructuralEntryResult(List<SimTrade> Trades, StructuralEntryOutcome Outcome, SimTrade? Trade);
+
+public static class StructuralSimulation
+{
+    /// <summary>
+    /// v5 청산 정책 버전(§11 StructuralExitPolicyVersion). 동결된 구조 Stop/Target과 EOD만으로 관리하고
+    /// 조기 청산/트레일링/v4 CUT을 적용하지 않는다는 계약을 저장 데이터에 남긴다.
+    /// </summary>
+    public const string ExitPolicyVersion = "v5-exit.frozen-plan.1";
+
+    /// <summary>v5 거래의 손절/목표 근거 표기(표시용). 숫자의 원천은 FrozenPlan이다.</summary>
+    public const string StopBasis = "구조 무효화 anchor 아래";
+    public const string TargetBasis = "다음 저항 하단 앞";
+
+    /// <summary>
+    /// v5 소유 거래인지. Logic 접두사가 단일 기준이며(설계 §11: 신규 활성 v5 거래는 "v5-structure.*"),
+    /// 동결 컨텍스트가 남아 있는 행도 v5로 본다(부분 손상 데이터 방어).
+    /// </summary>
+    public static bool OwnsTrade(SimTrade trade) =>
+        trade.Logic?.StartsWith("v5-structure", StringComparison.Ordinal) == true || trade.Structure is not null;
+
+    /// <summary>
+    /// 진입 시점의 구조 계획을 동결한다(§10 "체결 시 FrozenPlan을 저장한다").
+    /// 이후 계산 결과가 바뀌어도 이 스냅샷은 다시 만들지 않는다.
+    /// </summary>
+    public static FrozenStructureContext Freeze(StructuralTradePlan plan, string entryEventId, string trendAtEntry,
+        double? signedTrendAtEntry, double? entryQualityAtEntry, DateTimeOffset analysisAsOf, DateTimeOffset? quoteAt)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentException.ThrowIfNullOrEmpty(entryEventId);
+        var snapshot = new FrozenPlanSnapshot(plan.PlanId, plan.Kind, plan.EntryReference, plan.InvalidationAnchor,
+            plan.Stop, plan.Target, plan.InvalidationZoneSnapshot.Id, plan.InvalidationZoneSnapshot.Lower,
+            plan.InvalidationZoneSnapshot.Upper, plan.TargetZoneSnapshot.Id, plan.TargetZoneSnapshot.Lower,
+            plan.TargetZoneSnapshot.Upper, plan.Buffer, plan.BufferBasis, plan.FrontRunBuffer, plan.NetReward,
+            plan.NetRisk, plan.NetR, plan.RiskPercent, plan.Costs.FeePerShare, plan.Costs.ExtraCostPerShare,
+            plan.Costs.ValidSpread, plan.Costs.MissingLiquidity, plan.Costs.EligibilityCostModelVersion,
+            plan.Costs.RealizedFillCostModelVersion, plan.CreatedAt, plan.ExpiresAt, plan.EngineVersion,
+            plan.PolicyHash, plan.ReasonCodes.ToArray(), plan.HumanExplanation);
+        return new FrozenStructureContext(entryEventId, snapshot, trendAtEntry, signedTrendAtEntry,
+            entryQualityAtEntry, analysisAsOf, quoteAt, ExitPolicyVersion);
+    }
+
+    /// <summary>
+    /// 동결 계획으로 새 시뮬 거래를 만든다. 규칙(§10/§16B/§18):
+    /// 같은 EntryEventId는 다시 진입하지 않고(재시작·저장 실패 재시도 멱등성), 종목당 OPEN 1개 제한은 v4/v5 공통이며,
+    /// Score에는 EntryQuality를 끼워 넣지 않는다(§11 "Score는 과거 의미 보존"). Logic은 계획의 EngineVersion이다.
+    /// </summary>
+    public static StructuralEntryResult Enter(IReadOnlyList<SimTrade> source, StructuralEntryRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(request);
+        var trades = source.ToList();
+
+        var existing = trades.FirstOrDefault(x =>
+            string.Equals(x.Structure?.EntryEventId, request.Context.EntryEventId, StringComparison.Ordinal));
+        if (existing is not null) return new StructuralEntryResult(trades, StructuralEntryOutcome.AlreadyEntered, existing);
+
+        if (trades.Any(x => x.Symbol.Equals(request.Symbol, StringComparison.OrdinalIgnoreCase) && x.Status == "OPEN"))
+            return new StructuralEntryResult(trades, StructuralEntryOutcome.BlockedByOpenTrade, null);
+
+        var plan = request.Context.PlanSnapshot;
+        var entry = (double)plan.EntryReference;
+        var stop = (double)plan.Stop;
+        var target = (double)plan.Target;
+        if (!(stop > 0) || stop >= entry || target <= entry)
+            return new StructuralEntryResult(trades, StructuralEntryOutcome.InvalidPlan, null);
+
+        // 결정적 ID: 같은 이벤트의 재시도가 다른 거래처럼 보이지 않게 한다(§16B 재시작 규칙과 같은 방향).
+        var id = StructureMath.SourceId("simtrade", request.Symbol, request.Context.EntryEventId)[..8];
+        var trade = new SimTrade(id, request.Symbol, plan.Kind, request.EnteredAt, entry, target, stop,
+            TargetBasis, StopBasis, "OPEN", null, null, null, entry,
+            Score: null, ExtSigma: null, RelVolume: null, BuyShare: null, Rsi: null,
+            Reasons: [plan.Explanation], Logic: plan.EngineVersion, LastEvaluatedBarAt: null,
+            SessionEnd: request.SessionEnd, ExitEstimated: null, LastPriceAt: request.EnteredAt,
+            TriggerBarAt: request.TriggerBarStart, Structure: request.Context);
+        trades.Add(trade);
+        return new StructuralEntryResult(trades, StructuralEntryOutcome.Entered, trade);
+    }
+}
