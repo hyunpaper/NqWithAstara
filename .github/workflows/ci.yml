@@ -119,6 +119,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
@@ -149,9 +151,26 @@ jobs:
           --results-directory test-results
           --logger "trx;LogFileName=server-tests.trx"
 
+      - name: Install client dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Run client tests with coverage
+        working-directory: client
+        run: npm test
+
       - name: Coverage summary
         if: always()
         run: node .github/scripts/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload client coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-client
+          path: client/coverage/
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Upload server coverage
         if: always()
