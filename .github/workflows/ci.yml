@@ -119,6 +119,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
@@ -130,14 +132,54 @@ jobs:
           node .github/scripts/repository-policy.mjs
           node --test .github/scripts/repository-policy.test.mjs
 
+      # coverlet 수집기는 dotnet test의 어댑터 경로 배선이 필요해, 빌드 산출물을
+      # 원래 bin 위치로 되돌린 뒤 --no-build로 실행한다 (빌드 1회 원칙 유지).
       - name: Download compiled server tests
         uses: actions/download-artifact@v4
         with:
           name: server-tests
-          path: artifacts/server-tests
+          path: server/tests/bin/Release/net9.0
 
-      - name: Run server tests
-        run: dotnet vstest artifacts/server-tests/Astra.Server.Tests.dll --Logger:"trx;LogFileName=server-tests.trx" --ResultsDirectory:test-results
+      - name: Restore server dependencies
+        run: dotnet restore server/tests/Astra.Server.Tests.csproj
+
+      - name: Run server tests with coverage
+        run: >-
+          dotnet test server/tests/Astra.Server.Tests.csproj
+          --configuration Release --no-build
+          --collect:"XPlat Code Coverage"
+          --results-directory test-results
+          --logger "trx;LogFileName=server-tests.trx"
+
+      - name: Install client dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Run client tests with coverage
+        working-directory: client
+        run: npm test
+
+      - name: Coverage summary
+        if: always()
+        run: node .github/scripts/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload client coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-client
+          path: client/coverage/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload server coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-server
+          path: test-results/**/coverage.cobertura.xml
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Upload test results
         if: always()
