@@ -11,8 +11,31 @@ public sealed record Position(double EntryPrice, double Quantity, double? Target
 public sealed record PositionInput(double EntryPrice, double Quantity);
 public sealed record Candle(DateTimeOffset Timestamp, double Open, double High, double Low, double Close, double Volume);
 public sealed record MarketSession(bool IsOpen, string Label, DateTimeOffset? NextOpen, DateTimeOffset? Start, DateTimeOffset? End);
-/// <summary>신호 발동 시점의 가상 진입 기록. 손절/목표 도달 시 자동 청산되며 수수료 0.2%를 손익에 차감한다. 진입 당시 판단 근거(점수·σ·거래량·체결·RSI·사유)를 함께 남겨 사후 분석에 쓴다.</summary>
-public sealed record SimTrade(string Id, string Symbol, string Kind, DateTimeOffset EnteredAt, double EntryPrice, double Target, double Stop, string? TargetBasis, string? StopBasis, string Status, double? ExitPrice, DateTimeOffset? ExitAt, double? PnlPercent, double LastPrice, int? Score = null, double? ExtSigma = null, double? RelVolume = null, double? BuyShare = null, double? Rsi = null, string[]? Reasons = null, string? Logic = null, DateTimeOffset? LastEvaluatedBarAt = null, DateTimeOffset? SessionEnd = null, bool? ExitEstimated = null, DateTimeOffset? LastPriceAt = null, DateTimeOffset? TriggerBarAt = null);
+/// <summary>신호 발동 시점의 가상 진입 기록. 손절/목표 도달 시 자동 청산되며 수수료 0.2%를 손익에 차감한다. 진입 당시 판단 근거(점수·σ·거래량·체결·RSI·사유)를 함께 남겨 사후 분석에 쓴다.
+/// v5 구조 거래는 <see cref="SimTrade.Structure"/>에 진입 시점의 동결 계획(FrozenPlan)을 함께 저장하며, 이후 구조가 변해도 그 거래의 Stop/Target/근거는 바꾸지 않는다(설계 §10/§18). Logic이 소유 버전을 구분한다("v4"/null=레거시, "v5-structure.*"=구조 엔진).</summary>
+public sealed record SimTrade(string Id, string Symbol, string Kind, DateTimeOffset EnteredAt, double EntryPrice, double Target, double Stop, string? TargetBasis, string? StopBasis, string Status, double? ExitPrice, DateTimeOffset? ExitAt, double? PnlPercent, double LastPrice, int? Score = null, double? ExtSigma = null, double? RelVolume = null, double? BuyShare = null, double? Rsi = null, string[]? Reasons = null, string? Logic = null, DateTimeOffset? LastEvaluatedBarAt = null, DateTimeOffset? SessionEnd = null, bool? ExitEstimated = null, DateTimeOffset? LastPriceAt = null, DateTimeOffset? TriggerBarAt = null, FrozenStructureContext? Structure = null);
+
+/// <summary>
+/// 설계 §11 FrozenStructureContext. v5 거래가 체결된 시점의 구조 계획·추세·품질 스냅샷으로, 진입 이후
+/// 새 저점/새 ATR/새 매물대가 생겨도 재계산하지 않는다(§10). 모드가 off/shadow로 되돌아가도 이 동결 계획대로
+/// 기존 청산 경로(봉 replay·gap stop·same-bar stop-first·EOD)가 관리한다(§18 rollback).
+/// 저장 계약이므로 Domain 계산 record가 아니라 평탄한 값만 담는다.
+/// </summary>
+public sealed record FrozenStructureContext(string EntryEventId, FrozenPlanSnapshot PlanSnapshot,
+    string TrendAtEntry, double? SignedTrendAtEntry, double? EntryQualityAtEntry,
+    DateTimeOffset AnalysisAsOf, DateTimeOffset? QuoteAt, string StructuralExitPolicyVersion);
+
+/// <summary>
+/// 설계 §11 StructuralTradePlan의 동결 저장 형태. 무효화/목표 구간은 진입 시점 경계 스냅샷만 남긴다(§16B FrozenPlan).
+/// null Plan에 0을 넣지 않는다는 규칙(§11)에 따라 이 record는 성립한 계획(READY→ENTERED)에서만 만들어진다.
+/// </summary>
+public sealed record FrozenPlanSnapshot(string PlanId, string Kind, decimal EntryReference, decimal InvalidationAnchor,
+    decimal Stop, decimal Target, string InvalidationZoneId, decimal InvalidationLower, decimal InvalidationUpper,
+    string TargetZoneId, decimal TargetLower, decimal TargetUpper, decimal Buffer, string BufferBasis,
+    decimal FrontRunBuffer, decimal NetReward, decimal NetRisk, decimal NetR, double RiskPercent,
+    decimal FeePerShare, decimal ExtraCostPerShare, decimal? ValidSpread, bool MissingLiquidity,
+    string EligibilityCostModelVersion, string RealizedFillCostModelVersion, DateTimeOffset CreatedAt,
+    DateTimeOffset ExpiresAt, string EngineVersion, string PolicyHash, string[] ReasonCodes, string Explanation);
 public sealed record IndicatorSnapshot(double Rsi, double EmaFast, double EmaSlow, double Vwap, double Atr, double RelativeVolume, double BollingerLower, double BollingerUpper, double VwapSd = 0);
 public sealed record SignalResult(int Score, string Action, string[] Reasons, IndicatorSnapshot Indicators);
 public sealed record SignalView(string Symbol, string Name, double Price, double ChangePercent, int Score, string Action, string[] Reasons, DateTimeOffset UpdatedAt, bool Stale, object Indicators, IEnumerable<object> Bars, object? Position, double Atr, string? Setup = null, DateTimeOffset? SetupAt = null, string? Breakout = null, DateTimeOffset? BreakoutAt = null);

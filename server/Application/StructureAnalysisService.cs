@@ -96,11 +96,16 @@ public sealed class StructureAnalysisService(
     TimeProvider clock,
     IMonitorDiagnostics diagnostics,
     StructureEngineOptions? options = null,
-    StructurePolicy? policy = null)
+    StructurePolicy? policy = null,
+    IStructuralTradeEntries? tradeEntries = null)
 {
     public const string LatchFile = "structure-lifecycle.json";
-    public const string NoteActiveWiringPending = "ACTIVE_ENTRY_WIRING_PENDING";
     public const string EntryOwnerV4 = "v4";
+    public const string EntryOwnerV5 = "v5";
+    public const string NoteEntryCommitted = "V5_ENTRY_COMMITTED";
+    public const string NoteEntryBlockedByOpenTrade = "V5_ENTRY_BLOCKED_BY_OPEN_TRADE";
+    public const string NoteEntryPlanInvalid = "V5_ENTRY_PLAN_INVALID";
+    public const string NoteEntryUnavailable = "V5_ENTRY_PORT_UNAVAILABLE";
 
     readonly StructureEngineOptions _options = options ?? StructureEngineOptions.Off;
     readonly StructurePolicy _policy = policy ?? StructurePolicy.Default;
@@ -115,8 +120,11 @@ public sealed class StructureAnalysisService(
     public string EngineVersion => _policy.Version;
     public string PolicyHash => _policy.PolicyHash;
 
-    /// <summary>D3에서 신규 진입은 어떤 모드에서도 v5가 소유하지 않는다. active 배선은 D6이다(§17).</summary>
-    public string EntryOwner => EntryOwnerV4;
+    /// <summary>
+    /// §18/§16B: off·shadow는 v4가, active는 v5가 신규 진입을 소유한다(D6 배선).
+    /// active에서 v5 오류/UNAVAILABLE은 진입 보류이며 v4로 자동 fallback하지 않는다.
+    /// </summary>
+    public string EntryOwner => _options.Mode == StructureEngineMode.Active ? EntryOwnerV5 : EntryOwnerV4;
 
     /// <summary>세션 종료·모니터링 중지 시 메모리를 정리한다(§16 "메모리도 세션 종료 시 정리한다").</summary>
     public void Clear() { _cache.Clear(); _published.Clear(); _latches.Clear(); }
@@ -213,7 +221,6 @@ public sealed class StructureAnalysisService(
         var notes = new SortedSet<string>(gate.Notes, StringComparer.Ordinal);
         foreach (var warning in detection.Warnings) notes.Add(warning);
         if (gate.MissedBars > 0) notes.Add($"{StructuralLifecycle.NoteMissedBars}x{gate.MissedBars}");
-        if (_options.Mode == StructureEngineMode.Active) notes.Add(NoteActiveWiringPending);
 
         var warnings = new SortedSet<string>(build.Warnings, StringComparer.Ordinal);
         foreach (var blocker in detection.ReadyBlockers) warnings.Add(blocker);
@@ -240,6 +247,31 @@ public sealed class StructureAnalysisService(
         using (await runtime.EnterControlAsync(ct))
         {
             if (!Current(request, snapshot, clock.GetLocalNow())) return;
+
+            // ── D6 active 진입(§18): READY 대표 후보 1개만 실제 시뮬 거래로 커밋한다. 거래 저장이 성공한 뒤에만
+            // 후보를 ENTERED로 바꾸고 래치에 tombstone을 남기며, 실패하면 관측·래치도 갱신하지 않아 다음 poll이
+            // 같은 이벤트를 멱등하게 재시도한다(§12.6). off/shadow에서는 이 경로 자체가 없다.
+            var activeEntry = await TryEnterPreferredAsync(candidates, preferred, snapshot, trend, now, ct);
+            if (activeEntry is not null)
+            {
+                candidates = activeEntry.Candidates;
+                if (activeEntry.Note is { } entryNote) notes.Add(entryNote);
+                if (activeEntry.Entered)
+                {
+                    preferred = CandidateSelection.SelectPreferred(candidates)?.EventId;
+                    signature = StructuralLifecycle.EventSignature(candidates, preferred);
+                    full = !string.Equals(signature, latch.LastEventSignature, StringComparison.Ordinal);
+                    candidateDtos = candidates.Select(StructureViewMapper.Candidate).ToArray();
+                    summary = CandidateSelection.Summarize(candidates).ToString().ToUpperInvariant();
+                }
+                record = record with
+                {
+                    Detail = full ? "full" : "summary", CandidateSummary = summary, PreferredCandidateId = preferred,
+                    Candidates = candidateDtos, Zones = full ? zoneDtos : null, Quality = full ? qualityDto : null,
+                    Notes = notes.ToArray()
+                };
+            }
+
             var write = await observations.AppendAsync(record, ct);
             if (!Current(request, snapshot, clock.GetLocalNow())) return;
 
@@ -263,10 +295,58 @@ public sealed class StructureAnalysisService(
         }
     }
 
+    /// <summary>
+    /// §18 active에서 성립한 READY 대표 후보 1개를 실제 시뮬 거래로 옮긴다. 진입가·손절·목표는 전부
+    /// 후보의 계획(StructuralPlanner 산출)에서 오고 여기서 어떤 가격도 만들지 않는다(§19-5).
+    /// 반환 null = 이 poll에 진입 시도 자체가 없음(off/shadow, READY 없음). 오류·거절은 v4 fallback 없이
+    /// 진입 보류로 남긴다(§16B).
+    /// </summary>
+    async Task<ActiveEntryResult?> TryEnterPreferredAsync(ImmutableArray<EntryCandidate> candidates,
+        string? preferredId, StructureSnapshot snapshot, TrendAssessment? trend, DateTimeOffset now,
+        CancellationToken ct)
+    {
+        if (_options.Mode != StructureEngineMode.Active || preferredId is null) return null;
+        var chosen = candidates.FirstOrDefault(x => x.EventId == preferredId);
+        if (chosen is null || chosen.Disposition != CandidateDisposition.Ready || chosen.Plan is null) return null;
+        if (tradeEntries is null) return new ActiveEntryResult(candidates, false, NoteEntryUnavailable);
+
+        // §10: 체결 시 FrozenPlan을 저장한다. 진입 이후 이 스냅샷은 다시 만들지 않는다.
+        var context = Domain.StructuralSimulation.Freeze(chosen.Plan, chosen.EventId,
+            (trend?.State ?? TrendState.Unknown).ToString().ToUpperInvariant(), trend?.SignedTrend,
+            chosen.EntryQuality, snapshot.AnalysisAsOf, snapshot.QuoteAt);
+        var result = await tradeEntries.TryEnterAsync(new Domain.StructuralEntryRequest(snapshot.Symbol,
+            chosen.TriggerBarStart, now, snapshot.SessionEnd, context), ct);
+
+        return result.Outcome switch
+        {
+            // AlreadyEntered = 이전 poll에서 거래는 저장됐지만 래치 커밋 전에 중단된 경우의 멱등 회복(§12.6).
+            Domain.StructuralEntryOutcome.Entered or Domain.StructuralEntryOutcome.AlreadyEntered =>
+                new ActiveEntryResult(candidates
+                        .Select(x => x.EventId != chosen.EventId
+                            ? x
+                            : x with
+                            {
+                                Disposition = CandidateDisposition.Entered,
+                                Notes = x.Notes.Contains(NoteEntryCommitted, StringComparer.Ordinal)
+                                    ? x.Notes
+                                    : x.Notes.Append(NoteEntryCommitted).OrderBy(n => n, StringComparer.Ordinal)
+                                        .ToImmutableArray()
+                            })
+                        .ToImmutableArray(),
+                    true, NoteEntryCommitted),
+            // 한 종목 OPEN 하나 제한은 버전 공통이다(§18). 후보는 READY로 남고 새 거래는 만들지 않는다.
+            Domain.StructuralEntryOutcome.BlockedByOpenTrade =>
+                new ActiveEntryResult(candidates, false, NoteEntryBlockedByOpenTrade),
+            _ => new ActiveEntryResult(candidates, false, NoteEntryPlanInvalid)
+        };
+    }
+
+    sealed record ActiveEntryResult(ImmutableArray<EntryCandidate> Candidates, bool Entered, string? Note);
+
     string RecordVersion =>
-        // §16B: `v5-structure.1-shadow`는 관측 레코드 버전만 의미하며 SimTrade.Logic에 쓰지 않는다.
-        // D3에서는 active도 신규 진입을 소유하지 않으므로 관측 레코드는 shadow 버전으로 남는다.
-        _policy.Version + "-shadow";
+        // §11/§16B: `v5-structure.1-shadow`는 shadow 관측 레코드 버전이며 SimTrade.Logic에 쓰지 않는다.
+        // D6부터 active는 v5가 신규 진입을 소유하므로 관측 레코드도 본 버전으로 기록한다(§11 "별도 저장").
+        _options.Mode == StructureEngineMode.Active ? _policy.Version : _policy.Version + "-shadow";
 
     bool Current(StructureObservationRequest request, StructureSnapshot snapshot, DateTimeOffset now)
     {
@@ -431,7 +511,7 @@ public sealed class StructureAnalysisService(
             legacyScoreEngine = "v4",
             engineVersion = EngineVersion,
             policyHash = PolicyHash,
-            notes = _options.Mode == StructureEngineMode.Active ? new[] { NoteActiveWiringPending } : [],
+            notes = Array.Empty<string>(),
             symbols = rows
         };
     }

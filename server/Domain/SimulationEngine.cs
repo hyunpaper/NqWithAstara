@@ -26,7 +26,9 @@ public static class SimulationEngine
                     trade = Close(trade, "STOP", quotePrice, quoteAt, quotePrice, false);
                 else if (quotePrice >= trade.Target)
                     trade = Close(trade, "TARGET", trade.Target, quoteAt, quotePrice, false);
-                else if (trade.Kind != "REBOUND" && score < 40 && completedBars.Count > 0 && completedBars[^1].Close < vwap)
+                // v4 전용 조기 청산(score<40 CUT). v5 구조 거래에는 적용하지 않는다 — v5는 동결된 구조
+                // Stop/Target과 EOD만으로 관리한다(설계 §10 "v5에 v4 score<40 CUT을 적용하지 않는다").
+                else if (trade.Kind != "REBOUND" && !StructuralSimulation.OwnsTrade(trade) && score < 40 && completedBars.Count > 0 && completedBars[^1].Close < vwap)
                     trade = Close(trade, "CUT", quotePrice, quoteAt, quotePrice, false);
                 else trade = trade with { LastPrice = quotePrice, LastPriceAt = quoteAt };
             }
