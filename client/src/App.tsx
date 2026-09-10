@@ -26,7 +26,16 @@ import { useVisiblePolling } from "./useVisiblePolling";
 import LiquidityPanel from "./LiquidityPanel";
 import StructurePanel from "./StructurePanel";
 import SimStructurePanel from "./SimStructurePanel";
-import type { StructureSummary } from "./structureTypes";
+import LiveStructureCells from "./LiveStructureCells";
+import type { StructureSummary, StructureSummaryRow } from "./structureTypes";
+import {
+  LiveSortKey,
+  compareByTrendStrength,
+  compareByV4Score,
+  compareByV5State,
+  resolveSortKey,
+  sortKeysForMode,
+} from "./structureSort";
 import type { StructureCohortReport, TradeStructure } from "./dashboardTypes";
 import { tradeEntryTooltip } from "./dashboardTypes";
 
@@ -383,6 +392,10 @@ export default function App() {
     [notice, setNotice] = useState(""),
     // v5 구조 분석은 기존 v4 화면과 섞지 않고 별도 뷰로 분리한다(설계 §13, §19-10).
     [view, setView] = useState<"live" | "dash" | "structure">("live"),
+    // 이슈 #26: 라이브 목록 정렬 선택(모드별 유효성은 resolveSortKey가 판정). localStorage에 저장.
+    [liveSortChoice, setLiveSortChoice] = useState(
+      () => localStorage.getItem("astra-live-sort") || "",
+    ),
     [form, setForm] = useState({ entryPrice: "", quantity: "" });
   const seenSetups = useRef<Record<string, string>>({});
   const seenBreakouts = useRef<Record<string, string>>({});
@@ -632,9 +645,30 @@ export default function App() {
   };
   const signal = state?.signals.find((x) => x.symbol === selected);
   const selectedWatch = state?.watchlist.find((x) => x.symbol === selected);
+  // ── 이슈 #26: 모드별 정렬(승인 설계안 §3) ──
+  // active 기본 = v5 상태 → EntryQuality ↓ → |SignedTrend| ↓ → symbol. shadow/off·summary 부재 = 기존 v4 score ↓.
+  // v5 결측 행을 `?? 0`으로 0점 취급하지 않는다 — 비교 함수가 결측을 항상 마지막에 둔다.
+  const structureMode = state?.structureSummary?.mode ?? null;
+  const structureRows = new Map<string, StructureSummaryRow>();
+  for (const row of state?.structureSummary?.symbols ?? [])
+    if (row?.symbol) structureRows.set(row.symbol.toUpperCase(), row);
+  const rowOf = (symbol: string): StructureSummaryRow =>
+    structureRows.get(symbol.toUpperCase()) ?? { symbol };
+  const liveSort = resolveSortKey(structureMode, liveSortChoice);
+  const liveSortOptions = sortKeysForMode(structureMode);
+  const pickLiveSort = (key: LiveSortKey) => {
+    setLiveSortChoice(key);
+    localStorage.setItem("astra-live-sort", key);
+  };
   const ranked = [...(state?.signals || [])]
     .filter((item) => !item.stale)
-    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    .sort((a, b) =>
+      liveSort === "v4"
+        ? compareByV4Score(a, b)
+        : liveSort === "trend"
+          ? compareByTrendStrength(rowOf(a.symbol), rowOf(b.symbol))
+          : compareByV5State(rowOf(a.symbol), rowOf(b.symbol)),
+    );
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!selected) return;
@@ -717,7 +751,7 @@ export default function App() {
                       Math.round(s?.score ?? 0),
                       !!s && !s.stale && s.price != null,
                     )}
-                    title="시그널 점수 (100점 만점) · 70↑ 매수 관찰 · 30↓ 매도 관찰 · 워밍업/장외에는 0"
+                    title="참고 점수(v4) · 100점 만점 · 70↑ 매수 관찰 · 30↓ 매도 관찰 · 워밍업/장외에는 0 — v5 평가와 별개"
                   >
                     {s && !s.stale && s.price != null
                       ? Math.round(s.score ?? 0)
@@ -938,9 +972,36 @@ export default function App() {
             <div className="panel-head">
               <div>
                 <h2>시그널 순위</h2>
-                <p>현재 충족한 기술 조건의 종합 점수</p>
+                <p>
+                  {liveSort === "v5"
+                    ? "v5 상태·진입 품질 순 정렬 · v4 점수는 참고 표시"
+                    : liveSort === "trend"
+                      ? "v5 추세 강도 순 정렬 · v4 점수는 참고 표시"
+                      : "참고 점수(v4) 순 정렬"}
+                </p>
               </div>
-              <BarChart3 size={18} />
+              {liveSortOptions.length > 1 ? (
+                <div className="structure-sort live-sort">
+                  {liveSortOptions.map((key) => (
+                    <button
+                      key={key}
+                      className={liveSort === key ? "on" : ""}
+                      onClick={() => pickLiveSort(key)}
+                      title={
+                        key === "v5"
+                          ? "v5 상태 우선 → 진입 품질 → 추세 강도 → 심볼"
+                          : key === "trend"
+                            ? "v5 추세 강도(절대값) 내림차순 → 심볼"
+                            : "v4 점수 내림차순 (기존 정렬)"
+                      }
+                    >
+                      {key === "v5" ? "v5 평가" : key === "trend" ? "추세 강도" : "참고 점수(v4)"}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <BarChart3 size={18} />
+              )}
             </div>
             {!state ? (
               <Loading />
@@ -965,6 +1026,9 @@ export default function App() {
               />
             ) : (
               <div className="rank-list">
+                {structureMode === "off" && (
+                  <p className="v5-off-note">구조 엔진 꺼짐 — v5 평가 없이 v4 참고 점수만 표시합니다.</p>
+                )}
                 {ranked.map((s, i) => (
                   <button
                     key={s.symbol}
@@ -1008,7 +1072,7 @@ export default function App() {
                         {percent(s.changePercent)}
                       </small>
                     </div>
-                    <div className="score">
+                    <div className="score" title="참고 점수(v4) · 100점 만점 — v5 평가와 별개">
                       <b
                         style={{
                           color: scoreStyle(Math.round(s.score ?? 0), true)
@@ -1017,16 +1081,20 @@ export default function App() {
                       >
                         {Math.round(s.score ?? 0)}
                       </b>
-                      <small>/ 100</small>
+                      <small>참고(v4)</small>
                     </div>
-                    <span className={`tag ${s.action.toLowerCase()}`}>
+                    <span
+                      className={`tag ${s.action.toLowerCase()}`}
+                      title="v4 점수 기준 관찰 태그 — v5 진입 판단과 별개"
+                    >
                       {s.action === "BUY"
-                        ? "매수 관찰"
+                        ? "v4 매수 관찰"
                         : s.action === "SELL"
-                          ? "매도 관찰"
-                          : "중립"}
+                          ? "v4 매도 관찰"
+                          : "v4 중립"}
                     </span>
                     <ChevronRight size={15} />
+                    <LiveStructureCells row={rowOf(s.symbol)} mode={structureMode} />
                   </button>
                 ))}
               </div>
@@ -1081,6 +1149,12 @@ export default function App() {
                   <div className="stale">
                     <AlertTriangle size={14} /> 현재 시세가 지연되고 있습니다 ·{" "}
                     {time(signal.updatedAt)} 기준
+                  </div>
+                )}
+                {(structureMode === "active" || structureMode === "shadow") && (
+                  <div className="v5-detail-strip">
+                    <LiveStructureCells row={rowOf(signal.symbol)} mode={structureMode} />
+                    <button onClick={() => setView("structure")}>구조 분석(v5) 상세</button>
                   </div>
                 )}
                 <div className="chart">
@@ -1155,7 +1229,7 @@ export default function App() {
                 </div>
                 <div className="reasons">
                   <h3>
-                    점수 산정 근거{" "}
+                    참고 점수(v4) 산정 근거{" "}
                     <span>{Math.round(signal.score ?? 0)}점</span>
                   </h3>
                   {signal.reasons?.length ? (
@@ -1183,6 +1257,9 @@ export default function App() {
                   </div>
                   {signal.position ? (
                     <div className="position-live">
+                      <p className="position-basis-note">
+                        목표·손절은 v4 ATR·레벨 기준 자동 산정입니다(참고).
+                      </p>
                       <div>
                         <small>진입가</small>
                         <b>{money(signal.position.entryPrice)}</b>
