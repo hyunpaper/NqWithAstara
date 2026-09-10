@@ -139,8 +139,8 @@ flowchart TB
         SAS[StructureAnalysisService<br>v5 snapshot · 모드 게이트]
     end
     subgraph DOM[Domain — server/Domain]
-        V4[v4 — SignalLifecycle · SimulationEngine]
-        V5[v5 — Structure/*<br>집계→피벗→Zone→추세→후보→계획]
+        V5[Structure 엔진<br>집계→피벗→Zone→추세→후보→계획]
+        SIM[SimulationEngine · SignalLifecycle<br>시뮬 체결·수명 관리]
     end
     subgraph INFRA[Infrastructure]
         GW[Toss gateway 어댑터]
@@ -148,7 +148,7 @@ flowchart TB
     end
     FE[client/ React] --> API
     API --> APP
-    POLL --> V4
+    POLL --> SIM
     SAS --> V5
     APP --> INFRA
     GW --> TOSS
@@ -157,16 +157,16 @@ flowchart TB
 
 **의존 방향 (테스트로 강제 — ArchitectureBoundaryTests)**: `Host → Application → Domain`. Domain은 HTTP·파일·DI·시계 조회에 의존하지 않는다 (asOf/policy 명시 전달).
 
-### v4 / v5 공존 규칙
+### 구조 엔진 롤아웃 (`StructureEngineMode`)
 
-| 모드 (`StructureEngineMode`) | 신규 진입 소유 | v5 동작 |
-|---|---|---|
-| `off` (기본) | v4 | 계산 없음 |
-| `shadow` | v4 | 관측만 — simtrades/positions/알림에 **무쓰기** (바이트 동일성 테스트로 증명) |
-| `active` | v5 | v4 OPEN은 기존 청산 정책 유지 |
+| 모드 | 동작 |
+|---|---|
+| `off` (기본) | 구조 엔진 비활성 |
+| `shadow` | 관측 전용 — simtrades/positions/알림에 **무쓰기** (바이트 동일성 테스트로 증명) |
+| `active` | 구조 엔진이 신규 진입 소유. 이미 열린 거래는 체결 시점의 FrozenPlan대로 청산 |
 
-- v5는 구조 근거 없으면 **진입 보류가 정답** — ATR 배수/1.5R 폴백으로 목표·손절을 만들지 않는다.
-- v5 소스는 v4 진입점(`MarketRules.Enter`/`PriceLevels.*` 등)을 참조하지 않는다 (정적 테스트로 강제).
+- 구조 근거가 없으면 **진입 보류가 정답** — ATR 배수/1.5R 폴백으로 목표·손절을 만들지 않는다.
+- 구조 엔진 소스는 레거시 진입점(`MarketRules.Enter`/`PriceLevels.*` 등)을 참조하지 않는다 (정적 테스트로 강제).
 
 ## 6. 로컬 검증 (PR 전 필수)
 
