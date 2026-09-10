@@ -141,16 +141,22 @@ flowchart LR
     E -->|실패| B
     E -->|전부 green| R{감독자 코드 리뷰}
     R -->|request-changes| B
-    R -->|approve 코멘트| F[Rebase and merge]
+    R -->|approve 코멘트| F[Merge commit 생성<br>--no-ff]
     F --> G[브랜치 자동 삭제]
 ```
 
 ### 머지 규칙
 
-- **Rebase and merge만 사용한다.** merge commit·squash 금지 (저장소 설정으로 비활성화됨).
+- **Merge commit(Create a merge commit)만 사용한다.** rebase·squash 금지 (저장소 설정으로 비활성화됨). 그래프에 브랜치 가지와 머지 지점이 그대로 남는다. 머지 커밋 제목은 PR 제목이 자동 사용된다.
 - CI 3단계 전부 통과 + **감독자 리뷰 approve 코멘트** 없이는 머지하지 않는다.
-- 릴리즈: `develop` → `release/<area>/<slug>` 브랜치 → `master` PR. rebase로 master 해시가 바뀌므로 **master를 develop으로 역머지하지 않는다** — develop이 유일한 통합 히스토리다.
-- 머지 후 작업 브랜치는 삭제된다 (자동).
+- 릴리즈: `develop` → `release/<area>/<slug>` 브랜치 → `master` PR (merge commit). master를 develop으로 역머지하지 않는다 — develop이 통합 히스토리의 기준이다.
+- 머지 후 작업 브랜치는 삭제된다 (원격 자동 + **로컬도 즉시 삭제**, `git fetch --prune`).
+- 작업 종료 시 로컬 작업 사본은 항상 `develop` 체크아웃 + 최신 pull 상태로 복귀한다.
+
+### 커밋 단위 (granularity)
+
+- **커밋은 기능/수정의 논리 단위로 분리한다.** 예: 리뷰 지적 3건이면 3커밋, "기능 구현 + 관련 테스트"는 한 커밋. 한 PR에 여러 커밋 권장 — merge commit 방식이라 가지 안의 커밋들이 히스토리에 그대로 보인다.
+- WIP·오타 수정 같은 잡커밋(fixup)은 머지 전에 정리한다 (머지 전 작업 브랜치에서는 rebase/force-push 허용).
 
 ## 5. 아키텍처
 
