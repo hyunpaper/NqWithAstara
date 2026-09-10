@@ -299,8 +299,14 @@ public sealed class TossStreamService(ILogger<TossStreamService> log) : Applicat
         catch { /* the peer may already be gone */ }
     }
 
+    int _disposed;
+
     public async ValueTask DisposeAsync()
     {
+        // DI에 구체 타입과 IRealtimeMarketStream 두 등록으로 잡혀 있어 호스트 종료 시 컨테이너가
+        // 같은 인스턴스를 두 번 dispose한다. 두 번째 호출이 이미 버려진 semaphore를 기다리다
+        // ObjectDisposedException을 던지지 않도록 멱등으로 만든다.
+        if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
         await StopAsync();
         _lifecycle.Dispose();
     }

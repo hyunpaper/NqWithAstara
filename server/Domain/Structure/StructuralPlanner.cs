@@ -81,12 +81,14 @@ public static class StructureLiquidityRules
         if ((now - at).TotalSeconds > policy.SpreadMaxAgeSeconds) reasons.Add(ReasonStale);
         if ((at - now).TotalSeconds > policy.QuoteFutureToleranceSeconds) reasons.Add(ReasonFuture);
         if (at < sessionStart || at > sessionEnd) reasons.Add(ReasonOutsideSession);
-        // 호가 잔량은 선택 입력이다. 없으면 사용은 허용하되 근사 사실을 남긴다(D2 결정).
+        // §16B 유효 spread는 "양쪽 양수 가격/잔량"을 요구한다. 결측과 비양수는 서로 다른 사실이므로
+        // 각각 독립적으로 평가하고(한쪽 결측 + 다른쪽 0도 둘 다 남는다) 둘 다 사용 금지 사유다.
         if (liquidity.BidSize is null || liquidity.AskSize is null) reasons.Add(ReasonSizeUnknown);
-        else if (liquidity.BidSize <= 0 || liquidity.AskSize <= 0) reasons.Add(ReasonSizeNonPositive);
+        if (liquidity.BidSize <= 0 || liquidity.AskSize <= 0) reasons.Add(ReasonSizeNonPositive);
 
-        var blocking = reasons.Where(x => x != ReasonSizeUnknown).ToArray();
-        return blocking.Length > 0 ? (null, reasons.ToImmutableArray()) : (ask - bid, reasons.ToImmutableArray());
+        // 검증되지 않은 호가를 비용으로 쓰지 않는다. 분석은 계속하되 spread는 결측으로 넘기고
+        // MISSING_LIQUIDITY_COST / assumedSpread=0 경로가 그 불확실성을 표시한다(§16B).
+        return reasons.Count > 0 ? (null, reasons.ToImmutableArray()) : (ask - bid, reasons.ToImmutableArray());
     }
 }
 
@@ -99,6 +101,7 @@ public static class StructuralPlanner
     public const string NoInvalidationStructure = "NO_INVALIDATION_STRUCTURE";
     public const string NoTargetStructure = "NO_TARGET_STRUCTURE";
     public const string NoTargetRoom = "NO_TARGET_ROOM";
+    public const string EntryInsideResistance = "ENTRY_INSIDE_RESISTANCE";
     public const string CostExceedsRoom = "COST_EXCEEDS_ROOM";
     public const string InsufficientRewardToRisk = "INSUFFICIENT_REWARD_TO_RISK";
     public const string RiskTooWide = "RISK_TOO_WIDE";
@@ -177,9 +180,12 @@ public static class StructuralPlanner
 
         // ── §9.2 목표: 가장 가까운 자격 있는 저항 앞 ──
         var frontRun = policy.FrontRunBufferFloor > extraCost ? policy.FrontRunBufferFloor : extraCost;
-        var targetZone = NearestQualifiedResistance(request.Zones, entry);
+        // 진입가가 적격 저항 구간 안이면 그 저항을 건너뛰고 위쪽 먼 저항을 목표로 삼지 않는다(§19-5).
+        var enclosing = EnclosingQualifiedResistance(request.Zones, entry);
+        var targetZone = enclosing is null ? NearestQualifiedResistance(request.Zones, entry) : null;
         decimal? target = null;
-        if (targetZone is null) reasons.Add(NoTargetStructure);
+        if (enclosing is not null) reasons.Add(EntryInsideResistance);
+        else if (targetZone is null) reasons.Add(NoTargetStructure);
         else
         {
             target = StructureMath.FloorToCent(targetZone.Lower - frontRun);
@@ -228,12 +234,23 @@ public static class StructuralPlanner
     /// 가까운 저항을 무시하고 먼 저항을 골라 손익비를 예쁘게 만들지 않는다(§19-5).
     /// </summary>
     public static PriceZone? NearestQualifiedResistance(ImmutableArray<PriceZone> zones, decimal entry) =>
+        Ordered(QualifiedResistances(zones).Where(x => x.Lower > entry)).FirstOrDefault();
+
+    /// <summary>
+    /// §19-5: 진입가를 감싸는(Lower &lt;= entry &lt; Upper) 자격 있는 저항. 있으면 그 저항을 무시하고
+    /// 위쪽 먼 저항을 목표로 대체할 수 없으므로 계획을 <see cref="EntryInsideResistance"/>로 거절한다.
+    /// Upper에 정확히 도달한 진입(예: BREAKOUT 트리거가 Upper 위 마감)은 구간 안이 아니다.
+    /// </summary>
+    public static PriceZone? EnclosingQualifiedResistance(ImmutableArray<PriceZone> zones, decimal entry) =>
+        Ordered(QualifiedResistances(zones).Where(x => x.Lower <= entry && entry < x.Upper)).FirstOrDefault();
+
+    static IEnumerable<PriceZone> QualifiedResistances(ImmutableArray<PriceZone> zones) =>
         zones
             .Where(x => x.Eligible && !x.Retired && !x.ProfileOnly)
-            .Where(x => x.Role is ZoneRole.Resistance or ZoneRole.FlippedResistance)
-            .Where(x => x.Lower > entry)
-            .OrderBy(x => x.Lower).ThenBy(x => x.Upper).ThenBy(x => x.Id, StringComparer.Ordinal)
-            .FirstOrDefault();
+            .Where(x => x.Role is ZoneRole.Resistance or ZoneRole.FlippedResistance);
+
+    static IEnumerable<PriceZone> Ordered(IEnumerable<PriceZone> zones) =>
+        zones.OrderBy(x => x.Lower).ThenBy(x => x.Upper).ThenBy(x => x.Id, StringComparer.Ordinal);
 
     static PlanEvaluation Rejected(List<string> reasons, SortedSet<string> warnings, PlanRequest request,
         decimal? anchor, decimal? buffer, decimal? stop, decimal? target, decimal? spread, bool missingLiquidity,

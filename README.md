@@ -99,6 +99,37 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 
 단일 GitHub 계정 환경이라 공식 approve 버튼 대신 **위 코멘트가 리뷰 증적**이다.
 
+## 3.5 이슈 워크플로우 (작업 히스토리의 시작점)
+
+**모든 작업은 이슈에서 시작한다.** 이슈 없이 브랜치 만들지 않는다.
+
+```mermaid
+flowchart LR
+    I[이슈 생성<br>배경·범위·완료조건] --> BR["브랜치 분기<br>&lt;type&gt;/&lt;area&gt;/&lt;이슈#&gt;-&lt;slug&gt;"]
+    BR --> PR["PR 본문에 Closes #N"]
+    PR --> M[머지] --> C[이슈 자동 close<br>타임라인에 전체 이력]
+```
+
+| 규칙 | 내용 |
+|---|---|
+| 이슈 제목 | `[영역] 요약` — 본문에 배경 / 작업 범위 / 완료 조건 |
+| 라벨 | 아래 라벨 체계에서 성격·영역·도메인 선택. 에이전트 작업이면 `agent:claude`/`agent:codex` |
+| 마일스톤 | 해당 주차 마일스톤 배정 — **주간, 월요일 시작**, 제목 `2026-Wnn (MM/DD ~ MM/DD)`. 없으면 생성 |
+| **어싸인** | **항상 `hyunpaper`** (에이전트는 계정을 공유하므로 주체 구분은 라벨·`Agent:` 표기로) |
+| 브랜치 | slug 앞에 이슈 번호: `refactor/COMMON/8-issue-workflow-docs` |
+| PR | 본문에 `Closes #N` — develop 머지 시 이슈 자동 close |
+
+### 라벨 체계
+
+| 분류 | 라벨 |
+|---|---|
+| 성격 | `bug` `feature` `refactor` `test` `ci` `docs` `chore` `hotfix` |
+| 영역 | `BE` `FE` `COMMON` |
+| 도메인 | `structure-engine` `simulation` |
+| 메타 | `priority-high` `blocked` `agent:claude` `agent:codex` |
+
+성격 라벨과 브랜치 `type`은 별개 축이다 (예: `bug` 이슈 → `fix/...` 브랜치). 라벨 중복 금지 — 같은 의미의 라벨을 새로 만들지 않는다.
+
 ## 4. PR → CI → 리뷰 → 머지 파이프라인
 
 ```mermaid
@@ -110,16 +141,22 @@ flowchart LR
     E -->|실패| B
     E -->|전부 green| R{감독자 코드 리뷰}
     R -->|request-changes| B
-    R -->|approve 코멘트| F[Rebase and merge]
+    R -->|approve 코멘트| F[Merge commit 생성<br>--no-ff]
     F --> G[브랜치 자동 삭제]
 ```
 
 ### 머지 규칙
 
-- **Rebase and merge만 사용한다.** merge commit·squash 금지 (저장소 설정으로 비활성화됨).
+- **Merge commit(Create a merge commit)만 사용한다.** rebase·squash 금지 (저장소 설정으로 비활성화됨). 그래프에 브랜치 가지와 머지 지점이 그대로 남는다. 머지 커밋 제목은 PR 제목이 자동 사용된다.
 - CI 3단계 전부 통과 + **감독자 리뷰 approve 코멘트** 없이는 머지하지 않는다.
-- 릴리즈: `develop` → `release/<area>/<slug>` 브랜치 → `master` PR. rebase로 master 해시가 바뀌므로 **master를 develop으로 역머지하지 않는다** — develop이 유일한 통합 히스토리다.
-- 머지 후 작업 브랜치는 삭제된다 (자동).
+- 릴리즈: `develop` → `release/<area>/<slug>` 브랜치 → `master` PR (merge commit). master를 develop으로 역머지하지 않는다 — develop이 통합 히스토리의 기준이다.
+- 머지 후 작업 브랜치는 삭제된다 (원격 자동 + **로컬도 즉시 삭제**, `git fetch --prune`).
+- 작업 종료 시 로컬 작업 사본은 항상 `develop` 체크아웃 + 최신 pull 상태로 복귀한다.
+
+### 커밋 단위 (granularity)
+
+- **커밋은 기능/수정의 논리 단위로 분리한다.** 예: 리뷰 지적 3건이면 3커밋, "기능 구현 + 관련 테스트"는 한 커밋. 한 PR에 여러 커밋 권장 — merge commit 방식이라 가지 안의 커밋들이 히스토리에 그대로 보인다.
+- WIP·오타 수정 같은 잡커밋(fixup)은 머지 전에 정리한다 (머지 전 작업 브랜치에서는 rebase/force-push 허용).
 
 ## 5. 아키텍처
 
@@ -173,17 +210,17 @@ flowchart TB
 CI와 동일 스택: Node.js 22, .NET 9.
 
 ```sh
-node scripts/repository-policy.mjs                     # 비밀/금지 경로 스캔
-node --test scripts/repository-policy.test.mjs
+node .github/scripts/repository-policy.mjs                     # 비밀/금지 경로 스캔
+node --test .github/scripts/repository-policy.test.mjs
 dotnet test server/tests/Astra.Server.Tests.csproj --configuration Release
 cd client && npm ci && npm run build
 ```
 
-앱 실행/종료: `scripts/Start-Astra.ps1` / `scripts/Stop-Astra.ps1` (로컬 전용).
+앱 실행/종료 스크립트는 로컬 전용이며 저장소에 포함하지 않는다 (`/scripts/`는 gitignore).
 
 ## 7. 커밋 금지 대상
 
-`.gitignore` + `scripts/repository-policy.mjs`(CI에서 실행)가 이중으로 막지만, 규칙으로도 명시한다:
+`.gitignore` + `.github/scripts/repository-policy.mjs`(CI에서 실행)가 이중으로 막지만, 규칙으로도 명시한다:
 
 | 분류 | 대상 |
 |---|---|

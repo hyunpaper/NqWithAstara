@@ -208,7 +208,9 @@ public static class ZoneEvaluator
         {
             var touch = forward[start];
             var notes = new SortedSet<string>(StringComparer.Ordinal);
-            var roleAtTouch = Directional(RoleAt(originalRole, history, touch.Start)) ?? Directional(originalRole);
+            // 접촉 시점의 역할만 본다. BROKEN/UNRESOLVED로 방향이 없으면 최초 역할로 되돌리지 않는다(§16B:
+            // BROKEN/retired ID는 원래 역할로 부활하지 않고, 확인 전 상태는 방향 평가 대상이 아니다).
+            var roleAtTouch = Directional(RoleAt(originalRole, history, touch.Start));
             var atr = SessionAtr.At(allBars, atrSeries, touch.End);
             if (atr is null or <= 0) notes.Add("ATR_MISSING_AT_TOUCH");
             var margin = StructureMath.ScaledFloor(policy.ReactionSuccessFloor, policy.ReactionSuccessAtrFactor, atr);

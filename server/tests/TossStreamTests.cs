@@ -56,6 +56,16 @@ public sealed class TossStreamTests
     }
 
     [Fact]
+    public async Task DisposeIsIdempotentAcrossDuplicateDiRegistrations()
+    {
+        // Program.cs는 구체 타입과 IRealtimeMarketStream 두 등록으로 같은 인스턴스를 노출한다.
+        // 호스트 종료 시 컨테이너가 두 번 dispose하므로 두 번째 호출이 예외 없이 끝나야 한다.
+        var service = new TossStreamService(Microsoft.Extensions.Logging.Abstractions.NullLogger<TossStreamService>.Instance);
+        await service.DisposeAsync();
+        await service.DisposeAsync();
+    }
+
+    [Fact]
     public async Task RefusesConnectionUntilAllowedIpIsConfirmed()
     {
         var service = new TossStreamService(Microsoft.Extensions.Logging.Abstractions.NullLogger<TossStreamService>.Instance);

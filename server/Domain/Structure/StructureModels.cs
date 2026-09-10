@@ -135,7 +135,7 @@ public sealed record DataQuality(ImmutableArray<DataSourceQuality> Sources, Immu
 
 /// <summary>
 /// 선택적 호가 컨텍스트(§9.3, §16B). 없으면 비용 불확실성을 노출하고 0으로 가정한다.
-/// 잔량은 D2가 §16B "양쪽 양수 가격/잔량" 검사를 위해 additive로 추가했고, 없으면 근사 사실을 남긴다.
+/// 잔량은 §16B "양쪽 양수 가격/잔량" 검사 대상이다. 결측·비양수면 검증되지 않은 spread이므로 비용으로 쓰지 않는다.
 /// </summary>
 public sealed record StructureLiquidity(decimal? BestBid, decimal? BestAsk, DateTimeOffset? At,
     double? BidSize = null, double? AskSize = null);

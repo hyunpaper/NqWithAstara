@@ -254,16 +254,63 @@ public sealed class StructureD2PlanTests
         Assert.Null(missing);
         Assert.Contains(StructureLiquidityRules.ReasonMissing, missingReasons);
 
-        // 잔량이 없으면 사용은 허용하되 근사 사실을 남긴다.
+        // §16B는 "양쪽 양수 가격/잔량"을 요구한다. 잔량을 모르면 검증되지 않은 호가이므로 비용으로 쓰지 않는다.
         var (sizeless, sizelessReasons) = StructureLiquidityRules.Validate(
             new StructureLiquidity(100m, 100.02m, Fx.At(40)), now, Fx.SessionStart, Fx.SessionEnd, P);
-        Assert.Equal(.02m, sizeless);
+        Assert.Null(sizeless);
         Assert.Contains(StructureLiquidityRules.ReasonSizeUnknown, sizelessReasons);
 
         var (zeroSize, zeroSizeReasons) = StructureLiquidityRules.Validate(D2.Quote(100m, 100.02m, 40, 0), now,
             Fx.SessionStart, Fx.SessionEnd, P);
         Assert.Null(zeroSize);
         Assert.Contains(StructureLiquidityRules.ReasonSizeNonPositive, zeroSizeReasons);
+    }
+
+    /// <summary>
+    /// R2/§16B: 잔량 결측과 비양수는 서로 독립적으로 평가한다. 한쪽이 null이라고 다른 쪽의 0 검사를
+    /// 건너뛰지 않으며, 어느 쪽이든 걸리면 spread를 결측으로 넘긴다.
+    /// </summary>
+    [Theory]
+    [InlineData(null, null, true, false)]        // 양쪽 결측
+    [InlineData(100d, null, true, false)]        // 한쪽만 결측
+    [InlineData(0d, 100d, false, true)]          // 한쪽만 0
+    [InlineData(null, 0d, true, true)]           // 한쪽 결측 + 다른 쪽 0 → 두 사유 모두
+    [InlineData(-1d, 100d, false, true)]         // 음수 잔량
+    public void UnverifiedQuoteSizesNeverBecomeAUsableSpread(double? bidSize, double? askSize,
+        bool expectUnknown, bool expectNonPositive)
+    {
+        var (spread, reasons) = StructureLiquidityRules.Validate(
+            new StructureLiquidity(100m, 100.02m, Fx.At(40), bidSize, askSize), Fx.At(40),
+            Fx.SessionStart, Fx.SessionEnd, P);
+
+        Assert.Null(spread);
+        Assert.Equal(expectUnknown, reasons.Contains(StructureLiquidityRules.ReasonSizeUnknown));
+        Assert.Equal(expectNonPositive, reasons.Contains(StructureLiquidityRules.ReasonSizeNonPositive));
+    }
+
+    [Fact]
+    public void BothSidesPositiveSizeStillProducesTheUsableSpread()
+    {
+        var (spread, reasons) = StructureLiquidityRules.Validate(D2.Quote(100m, 100.02m, 40), Fx.At(40),
+            Fx.SessionStart, Fx.SessionEnd, P);
+
+        Assert.Equal(.02m, spread);
+        Assert.Empty(reasons);
+    }
+
+    /// <summary>미검증 호가는 기존 결측 경로로 넘어간다. 계획을 막지는 않되 spread를 비용으로 쓰지 않는다.</summary>
+    [Fact]
+    public void AQuoteRejectedForItsSizesFallsIntoTheMissingLiquidityCostPath()
+    {
+        var (spread, _) = StructureLiquidityRules.Validate(
+            new StructureLiquidity(100m, 100.02m, Fx.At(40)), Fx.At(40), Fx.SessionStart, Fx.SessionEnd, P);
+        var result = StructuralPlanner.Evaluate(D2.ExampleA() with { ValidSpread = spread }, P);
+
+        Assert.True(result.Viable);
+        Assert.True(result.MissingLiquidity);
+        Assert.Contains(StructuralPlanner.MissingLiquidityCost, result.Plan!.ReasonCodes);
+        Assert.Equal(0m, result.Plan.Costs.ExtraCostPerShare);
+        Assert.Null(result.Plan.Costs.ValidSpread);
     }
 
     // ── 목표 자격과 결정성 ──
@@ -282,6 +329,72 @@ public sealed class StructureD2PlanTests
             [ineligible, broken, retired, profile, below, good], 100.00m);
 
         Assert.Equal("good", chosen!.Id);
+    }
+
+    // ── R3/§19-5: 진입가를 감싸는 저항 ──
+
+    /// <summary>
+    /// 진입가가 적격 저항 구간 안이면 그 저항을 건너뛰고 위쪽 먼 저항을 목표로 만들지 않는다.
+    /// 계획을 <c>ENTRY_INSIDE_RESISTANCE</c>로 거절하고 Target은 null로 둔다.
+    /// </summary>
+    [Fact]
+    public void EntryInsideAQualifiedResistanceRejectsThePlanInsteadOfTargetingTheFartherOne()
+    {
+        var enclosing = D2.Resistance(99.90m, 100.20m, id: "enclosing");
+        var far = D2.Resistance(101.80m, 102.10m, id: "far");
+        var result = StructuralPlanner.Evaluate(
+            D2.ExampleA(D2.Support(99.20m, 99.40m), enclosing, far), P);
+
+        Assert.False(result.Viable);
+        Assert.Null(result.Plan);
+        Assert.Contains(StructuralPlanner.EntryInsideResistance, result.ReasonCodes);
+        Assert.Null(result.Target);
+        Assert.Null(result.TargetZone);
+        Assert.DoesNotContain(StructuralPlanner.NoTargetStructure, result.ReasonCodes);
+        Assert.NotEqual(101.78m, result.Target ?? 0m);          // 먼 저항으로 대체하지 않는다
+        Assert.Equal(99.12m, result.Stop);                      // 손절은 구조 그대로 보고한다
+        Assert.Equal("enclosing", StructuralPlanner.EnclosingQualifiedResistance(
+            [D2.Support(99.20m, 99.40m), enclosing, far], 100.00m)!.Id);
+    }
+
+    /// <summary>경계 규칙은 <c>Lower &lt;= entry &lt; Upper</c>다. Upper에 정확히 도달한 진입은 구간 안이 아니다.</summary>
+    [Theory]
+    [InlineData(100.00, 100.20, true)]      // entry == Lower → 안
+    [InlineData(99.90, 100.20, true)]       // 구간 내부
+    [InlineData(99.80, 100.00, false)]      // entry == Upper → 밖 (BREAKOUT 트리거가 Upper 위 마감)
+    [InlineData(100.01, 100.20, false)]     // 진입가 위 → 정상 목표 후보
+    public void ResistanceBoundaryIsLowerInclusiveAndUpperExclusive(double lower, double upper, bool inside)
+    {
+        var zone = D2.Resistance((decimal)lower, (decimal)upper, id: "boundary");
+        var far = D2.Resistance(101.80m, 102.10m, id: "far");
+        var result = StructuralPlanner.Evaluate(D2.ExampleA(D2.Support(99.20m, 99.40m), zone, far), P);
+
+        Assert.Equal(inside, StructuralPlanner.EnclosingQualifiedResistance([zone], 100.00m) is not null);
+        Assert.Equal(inside, result.ReasonCodes.Contains(StructuralPlanner.EntryInsideResistance));
+        if (inside) Assert.Null(result.Target);
+        else Assert.NotNull(result.Target);
+    }
+
+    /// <summary>자격 없는·retired·profile-only 구간은 진입가를 감싸도 거절 사유가 아니다. 예시 A도 그대로다.</summary>
+    [Fact]
+    public void OnlyQualifiedResistancesCanEncloseTheEntryAndExampleAStaysUnaffected()
+    {
+        var ineligible = D2.Zone("ineligible", 99.90m, 100.20m, ZoneRole.Resistance, .2, eligible: false);
+        var retired = D2.Zone("retired", 99.90m, 100.20m, ZoneRole.Resistance, .8, retired: true);
+        var profile = D2.Zone("profile", 99.90m, 100.20m, ZoneRole.Resistance, .8, profileOnly: true);
+        var broken = D2.Zone("broken", 99.90m, 100.20m, ZoneRole.Broken, .8);
+        var result = StructuralPlanner.Evaluate(D2.ExampleA(D2.Support(99.20m, 99.40m), ineligible, retired,
+            profile, broken, D2.Resistance(101.80m, 102.10m, id: "far")), P);
+
+        Assert.Null(StructuralPlanner.EnclosingQualifiedResistance(
+            [ineligible, retired, profile, broken], 100.00m));
+        Assert.True(result.Viable);
+        Assert.Equal(101.78m, result.Target);
+
+        var exampleA = StructuralPlanner.Evaluate(D2.ExampleA(), P);
+        Assert.True(exampleA.Viable);
+        Assert.DoesNotContain(StructuralPlanner.EntryInsideResistance, exampleA.ReasonCodes);
+        Assert.Equal(101.78m, exampleA.Target);
     }
 
     [Fact]
