@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net9.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\Models.cs" Link="Models.cs" />
+    <Compile Include="..\Indicators.cs" Link="Indicators.cs" />
+    <Compile Include="..\Levels.cs" Link="Levels.cs" />
+    <Compile Include="..\SymbolAliases.cs" Link="SymbolAliases.cs" />
+  </ItemGroup>
+</Project>

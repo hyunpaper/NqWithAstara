@@ -1,0 +1,128 @@
+using Astra.Server.Domain.Structure;
+using Xunit;
+
+/// <summary>설계 §16A 정책·수치 계약. 정책 수치가 바뀌면 hash가 바뀌고, 실행 컨텍스트는 hash에 들어가지 않는다.</summary>
+public sealed class StructurePolicyTests
+{
+    [Fact]
+    public void PolicyHashIsDeterministicForTheSamePolicy()
+    {
+        var a = StructurePolicy.Default;
+        var b = new StructurePolicy();
+        var c = StructurePolicy.Default with { };
+        Assert.Equal(a.PolicyHash, b.PolicyHash);
+        Assert.Equal(a.PolicyHash, c.PolicyHash);
+        Assert.Equal(a.PolicyHash, a.PolicyHash);
+        Assert.Equal(64, a.PolicyHash.Length);
+        Assert.All(a.PolicyHash, ch => Assert.True(char.IsAsciiDigit(ch) || (ch >= 'a' && ch <= 'f')));
+    }
+
+    [Fact]
+    public void EveryPolicyNumberChangeChangesTheHash()
+    {
+        var baseline = StructurePolicy.Default.PolicyHash;
+        var variants = new[]
+        {
+            StructurePolicy.Default with { ZoneEligibilityStrength = .36 },
+            StructurePolicy.Default with { PriceTick = .05m },
+            StructurePolicy.Default with { ProfileMaxBins = 401 },
+            StructurePolicy.Default with { ReactionWindowBars = 6 },
+            StructurePolicy.Default with { MinimumNetR = 1.3 },
+            StructurePolicy.Default with { RecencyTradingMinutes = 391 },
+            StructurePolicy.Default with { Version = "v5-structure.2" },
+            StructurePolicy.Default with { ObservationDailyByteLimit = 1 }
+        };
+        var hashes = variants.Select(x => x.PolicyHash).ToArray();
+        Assert.DoesNotContain(baseline, hashes);
+        Assert.Equal(hashes.Length, hashes.Distinct().Count());
+    }
+
+    [Fact]
+    public void CanonicalJsonIsKeySortedAndFreeOfRuntimeContext()
+    {
+        var json = StructurePolicy.Default.CanonicalJson;
+        var keys = json.Trim('{', '}').Split(",\"")
+            .Select(x => x.TrimStart('"').Split("\":")[0]).ToArray();
+        Assert.Equal(keys.OrderBy(x => x, StringComparer.Ordinal).ToArray(), keys);
+        Assert.DoesNotContain("PolicyHash", keys);
+        Assert.DoesNotContain("CanonicalJson", keys);
+        Assert.Contains("\"ZoneEligibilityStrength\":0.35", json);
+        Assert.Contains("\"PriceTick\":0.01", json);
+        Assert.Contains("\"PivotLeft\":2", json);
+        Assert.DoesNotContain("2026", json);           // 실행 시각/경로가 들어가면 hash가 재현되지 않는다
+    }
+
+    [Fact]
+    public void PolicyCarriesTheDesignTableValues()
+    {
+        var p = StructurePolicy.Default;
+        Assert.Equal(2, p.PivotLeft);
+        Assert.Equal(2, p.PivotRight);
+        Assert.Equal(30, p.Minimum1mBars);
+        Assert.Equal(15, p.NewEntryQuoteMaxAgeSeconds);
+        Assert.Equal(5, p.QuoteFutureToleranceSeconds);
+        Assert.Equal(.35, p.ZoneEligibilityStrength);
+        Assert.Equal(2.0, p.MaxRiskPercent);
+        Assert.Equal(1.2, p.MinimumNetR);
+        Assert.Equal(40, p.EntryCutoffBeforeCloseMinutes);
+        Assert.Equal(5, p.CandidateTtlMinutes);
+        Assert.Equal(30, p.BreakoutCooldownMinutes);
+        Assert.Equal(20L * 1024 * 1024, p.ObservationDailyByteLimit);
+        Assert.Equal(.01m, p.PriceTick);
+        Assert.Equal(400, p.ProfileMaxBins);
+        Assert.Equal(.15, p.ZoneHalfWidthAtrFactor);
+        Assert.Equal(390, p.RecencyTradingMinutes);
+    }
+
+    [Fact]
+    public void GeometricMeanFollowsTheContract()
+    {
+        Assert.Equal(6, StructureMath.GeometricMean([4, 9]), 10);
+        Assert.Equal(0, StructureMath.GeometricMean([0, 9]));
+        Assert.Throws<ArgumentOutOfRangeException>(() => StructureMath.GeometricMean([-1, 9]));
+        Assert.Throws<ArgumentOutOfRangeException>(() => StructureMath.GeometricMean([double.NaN, 9]));
+        Assert.Throws<ArgumentException>(() => StructureMath.GeometricMean([]));
+    }
+
+    [Fact]
+    public void GeometricMeanSkipsMissingComponentsAndNeverSubstitutesZero()
+    {
+        Assert.Equal(6, StructureMath.GeometricMeanOfAvailable([4, null, 9])!.Value, 10);
+        Assert.Null(StructureMath.GeometricMeanOfAvailable([null, null]));
+        // 결측을 0으로 대체하면 아래가 0이 된다. 그렇게 하지 않는다(§16A).
+        Assert.NotEqual(0, StructureMath.GeometricMeanOfAvailable([4, null])!.Value);
+    }
+
+    [Fact]
+    public void FloorToCentStaysOnTheDecimalPath()
+    {
+        Assert.Equal(99.12m, StructureMath.FloorToCent(99.129m));
+        Assert.Equal(99.12m, StructureMath.FloorToCent(99.15m - 0.03m));    // 설계 예시 A
+        Assert.Equal(101.78m, StructureMath.FloorToCent(101.80m - 0.02m));  // 설계 예시 A 목표
+        Assert.Equal(-0.02m, StructureMath.FloorToCent(-0.011m));
+    }
+
+    [Fact]
+    public void IndicatorToPriceConversionRejectsNonFiniteAndNegative()
+    {
+        Assert.Null(StructureMath.ToPriceDelta(double.NaN));
+        Assert.Null(StructureMath.ToPriceDelta(double.PositiveInfinity));
+        Assert.Null(StructureMath.ToPriceDelta(-1));
+        Assert.Null(StructureMath.ToPriceDelta(null));
+        Assert.Equal(.2m, StructureMath.ToPriceDelta(.2));
+        Assert.Equal(.03m, StructureMath.ScaledFloor(.01m, .15, .2));
+        Assert.Equal(.01m, StructureMath.ScaledFloor(.01m, .15, null));
+        Assert.Equal(.01m, StructureMath.ScaledFloor(.01m, .15, 0));
+        Assert.Equal(.01m, StructureMath.ScaledFloor(.01m, .15, double.NaN));
+    }
+
+    [Fact]
+    public void SourceIdIsAStableHashRatherThanAPriceString()
+    {
+        var id = StructureMath.SourceId("pivot", "TEST", "2026-09-09", "1m", "H", "2026-09-09T14:00:00.0000000Z");
+        Assert.Equal(64, id.Length);
+        Assert.DoesNotContain("2026", id);   // 가격/시각 문자열 자체를 ID로 쓰지 않는다(§6.3)
+        Assert.Equal(id, StructureMath.SourceId("pivot", "TEST", "2026-09-09", "1m", "H", "2026-09-09T14:00:00.0000000Z"));
+        Assert.NotEqual(id, StructureMath.SourceId("pivot", "TEST", "2026-09-09", "1m", "L", "2026-09-09T14:00:00.0000000Z"));
+    }
+}
