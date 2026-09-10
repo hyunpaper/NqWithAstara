@@ -254,3 +254,59 @@ describe("PlanExplanation — READY 차단·데이터 품질·경고", () => {
     expect(screen.getAllByText(/산출 불가/).length).toBeGreaterThan(0);
   });
 });
+
+// 이슈 #25 — missingComponents 렌더 계약: 결측 컴포넌트 이름은 코드 사전이 아니라
+// 결측 전용 사전으로 "계산 근거 부족" 문장이 된다.
+describe("PlanExplanation — missingComponents 표시 계약 (이슈 #25)", () => {
+  it("structureDirection 결측이 사람 읽을 수 있는 문장으로 나온다 (코드 fallback 아님)", () => {
+    const analysis: StructureAnalysis = {
+      ...baseAnalysis,
+      trend: {
+        ...baseAnalysis.trend,
+        structureEvidenceMissing: true,
+        missingComponents: ["structureDirection"],
+      },
+    };
+    render(<PlanExplanation analysis={analysis} candidate={null} />);
+    expectText(/구조 방향을 계산할 확정 5분 피벗 구조가 아직 부족합니다/);
+    // 결측은 근거 부족이지 오류·0점이 아님을 안내한다.
+    expectText(/계산 근거가 아직 부족해 생략한 요소/);
+    // 운영 버그였던 코드 사전 fallback 문구가 더는 나오지 않는다.
+    expect(screen.queryByText(/설명이 등록되지 않은 코드입니다/)).toBeNull();
+  });
+
+  it("알려진 결측 키 여러 개가 각각 한국어 문장으로 나열된다", () => {
+    const analysis: StructureAnalysis = {
+      ...baseAnalysis,
+      trend: {
+        ...baseAnalysis.trend,
+        missingComponents: ["atr1m", "vwap", "efficiency"],
+      },
+    };
+    render(<PlanExplanation analysis={analysis} candidate={null} />);
+    expectText(/1분 ATR — 유효한 ATR\(>0\)이 아직 없어/);
+    expectText(/VWAP — 세션 거래량이 아직 없어/);
+    expectText(/추세 효율 — 경로 효율을 계산할 완료 봉이 아직 부족합니다/);
+  });
+
+  it("미등록 새 키는 감추지 않고 원문을 보존한다", () => {
+    const analysis: StructureAnalysis = {
+      ...baseAnalysis,
+      trend: { ...baseAnalysis.trend, missingComponents: ["brandNewComponent"] },
+    };
+    render(<PlanExplanation analysis={analysis} candidate={null} />);
+    expectText(/brandNewComponent — 설명이 등록되지 않은 결측 요소입니다 \(원문 표시\)/);
+  });
+
+  it("값 0은 결측으로 처리하지 않는다 — signedTrend=0은 0.0으로 표시", () => {
+    const analysis: StructureAnalysis = {
+      ...baseAnalysis,
+      trend: { ...baseAnalysis.trend, signedTrend: 0, missingComponents: [] },
+    };
+    render(<PlanExplanation analysis={analysis} candidate={null} />);
+    expectText("0.0");
+    // 추세 블록에 결측 안내가 나오지 않는다 (missingComponents가 비어 있으므로).
+    expect(screen.queryByText(/계산 근거가 아직 부족해 생략한 요소/)).toBeNull();
+    expect(screen.queryByText(/설명이 등록되지 않은/)).toBeNull();
+  });
+});
