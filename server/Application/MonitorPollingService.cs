@@ -89,7 +89,13 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
             var hit = PriceLevels.DetectBreakout(bars, priorLevels, result.Indicators.RelativeVolume); if (hit is not null && (score < 55 || ext < 0 || ext > 1.5 || buyShare is null or < 50)) hit = null;
             _breakouts.TryGetValue(item.Symbol, out var ob); var bt = SignalLifecycle.UpdateBreakout(ob, hit, bar, quote.Price, clock.GetUtcNow(), market.Start, !nearClose);
             var kinds = new List<string>(); if (st.Emit && st.Display is "SETUP" or "REBOUND") kinds.Add(st.Display); if (bt.Emit) kinds.Add("BREAKOUT");
-            var entries = kinds.Select(k => { var plan = PriceLevels.Enter(quote.Price, 1, result.Indicators.Atr, levels); return new SimulationEntry(k, quote.Price, plan.Target ?? quote.Price, plan.Stop ?? quote.Price, plan.TargetBasis, plan.StopBasis, score, Math.Round(ext, 2), Math.Round(result.Indicators.RelativeVolume, 2), buyShare, Math.Round(result.Indicators.Rsi, 1), reasons, clock.GetUtcNow(), market.End, bar.Timestamp); }).ToArray();
+            // §18 active: 신규 시뮬 진입은 v5 구조 계획이 소유하므로 v4 진입 생성만 중단한다(진입은 아래
+            // ObserveStructureAsync → StructureAnalysisService가 커밋). v4 신호 표시·기존 OPEN 청산은 그대로이고,
+            // v5 오류/UNAVAILABLE이어도 v4 진입으로 자동 fallback하지 않는다(§16B).
+            var v4OwnsNewEntries = structure is null || structure.Mode != StructureEngineMode.Active;
+            var entries = !v4OwnsNewEntries
+                ? Array.Empty<SimulationEntry>()
+                : kinds.Select(k => { var plan = PriceLevels.Enter(quote.Price, 1, result.Indicators.Atr, levels); return new SimulationEntry(k, quote.Price, plan.Target ?? quote.Price, plan.Stop ?? quote.Price, plan.TargetBasis, plan.StopBasis, score, Math.Round(ext, 2), Math.Round(result.Indicators.RelativeVolume, 2), buyShare, Math.Round(result.Indicators.Rsi, 1), reasons, clock.GetUtcNow(), market.End, bar.Timestamp); }).ToArray();
             if (!await UpdateTrades(gen, t => SimulationEngine.Process(t, item.Symbol, bars, quote.Price, quote.At, score, result.Indicators.Vwap, entries), token,
                     () => clock.GetLocalNow() < market.End && clock.GetLocalNow() - quote.At <= TimeSpan.FromMinutes(3) && (entries.Length == 0 || market.End - clock.GetLocalNow() >= TimeSpan.FromMinutes(40)))) return PollOutcome.Ignored;
             if (!runtime.TryCommit(gen, () =>

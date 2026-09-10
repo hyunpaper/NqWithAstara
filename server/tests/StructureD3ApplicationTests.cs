@@ -94,16 +94,19 @@ public sealed class StructureD3ApplicationTests
         Assert.Empty(harness.Diagnostics.Failures);
     }
 
-    /// <summary>active는 enum·게이트 구조만 마련한 상태이며 신규 진입 배선은 D6이다(§17). v4가 계속 소유한다.</summary>
+    /// <summary>D6(§18): active는 v5가 신규 진입을 소유한다. READY 계획이 없으면 진입 보류이며 v4 진입으로 fallback하지 않는다.</summary>
     [Fact]
-    public async Task ActiveModeStillLeavesEntryOwnershipWithV4AndFlagsPendingWiring()
+    public async Task ActiveModeIsOwnedByV5AndHoldsBackWithoutAReadyPlan()
     {
         var harness = await Polled(StructureEngineMode.Active);
 
         Assert.True(harness.Structure.TryGetPublished(D3.Symbol, out var view));
         Assert.Equal("active", view.Mode);
-        Assert.Equal(StructureAnalysisService.EntryOwnerV4, view.EntryOwner);
-        Assert.Contains(StructureAnalysisService.NoteActiveWiringPending, view.Notes);
+        Assert.Equal(StructureAnalysisService.EntryOwnerV5, view.EntryOwner);
+        // §11: shadow 관측 버전(-shadow)은 active 레코드에 쓰지 않는다.
+        Assert.Equal(P.Version, view.RecordVersion);
+        // 구조 근거(READY 계획)가 없으면 v4·v5 어느 쪽도 새 거래를 만들지 않는다(§19-5).
+        Assert.Empty(harness.Store.Trades);
         // 실제 거래 저장소에는 v4가 쓰는 두 파일 외에 어떤 파일도 생기지 않는다.
         Assert.All(harness.Store.Writes, file => Assert.Contains(file, new[] { "simtrades.json", "positions.json" }));
     }
@@ -188,6 +191,24 @@ public sealed class StructureD3ApplicationTests
                      {
                          "MarketRules.Enter", "PriceLevels.Enter", "MarketRules.FreezeRisk", "PriceLevels.Compute",
                          "SimulationEngine", "SimulationEntry", "simtrades.json", "positions.json",
+                         "Indicators.Evaluate"
+                     })
+                Assert.DoesNotContain(forbidden, text, StringComparison.Ordinal);
+        }
+
+        // D6 배선 파일(v5 계획 → 기존 거래 저장소): 거래 저장 연결은 이 두 파일에만 허용하되,
+        // ATR/레벨 폴백과 v4 점수 경로 참조는 여전히 금지다(§19-5, README §5.1).
+        string[] bridges =
+        [
+            Path.Combine(serverRoot, "Domain", "StructuralSimulation.cs"),
+            Path.Combine(serverRoot, "Application", "StructuralEntryService.cs")
+        ];
+        foreach (var file in bridges)
+        {
+            var text = File.ReadAllText(file);
+            foreach (var forbidden in new[]
+                     {
+                         "MarketRules.Enter", "PriceLevels.Enter", "MarketRules.FreezeRisk", "PriceLevels.Compute",
                          "Indicators.Evaluate"
                      })
                 Assert.DoesNotContain(forbidden, text, StringComparison.Ordinal);
