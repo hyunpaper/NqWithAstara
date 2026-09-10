@@ -237,6 +237,23 @@ describe("codeText — 코드를 한국어 문장으로", () => {
   it("CODE:detail 형태", () => {
     expect(codeText("STALE_QUOTE:41s")).toBe("호가가 오래되었습니다 (30초 만료) (상세: 41s)");
   });
+  it("V5_ENTRY_* 관측 note 4종 (이슈 #21 — D6 active 배선)", () => {
+    expect(codeText("V5_ENTRY_COMMITTED")).toBe("v5 구조 계획으로 진입을 생성했습니다");
+    expect(codeText("V5_ENTRY_BLOCKED_BY_OPEN_TRADE")).toBe(
+      "이 종목에 OPEN 거래가 있어 신규 진입을 보류했습니다",
+    );
+    expect(codeText("V5_ENTRY_PLAN_INVALID")).toBe(
+      "동결 계획의 가격 순서가 성립하지 않아 진입을 거절했습니다",
+    );
+    expect(codeText("V5_ENTRY_PORT_UNAVAILABLE")).toBe(
+      "진입 포트가 배선되지 않아 진입을 보류했습니다 (설정 문제)",
+    );
+  });
+  it("V5_ENTRY 계열이라도 등록되지 않은 코드는 fallback으로 원문을 노출한다", () => {
+    expect(codeText("V5_ENTRY_SOMETHING_NEW")).toBe(
+      "V5_ENTRY_SOMETHING_NEW — 설명이 등록되지 않은 코드입니다 (원문 표시)",
+    );
+  });
   it("모르는 코드는 감추지 않고 원문을 노출한다(§19-9)", () => {
     expect(codeText("TOTALLY_UNKNOWN")).toBe(
       "TOTALLY_UNKNOWN — 설명이 등록되지 않은 코드입니다 (원문 표시)",
