@@ -204,17 +204,17 @@ flowchart TB
 CI와 동일 스택: Node.js 22, .NET 9.
 
 ```sh
-node scripts/repository-policy.mjs                     # 비밀/금지 경로 스캔
-node --test scripts/repository-policy.test.mjs
+node .github/scripts/repository-policy.mjs                     # 비밀/금지 경로 스캔
+node --test .github/scripts/repository-policy.test.mjs
 dotnet test server/tests/Astra.Server.Tests.csproj --configuration Release
 cd client && npm ci && npm run build
 ```
 
-앱 실행/종료: `scripts/Start-Astra.ps1` / `scripts/Stop-Astra.ps1` (로컬 전용).
+앱 실행/종료 스크립트는 로컬 전용이며 저장소에 포함하지 않는다 (`/scripts/`는 gitignore).
 
 ## 7. 커밋 금지 대상
 
-`.gitignore` + `scripts/repository-policy.mjs`(CI에서 실행)가 이중으로 막지만, 규칙으로도 명시한다:
+`.gitignore` + `.github/scripts/repository-policy.mjs`(CI에서 실행)가 이중으로 막지만, 규칙으로도 명시한다:
 
 | 분류 | 대상 |
 |---|---|

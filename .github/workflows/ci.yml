@@ -36,8 +36,8 @@ jobs:
 
       - name: Validate repository policy
         run: |
-          node scripts/repository-policy.mjs
-          node --test scripts/repository-policy.test.mjs
+          node .github/scripts/repository-policy.mjs
+          node --test .github/scripts/repository-policy.test.mjs
 
       - name: Validate pull request branches
         if: github.event_name == 'pull_request'
@@ -127,8 +127,8 @@ jobs:
 
       - name: Validate repository policy
         run: |
-          node scripts/repository-policy.mjs
-          node --test scripts/repository-policy.test.mjs
+          node .github/scripts/repository-policy.mjs
+          node --test .github/scripts/repository-policy.test.mjs
 
       - name: Download compiled server tests
         uses: actions/download-artifact@v4

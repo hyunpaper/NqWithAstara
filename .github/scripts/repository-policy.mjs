@@ -22,7 +22,7 @@ const SECRET_RULES = [
 ];
 
 const ALLOWED_BASENAMES = new Set(['appsettings.example.json', '.env.example']);
-const CONTENT_SCAN_EXCLUSIONS = new Set(['scripts/repository-policy.mjs', 'scripts/repository-policy.test.mjs']);
+const CONTENT_SCAN_EXCLUSIONS = new Set(['.github/scripts/repository-policy.mjs', '.github/scripts/repository-policy.test.mjs']);
 
 export function normalizePath(path) {
   return path.replaceAll('\\', '/').replace(/^\.\//, '');
