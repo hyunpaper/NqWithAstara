@@ -474,6 +474,7 @@ const CODE_TEXT: Record<string, string> = {
   NO_TARGET_STRUCTURE: "목표 구조 없음 — 진입가 위에 자격을 갖춘 저항 구간이 없습니다",
   NO_INVALIDATION_STRUCTURE: "무효화 구조 없음 — 손절 기준이 될 지지 구간이 없습니다",
   NO_TARGET_ROOM: "다음 저항까지 남은 공간이 없습니다",
+  ENTRY_INSIDE_RESISTANCE: "진입가가 자격 있는 저항 구간 안입니다 (위쪽 먼 저항으로 대체하지 않습니다)",
   COST_EXCEEDS_ROOM: "비용(수수료·스프레드)을 빼면 목표까지 남는 폭이 없습니다",
   INSUFFICIENT_REWARD_TO_RISK: "비용 반영 손익비가 기준에 못 미칩니다",
   RISK_TOO_WIDE: "손절 폭이 허용 위험을 넘습니다 (손절을 좁혀 통과시키지 않습니다)",
@@ -549,7 +550,7 @@ const CODE_TEXT: Record<string, string> = {
   SPREAD_CROSSED: "매수·매도 호가가 역전되어 사용하지 않았습니다",
   SPREAD_NON_POSITIVE_PRICE: "호가 가격이 0 이하라 사용하지 않았습니다",
   SPREAD_NON_POSITIVE_SIZE: "호가 잔량이 0 이하라 사용하지 않았습니다",
-  SPREAD_SIZE_UNKNOWN: "호가 잔량을 알 수 없습니다 (스프레드만 사용)",
+  SPREAD_SIZE_UNKNOWN: "호가 잔량을 알 수 없어 스프레드를 비용으로 쓰지 않았습니다",
   SPREAD_FUTURE_TIMESTAMP: "호가 시각이 미래입니다",
   SPREAD_OUTSIDE_SESSION: "정규장 밖 호가입니다",
 

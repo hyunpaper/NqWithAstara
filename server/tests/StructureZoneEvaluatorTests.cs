@@ -142,26 +142,84 @@ public sealed class StructureZoneEvaluatorTests
         Assert.Contains(ZoneEvaluator.ReasonBroken, failed.RejectReasons);
     }
 
+    /// <summary>
+    /// 반복 접촉으로 강도를 되살릴 수 없다. 첫 실패가 지지를 BROKEN으로 만들므로 이후 접촉은
+    /// 방향이 없는 접촉이며(§16B: BROKEN은 원래 역할로 부활하지 않는다) 성공으로도 실패로도 세지 않는다.
+    /// </summary>
     [Fact]
-    public void ManyTouchesDoNotOutweighRepeatedFailures()
+    public void ManyTouchesDoNotOutweighAFailureAndNeverRestoreEligibility()
     {
         var bars = Warmup();
         var minute = 14;
         for (var round = 0; round < 3; round++)
         {
             bars.Add(Fx.Steady(minute++, 99.35m, 99.55m, 99.40m));       // 접촉
-            bars.Add(Fx.Steady(minute++, 99.05m, 99.25m, 99.10m));       // 실패
+            bars.Add(Fx.Steady(minute++, 99.05m, 99.25m, 99.10m));       // 실패 / 하향 이탈
             bars.Add(Fx.Steady(minute++, 99.45m, 99.65m, 99.55m));
             bars.Add(Fx.Steady(minute++, 99.45m, 99.65m, 99.55m));
         }
         for (var i = 0; i < 5; i++) bars.Add(Fx.Steady(minute++, 99.45m, 99.65m, 99.55m));
 
-        var zone = Fx.Evaluate(Support(), bars.ToImmutableArray(), minute).Zones[0];
+        var result = Fx.Evaluate(Support(), bars.ToImmutableArray(), minute);
+        var zone = result.Zones[0];
         Assert.Equal(3, zone.Strength!.CompletedEpisodes);
-        Assert.Equal(3, zone.Strength.FailedEpisodes);
-        Assert.Equal(Math.Exp(-3), zone.Strength.BreachPenalty, 10);
-        Assert.True(zone.Strength.Value < .1, $"strength={zone.Strength.Value}");
+        Assert.Equal(1, zone.Strength.FailedEpisodes);                   // 지지로서 실패할 수 있는 것은 한 번뿐이다
+        Assert.Equal(0, zone.Strength.SuccessEpisodes);
+        Assert.Equal(Math.Exp(-1), zone.Strength.BreachPenalty, 10);
+        Assert.All(result.Episodes.Skip(1), e => Assert.Contains("NO_DIRECTIONAL_ROLE", e.Notes));
+        Assert.True(zone.Strength.Value < P.ZoneEligibilityStrength, $"strength={zone.Strength.Value}");
+        Assert.Equal(ZoneRole.Broken, zone.Role);
         Assert.False(zone.Eligible);
+        Assert.Contains(ZoneEvaluator.ReasonBroken, zone.RejectReasons);
+    }
+
+    /// <summary>
+    /// R1/§16B: 접촉 시점 역할이 BROKEN이면 최초 역할로 되돌려 반응을 평가하지 않는다.
+    /// 깨진 지지 위에서의 반등이 성공 반응으로 누적되면 사라진 구조가 되살아난다.
+    /// </summary>
+    [Fact]
+    public void ATouchOnABrokenSupportIsNeverScoredAsASuccessfulReaction()
+    {
+        var bars = Warmup();
+        bars.Add(Fx.Steady(14, 99.00m, 99.15m, 99.05m));      // 구간 아래로 갭 이탈 → BROKEN (접촉 아님)
+        bars.Add(Fx.Steady(15, 99.00m, 99.15m, 99.05m));
+        bars.Add(Fx.Steady(16, 99.00m, 99.15m, 99.05m));
+        bars.Add(Fx.Steady(17, 99.25m, 99.45m, 99.30m));      // 깨진 구간 재접촉
+        for (var i = 18; i <= 22; i++) bars.Add(Fx.Steady(i, 99.45m, 99.75m, 99.70m));   // 위로 강하게 반등
+
+        var result = Fx.Evaluate(Support(), bars.ToImmutableArray(), 23);
+        var episode = Assert.Single(result.Episodes);
+
+        Assert.Equal(Fx.At(17), episode.StartAt);
+        Assert.NotEqual(EpisodeOutcome.Success, episode.Outcome);
+        Assert.Equal(EpisodeOutcome.Neutral, episode.Outcome);
+        Assert.Contains("NO_DIRECTIONAL_ROLE", episode.Notes);
+        Assert.Null(episode.FavorableExcursionAtr);
+        var strength = result.Zones[0].Strength!;
+        Assert.Equal(0, strength.SuccessEpisodes);
+        Assert.Null(strength.ReactionEvidence);
+        Assert.Equal(ZoneRole.Broken, result.Zones[0].Role);
+        Assert.False(result.Zones[0].Eligible);
+        Assert.Contains(ZoneEvaluator.ReasonBroken, result.Zones[0].RejectReasons);
+    }
+
+    /// <summary>BROKEN 이전에 시작한 접촉은 그대로 성공으로 남는다. 나중에 깨졌다고 소급 취소하지 않는다.</summary>
+    [Fact]
+    public void ASuccessfulReactionBeforeTheBreakIsUnchanged()
+    {
+        var bars = Warmup();
+        bars.Add(Fx.Steady(14, 99.35m, 99.55m, 99.45m));      // 지지 상태에서 접촉
+        bars.Add(Fx.Steady(15, 99.45m, 99.60m, 99.50m));      // 성공 반응
+        bars.Add(Fx.Steady(16, 99.05m, 99.25m, 99.10m));      // 이후 하향 이탈
+
+        var result = Fx.Evaluate(Support(), bars.ToImmutableArray(), 17);
+        var episode = Assert.Single(result.Episodes);
+
+        Assert.Equal(EpisodeOutcome.Success, episode.Outcome);
+        Assert.Equal(ZoneRole.Support, episode.RoleAtTouch);
+        Assert.DoesNotContain("NO_DIRECTIONAL_ROLE", episode.Notes);
+        Assert.Equal(1, result.Zones[0].Strength!.SuccessEpisodes);
+        Assert.Equal(ZoneRole.Broken, result.Zones[0].Role);   // 최종 역할은 BROKEN이지만 과거 반응은 남는다
     }
 
     // ── 역할 전이 (§16B) ──
