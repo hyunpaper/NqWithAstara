@@ -212,6 +212,27 @@ export type StructureSummaryRow = {
   warnings?: string[] | null;
 };
 
+/**
+ * 이슈 #26: `/api/state`의 additive `structureEvents` 한 건. 서버(StructureAlertPublisher)가
+ * active gate 안 commit 지점에서 발행한 v5 알림 이벤트이며, FE는 표시·소리만 담당한다(발행 판단 없음).
+ * seq는 서버 재시작을 넘어 단조 증가한다.
+ */
+export type StructureEventRow = {
+  seq: number;
+  type?: string | null; // V5_READY | V5_ENTERED | V5_BLOCKED
+  symbol?: string | null;
+  eventId?: string | null;
+  kind?: string | null;
+  entryQuality?: number | null;
+  netR?: number | null;
+  quotePrice?: number | null;
+  at?: string | null;
+  planId?: string | null;
+  stop?: number | null;
+  target?: number | null;
+  reason?: string | null;
+};
+
 export type StructureSummary = {
   mode?: string | null;
   entryOwner?: string | null;
