@@ -79,6 +79,8 @@ sealed class MemoryObservationStore : IStructureObservationStore
     public long? ForcedSize { get; set; }
     public Action? BeforeAppend { get; set; }
     public Exception? AppendFailure { get; set; }
+    /// <summary>파일별 텍스트 쓰기 실패 주입(이슈 #26 알림 영속 원자성 테스트). null 반환은 성공이다.</summary>
+    public Func<string, Exception?>? TextWriteFailure { get; set; }
 
     public List<string> Lines(string file) => Files.TryGetValue(file, out var lines) ? lines : [];
     public IEnumerable<string> AllLines => Files.Values.SelectMany(x => x);
@@ -116,6 +118,7 @@ sealed class MemoryObservationStore : IStructureObservationStore
     public Task WriteTextAsync(string file, string content, CancellationToken ct)
     {
         Interactions++;
+        if (TextWriteFailure?.Invoke(file) is { } failure) throw failure;
         Texts[file] = content;
         TextWrites++;
         return Task.CompletedTask;

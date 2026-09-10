@@ -180,6 +180,7 @@ public sealed class StructureD3ApplicationTests
             Path.Combine(serverRoot, "Application", "StructureAnalysisService.cs"),
             Path.Combine(serverRoot, "Application", "StructureSnapshotFactory.cs"),
             Path.Combine(serverRoot, "Application", "StructureObservationWriter.cs"),
+            Path.Combine(serverRoot, "Application", "StructureAlertPublisher.cs"),
             .. Directory.GetFiles(Path.Combine(serverRoot, "Domain", "Structure"), "*.cs")
         ];
         Assert.True(owned.Length >= 12, $"v5 소유 파일을 찾지 못했다: {owned.Length}");

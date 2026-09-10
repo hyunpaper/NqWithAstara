@@ -97,7 +97,8 @@ public sealed class StructureAnalysisService(
     IMonitorDiagnostics diagnostics,
     StructureEngineOptions? options = null,
     StructurePolicy? policy = null,
-    IStructuralTradeEntries? tradeEntries = null)
+    IStructuralTradeEntries? tradeEntries = null,
+    StructureAlertPublisher? alerts = null)
 {
     public const string LatchFile = "structure-lifecycle.json";
     public const string EntryOwnerV4 = "v4";
@@ -251,6 +252,8 @@ public sealed class StructureAnalysisService(
             // ── D6 active 진입(§18): READY 대표 후보 1개만 실제 시뮬 거래로 커밋한다. 거래 저장이 성공한 뒤에만
             // 후보를 ENTERED로 바꾸고 래치에 tombstone을 남기며, 실패하면 관측·래치도 갱신하지 않아 다음 poll이
             // 같은 이벤트를 멱등하게 재시도한다(§12.6). off/shadow에서는 이 경로 자체가 없다.
+            // 이슈 #26: 이 commit에서 READY로 커밋되는 후보를 알림 초안으로 잡아 둔다(진입 성공 시 ENTERED로 바뀌기 전).
+            var readyForAlerts = candidates.Where(x => x.Disposition == CandidateDisposition.Ready).ToArray();
             var activeEntry = await TryEnterPreferredAsync(candidates, preferred, snapshot, trend, now, ct);
             if (activeEntry is not null)
             {
@@ -274,6 +277,17 @@ public sealed class StructureAnalysisService(
 
             var write = await observations.AppendAsync(record, ct);
             if (!Current(request, snapshot, clock.GetLocalNow())) return;
+
+            // ── 이슈 #26 v5 알림 이벤트(승인 설계안 §4): 커밋 순서는 [진입 커밋 → 관측 append → 알림 키 append →
+            // 래치 commit]. 알림 영속이 실패하면 예외로 래치 commit이 막히고 다음 poll이 멱등 재시도한다.
+            // active에서만 발행한다 — off/shadow는 v5 이벤트를 만들지 않는다(§16B).
+            if (_options.Mode == StructureEngineMode.Active && alerts is not null)
+            {
+                var drafts = AlertDrafts(readyForAlerts, activeEntry, candidates, preferred);
+                if (drafts.Count > 0)
+                    await alerts.PublishAsync(snapshot.Symbol, snapshot.SessionStart, PolicyHash, drafts,
+                        snapshot.QuotePrice, now, ct);
+            }
 
             var storageWarnings = write.Limited
                 ? ImmutableArray.Create(StructureObservationWriter.LimitWarning)
@@ -342,6 +356,44 @@ public sealed class StructureAnalysisService(
     }
 
     sealed record ActiveEntryResult(ImmutableArray<EntryCandidate> Candidates, bool Entered, string? Note);
+
+    /// <summary>
+    /// 이슈 #26: commit 지점의 후보·진입 결과에서 알림 초안을 파생한다. 새 가격·점수를 만들지 않고
+    /// 후보 계획의 값(EntryQuality/NetR/Stop/Target)만 옮긴다. INVALIDATED/EXPIRED는 상태 칩으로만
+    /// 보이고 푸시 이벤트를 만들지 않는다(소음 방지, 승인 설계안 §4). 중복 제거는 publisher의 영속 키가 맡는다.
+    /// </summary>
+    static List<StructureAlertDraft> AlertDrafts(IReadOnlyList<EntryCandidate> readyAtCommit,
+        ActiveEntryResult? activeEntry, ImmutableArray<EntryCandidate> candidates, string? preferred)
+    {
+        var drafts = new List<StructureAlertDraft>();
+        // 이 commit에서 READY로 성립한 모든 후보. 같은 EventId의 재커밋은 publisher 키가 걸러낸다.
+        foreach (var ready in readyAtCommit)
+            drafts.Add(new StructureAlertDraft(StructureAlertPublisher.TypeReady, ready.EventId, ready.KindName,
+                StructureViewMapper.Finite(ready.EntryQuality), ready.Plan?.NetR));
+        if (activeEntry is null) return drafts;
+
+        if (activeEntry.Entered)
+        {
+            // 진입 커밋(멱등 회복 포함): READY였다가 이 commit에서 ENTERED가 된 후보 하나다.
+            // AlreadyEntered 회복의 재발행은 publisher 키가 막는다(첫 발행이 성공했다면 재발행 없음).
+            var entered = candidates.FirstOrDefault(x => x.Disposition == CandidateDisposition.Entered &&
+                readyAtCommit.Any(r => r.EventId == x.EventId));
+            if (entered?.Plan is { } plan)
+                drafts.Add(new StructureAlertDraft(StructureAlertPublisher.TypeEntered, entered.EventId,
+                    entered.KindName, StructureViewMapper.Finite(entered.EntryQuality), plan.NetR,
+                    plan.PlanId, plan.Stop, plan.Target));
+            return drafts;
+        }
+
+        // 차단 3종(OPEN 제한/계획 무효/포트 부재). 진입이 없었으므로 preferred는 시도한 후보 그대로다.
+        if (activeEntry.Note is NoteEntryBlockedByOpenTrade or NoteEntryPlanInvalid or NoteEntryUnavailable &&
+            preferred is not null &&
+            candidates.FirstOrDefault(x => x.EventId == preferred) is { } attempted)
+            drafts.Add(new StructureAlertDraft(StructureAlertPublisher.TypeBlocked, attempted.EventId,
+                attempted.KindName, StructureViewMapper.Finite(attempted.EntryQuality), attempted.Plan?.NetR,
+                Reason: activeEntry.Note));
+        return drafts;
+    }
 
     string RecordVersion =>
         // §11/§16B: `v5-structure.1-shadow`는 shadow 관측 레코드 버전이며 SimTrade.Logic에 쓰지 않는다.
