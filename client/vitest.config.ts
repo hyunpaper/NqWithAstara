@@ -6,6 +6,8 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "jsdom",
+    // Testing Library의 렌더 자동 정리(cleanup)는 전역 afterEach 훅을 요구한다.
+    globals: true,
     include: ["src/**/*.test.{ts,tsx}"],
     coverage: {
       provider: "v8",
