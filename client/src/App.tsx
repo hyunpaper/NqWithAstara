@@ -27,7 +27,12 @@ import LiquidityPanel from "./LiquidityPanel";
 import StructurePanel from "./StructurePanel";
 import SimStructurePanel from "./SimStructurePanel";
 import LiveStructureCells from "./LiveStructureCells";
-import type { StructureSummary, StructureSummaryRow } from "./structureTypes";
+import { planV5Notifications, v4PushEnabled } from "./alertPlanner";
+import type {
+  StructureEventRow,
+  StructureSummary,
+  StructureSummaryRow,
+} from "./structureTypes";
 import {
   LiveSortKey,
   compareByTrendStrength,
@@ -96,6 +101,11 @@ type State = {
    * 구버전 서버(또는 구조 엔진 미구성)에서는 없을 수 있으므로 optional로 둔다.
    */
   structureSummary?: StructureSummary | null;
+  /**
+   * 이슈 #26: 서버가 발행한 v5 알림 이벤트(최근 50건, seq 단조 증가). active에서만 채워지며
+   * FE는 seq seed + Notification tag로 소비만 한다. 구버전 서버에는 없다.
+   */
+  structureEvents?: StructureEventRow[] | null;
 };
 type SearchResult = { symbol: string; name: string };
 type DailyMetrics = {
@@ -399,6 +409,8 @@ export default function App() {
     [form, setForm] = useState({ entryPrice: "", quantity: "" });
   const seenSetups = useRef<Record<string, string>>({});
   const seenBreakouts = useRef<Record<string, string>>({});
+  // 이슈 #26 PR-3: v5 이벤트 소비 기준 seq. null = 아직 seed 전(새로고침 직후 과거 이벤트를 울리지 않음).
+  const lastV5Seq = useRef<number | null>(null);
   const alertsSeeded = useRef(false);
   const connectionFailed = useRef(false);
   const suppressAlertSnapshot = useRef(false);
@@ -482,6 +494,30 @@ export default function App() {
         };
       }
     };
+    // ── 이슈 #26 PR-3: active에서는 서버가 발행한 v5 이벤트만 푸시·소리를 울린다(승인 설계안 §4).
+    // v4 SETUP/BREAKOUT 배지·점수 표시는 "참고" 라벨로 유지되고 푸시·소리만 중단된다(승인 단서 1).
+    // off/shadow는 기존 v4 알림 그대로다. 중복 방지: seq seed(새로고침 회귀) + Notification tag.
+    // 심볼당 5분 스로틀은 v5 이벤트에 적용하지 않는다 — READY 직후 ENTERED를 삼키면 안 된다.
+    const structureMode = state?.structureSummary?.mode ?? null;
+    const v4Push = v4PushEnabled(structureMode);
+    if (structureMode === "active") {
+      const plan = planV5Notifications(state?.structureEvents, lastV5Seq.current);
+      // 알림 꺼짐이어도 seq는 전진시켜, 나중에 켰을 때 백로그를 한꺼번에 쏟지 않는다.
+      lastV5Seq.current = plan.nextSeq;
+      if (alertsOn && plan.notifications.length > 0) {
+        beep();
+        for (const v5 of plan.notifications) {
+          if ("Notification" in window && Notification.permission === "granted") {
+            const n = new Notification(v5.title, { body: v5.body, tag: v5.tag });
+            n.onclick = () => {
+              window.focus();
+              setSelected(v5.symbol);
+              n.close();
+            };
+          }
+        }
+      }
+    }
     for (const s of state?.signals ?? []) {
       const setupIdentity = s.setup && s.setupAt ? `${s.setup}:${s.setupAt}` : "";
       const setupName =
@@ -491,6 +527,7 @@ export default function App() {
             ? "과매도 반등"
             : null;
       if (
+        v4Push &&
         !suppress &&
         alertsOn &&
         setupName &&
@@ -506,6 +543,7 @@ export default function App() {
       const breakoutIdentity =
         s.breakout && s.breakoutAt ? `${s.breakout}:${s.breakoutAt}` : "";
       if (
+        v4Push &&
         !suppress &&
         alertsOn &&
         s.breakout &&
@@ -884,8 +922,8 @@ export default function App() {
               className={`theme alert-toggle ${alertsOn ? "on" : ""}`}
               title={
                 alertsOn
-                  ? "진입 셋업 알림 켜짐 (브라우저 알림 + 소리)"
-                  : "진입 셋업 알림 꺼짐 — 누르면 켜집니다"
+                  ? "알림 켜짐 (브라우저 알림 + 소리) — active 모드: v5 이벤트 · off/shadow: v4 셋업"
+                  : "알림 꺼짐 — 누르면 켜집니다"
               }
               onClick={toggleAlerts}
             >
