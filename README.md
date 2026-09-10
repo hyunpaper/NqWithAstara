@@ -53,11 +53,11 @@ gitGraph
 
 | 요소 | 허용 값 |
 |---|---|
-| `type` | `feature` `fix` `refactor` `release` |
+| `type` | `feature` `fix` `refactor` `release` `test` `ci` `docs` `chore` |
 | `area` | `BE` `FE` `COMMON` |
 | `slug` | 소문자 kebab-case (`[a-z0-9]+(-[a-z0-9]+)*`) |
 
-예: `feature/FE/structure-chart` · `fix/BE/polling-timeout` · `release/COMMON/v1-2-0`
+예: `feature/FE/structure-chart` · `fix/BE/polling-timeout` · `test/BE/30-structure-bottleneck-verification` · `release/COMMON/v1-2-0` (master 대상 PR은 `release/*`만 허용)
 
 ## 3. 커밋 컨벤션 + 에이전트 구분자
 

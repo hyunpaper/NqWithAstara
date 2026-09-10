@@ -46,7 +46,7 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         shell: bash
         run: |
-          branch_pattern='^(feature|fix|refactor|release)/(BE|FE|COMMON)/[a-z0-9]+(-[a-z0-9]+)*$'
+          branch_pattern='^(feature|fix|refactor|release|test|ci|docs|chore)/(BE|FE|COMMON)/[a-z0-9]+(-[a-z0-9]+)*$'
           release_pattern='^release/(BE|FE|COMMON)/[a-z0-9]+(-[a-z0-9]+)*$'
 
           if [[ "$BASE_REF" == "develop" && "$HEAD_REF" =~ $branch_pattern ]]; then
@@ -57,7 +57,7 @@ jobs:
           fi
 
           echo "Invalid pull request route: $HEAD_REF -> $BASE_REF"
-          echo "develop accepts <feature|fix|refactor|release>/<BE|FE|COMMON>/<kebab-slug>."
+          echo "develop accepts <feature|fix|refactor|release|test|ci|docs|chore>/<BE|FE|COMMON>/<kebab-slug>."
           echo "master accepts only release/<BE|FE|COMMON>/<kebab-slug>."
           exit 1
 
