@@ -36,16 +36,18 @@ static class Fx
         new(StructureMath.SourceId("daily", Symbol, tag), ZoneSourceFamily.ContextLevel, "daily-L", price,
             SessionStart, SessionStart, false, ageSessions);
 
-    public static ZoneSource ProfileSource(string tag, decimal price, int cutoffMinute) =>
+    public static ZoneSource ProfileSource(string tag, decimal price) =>
         new(StructureMath.SourceId("profile", Symbol, tag), ZoneSourceFamily.Profile, "profile-node", price,
-            At(cutoffMinute), At(cutoffMinute), true);
+            SessionStart, SessionStart, true);
 
     public static PriceZone Zone(decimal lower, decimal upper, params ZoneSource[] sources)
     {
         var ordered = sources.OrderBy(x => x.ConfirmedAt).ThenBy(x => x.Id, StringComparer.Ordinal).ToImmutableArray();
         var representative = ordered.FirstOrDefault(x => !x.Temporary) ?? ordered[0];
+        var durable = ordered.Where(x => !x.Temporary).ToArray();
+        var lineage = durable.Length > 0 ? durable : ordered.ToArray();
         return new PriceZone(representative.Id, 1, 1, lower, upper,
-            ZoneRole.Unresolved, ZoneRole.Unresolved, ordered.Min(x => x.ConfirmedAt), ordered.Max(x => x.ConfirmedAt),
+            ZoneRole.Unresolved, ZoneRole.Unresolved, lineage.Min(x => x.ConfirmedAt), lineage.Max(x => x.ConfirmedAt),
             ordered, ImmutableArray<EvidenceGroup>.Empty, ImmutableArray<string>.Empty, null, false,
             ImmutableArray<string>.Empty, ImmutableArray<string>.Empty, ImmutableArray<ZoneRoleChange>.Empty,
             ordered.All(x => x.Family == ZoneSourceFamily.Profile), false);
