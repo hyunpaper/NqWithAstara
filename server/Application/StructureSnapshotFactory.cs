@@ -103,9 +103,13 @@ public static class StructureSnapshotFactory
         var snapshot = new StructureSnapshot(symbol, sessionStart, sessionEnd, analysisAsOf, price, quoteAt,
             (oneMinute ?? []).ToImmutableArray(), (daily ?? []).ToImmutableArray(), null, liquidity, generation);
 
+        // §16B/§19-9(이슈 #64): 봉 공백·충돌·무효 OHLCV로 후보가 전부 막힌 상태는 정상 분석이 아니다.
+        // 자료 부족을 available로 숨기지 않는다. 경고만 있는 상태(호가 결측·일봉 부족)는 그대로 available이다.
         var status = normalized.Bars.Length < policy.Minimum1mBars
             ? StructureAnalysisStatus.Warmup
-            : StructureAnalysisStatus.Available;
+            : quality.BlockersForCandidate.Length > 0
+                ? StructureAnalysisStatus.Unavailable
+                : StructureAnalysisStatus.Available;
         return new StructureSnapshotBuild(snapshot, status, normalized, fiveMinute, dailyBars, quality,
             warnings.ToImmutableArray());
 
