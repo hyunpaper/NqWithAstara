@@ -92,10 +92,10 @@ public static class ZoneBuilder
         foreach (var pivot in pivots1m.Concat(pivots5m))
             candidates.Add(LineCandidate(pivot.Price, new ZoneSource(pivot.SourceId, ZoneSourceFamily.Pivot,
                 $"pivot-{(pivot.Timeframe == BarTimeframe.OneMinute ? "1m" : "5m")}-{(pivot.Kind == PivotKind.High ? "H" : "L")}",
-                pivot.Price, pivot.OccurredAt, pivot.ConfirmedAt, false), bars1m, atrSeries, policy));
+                pivot.Price, pivot.OccurredAt, pivot.ConfirmedAt, false), bars1m, atrSeries, request.Cutoff, policy));
 
         foreach (var source in ContextSources(request, daily, policy))
-            candidates.Add(LineCandidate(source.Price, source, bars1m, atrSeries, policy));
+            candidates.Add(LineCandidate(source.Price, source, bars1m, atrSeries, request.Cutoff, policy));
 
         foreach (var node in profile.Nodes)
         {
@@ -147,7 +147,8 @@ public static class ZoneBuilder
 
     /// <summary>§6.3 반폭. 생성 시점 ATR이 없으면 tick만 쓴다.</summary>
     public static decimal HalfWidth(double? atrAtConfirmation, StructurePolicy policy) =>
-        StructureMath.ScaledFloor(policy.ZoneHalfWidthFloor, policy.ZoneHalfWidthAtrFactor, atrAtConfirmation);
+        StructureMath.RoundToCent(StructureMath.ScaledFloor(policy.ZoneHalfWidthFloor,
+            policy.ZoneHalfWidthAtrFactor, atrAtConfirmation));
 
     // ── 원천 ──
 
@@ -190,15 +191,33 @@ public static class ZoneBuilder
             ZoneSourceFamily.ContextLevel, "orb15-L", opening.Min(x => x.Low), request.SessionStart, orbEnd, false);
     }
 
-    /// <summary>§6.3 반폭 = max(0.01, 0.15*ATR1mAtConfirmation). 생성 당시 ATR이 없으면 tick만 쓰고 근사 플래그를 남긴다.</summary>
+    /// <summary>
+    /// §6.3 반폭 = max(0.01, 0.15*ATR1mAtConfirmation). 생성 당시 ATR이 없으면 tick만 쓰고 근사 플래그를 남긴다.
+    /// 일봉 context level은 장 시작에 이미 알려져 있으므로 세션의 최초 사용 가능 ATR을 생성 폭으로 고정한다.
+    /// </summary>
     static ZoneCandidate LineCandidate(decimal price, ZoneSource source, IReadOnlyList<StructureBar> bars1m,
-        ImmutableArray<double?> atrSeries, StructurePolicy policy)
+        ImmutableArray<double?> atrSeries, DateTimeOffset cutoff, StructurePolicy policy)
     {
-        var atr = SessionAtr.At(bars1m, atrSeries, source.ConfirmedAt);
+        var atr = AtrForLineWidth(source, bars1m, atrSeries, cutoff);
         var half = HalfWidth(atr, policy);
         return Usable(atr)
             ? ZoneCandidate.FromLevel(price, half, source)
             : ZoneCandidate.FromLevel(price, half, source, "WidthFromTickOnly");
+    }
+
+    static double? AtrForLineWidth(ZoneSource source, IReadOnlyList<StructureBar> bars1m,
+        ImmutableArray<double?> atrSeries, DateTimeOffset cutoff)
+    {
+        if (source.Family != ZoneSourceFamily.ContextLevel ||
+            !source.Kind.StartsWith("daily-", StringComparison.Ordinal))
+            return SessionAtr.At(bars1m, atrSeries, source.ConfirmedAt);
+
+        for (var i = 0; i < bars1m.Count && i < atrSeries.Length; i++)
+        {
+            if (bars1m[i].End > cutoff) break;
+            if (Usable(atrSeries[i])) return atrSeries[i];
+        }
+        return null;
     }
 
     // ── 병합 ──

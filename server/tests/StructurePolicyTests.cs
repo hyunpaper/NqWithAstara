@@ -100,6 +100,7 @@ public sealed class StructurePolicyTests
         Assert.Equal(99.12m, StructureMath.FloorToCent(99.15m - 0.03m));    // 설계 예시 A
         Assert.Equal(101.78m, StructureMath.FloorToCent(101.80m - 0.02m));  // 설계 예시 A 목표
         Assert.Equal(-0.02m, StructureMath.FloorToCent(-0.011m));
+        Assert.Equal(.03m, StructureMath.RoundToCent(.0300000000000017m));
     }
 
     [Fact]
