@@ -194,6 +194,29 @@ public sealed class StructureD3LifecycleTests
     }
 
     [Fact]
+    public void EnteredPullbackEpisodeIsConsumedAcrossRestartButANewEpisodeCanRearm()
+    {
+        var ready = Detect().Candidates.First(x => x.Kind == SetupKind.Pullback && x.Disposition == CandidateDisposition.Ready);
+        var entered = ready with { Disposition = CandidateDisposition.Entered };
+        var persisted = StructuralLifecycle.Commit(Fresh(), Fx.At(TriggerMinute), [entered], [], null, null);
+
+        var replayCandidate = ready with { EventId = "same-episode-next-trigger", DuplicateGuardKey = "same-episode-next-trigger" };
+        var replay = StructuralLifecycle.ApplyLatch(persisted, [replayCandidate], allowNewTrigger: true, P);
+        var rejected = Assert.Single(replay);
+        Assert.Equal(CandidateDisposition.Rejected, rejected.Disposition);
+        Assert.Contains(StructuralLifecycle.CodeEpisodeConsumed, rejected.RejectionCodes);
+
+        var nextEpisode = ready with
+        {
+            EventId = "next-episode",
+            DuplicateGuardKey = "next-trigger",
+            EpisodeStartAt = ready.EpisodeStartAt!.Value.AddMinutes(1)
+        };
+        var rearmed = Assert.Single(StructuralLifecycle.ApplyLatch(persisted, [nextEpisode], allowNewTrigger: true, P));
+        Assert.Equal(CandidateDisposition.Ready, rearmed.Disposition);
+    }
+
+    [Fact]
     public void CommitRecordsTombstonesAndGuardKeysOnlyForTheRelevantStates()
     {
         var computed = Detect().Candidates;
