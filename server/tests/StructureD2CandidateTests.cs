@@ -227,6 +227,28 @@ public sealed class StructureD2CandidateTests
     }
 
     [Fact]
+    public void RetestedFlippedSupportProducesARetestConfirmedBreakout()
+    {
+        var retestAt = Fx.At(20);
+        var flippedSupport = D2.Zone("breakout-zone", 99.90m, 100.10m, ZoneRole.FlippedSupport, .8,
+            history: new ZoneRoleChange(retestAt, ZoneRole.Unresolved, ZoneRole.FlippedSupport,
+                "RETEST_HELD_ABOVE_UPPER"));
+        var zones = ImmutableArray.Create(flippedSupport, D2.Resistance(101.80m, 102.10m, id: "target-zone"));
+        var bars = BreakoutBars(100.10m, 100.30m);
+
+        var result = SetupDetector.Detect(Request(bars, zones, ImmutableArray<TouchEpisode>.Empty,
+            live: 100.30m, liquidity: D2.Quote(100.29m, 100.31m, TriggerMinute + 1)), P);
+        var candidate = Assert.Single(result.Candidates.Where(x => x.Kind == SetupKind.Breakout));
+
+        Assert.Equal(CandidateDisposition.Ready, candidate.Disposition);
+        Assert.True(candidate.RetestConfirmed);
+        Assert.DoesNotContain(SetupDetector.NoteRetestPending, candidate.Notes);
+        Assert.Equal("breakout-zone", candidate.ZoneId);
+        Assert.Equal(99.90m, candidate.InvalidationAnchor);
+        Assert.Equal("target-zone", candidate.Plan!.TargetZoneSnapshot.Id);
+    }
+
+    [Fact]
     public void BreakoutIsSkippedWhenThePreviousBarAlreadyClosedAboveTheZone()
     {
         var resistance = D2.Resistance(99.90m, 100.10m, id: "breakout-zone");

@@ -244,13 +244,16 @@ public static class SetupDetector
     }
 
     /// <summary>
-    /// BREAKOUT: 트리거 직전 스냅샷의 자격 있는 resistance에서 직전 Close&lt;=Upper, 트리거 Close&gt;Upper이며 양봉,
-    /// livePrice&gt;Upper여야 한다. 무효화 anchor=resistance Lower다(§8, §16B InvalidationZoneSnapshot).
+    /// BREAKOUT: 트리거 직전 스냅샷의 자격 있는 resistance 또는 retest-confirmed flipped-support에서
+    /// 직전 Close&lt;=Upper, 트리거 Close&gt;Upper이며 양봉, livePrice&gt;Upper여야 한다.
+    /// 무효화 anchor=zone Lower다(§8, §16B InvalidationZoneSnapshot).
     /// </summary>
     static Hypothesis? DetectBreakout(PriceZone zone, StructureBar trigger, StructureBar previous)
     {
         if (!zone.Eligible || zone.Retired || zone.ProfileOnly) return null;
-        if (zone.Role is not (ZoneRole.Resistance or ZoneRole.FlippedResistance)) return null;
+        // RETEST_HELD_ABOVE_UPPER의 도착 역할은 FlippedSupport다. 그 뒤 구간 안으로 재접촉했다가
+        // 다시 Upper를 회복하는 사건도 §8의 retest-confirmed breakout으로 관측한다.
+        if (zone.Role is not (ZoneRole.Resistance or ZoneRole.FlippedResistance or ZoneRole.FlippedSupport)) return null;
         if (previous.Close > zone.Upper) return null;
         if (trigger.Close <= zone.Upper) return null;
         if (trigger.Close <= trigger.Open) return null;          // 양봉 요구
