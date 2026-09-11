@@ -34,6 +34,11 @@ public sealed record StructurePolicy
     public int EntryCutoffBeforeCloseMinutes { get; init; } = 40;
     public int CandidateTtlMinutes { get; init; } = 5;
     public int BreakoutCooldownMinutes { get; init; } = 30;
+    /// <summary>
+    /// PULLBACK/REBOUND가 접촉 episode를 근거로 삼을 수 있는 최대 경과 시간. 30분은 기존 BREAKOUT
+    /// 재무장 단위와 같은 세션 내 구조 관찰 단위이며, 성과를 통해 탐색한 값이 아니다.
+    /// </summary>
+    public int TriggerEpisodeMaxAgeMinutes { get; init; } = 30;
     public long ObservationDailyByteLimit { get; init; } = 20L * 1024 * 1024;
 
     /// <summary>
@@ -121,6 +126,7 @@ public sealed record StructurePolicy
     public TimeSpan OpeningRangeSpan() => TimeSpan.FromMinutes(OpeningRangeMinutes);
     public TimeSpan CandidateTtl() => TimeSpan.FromMinutes(CandidateTtlMinutes);
     public TimeSpan BreakoutCooldown() => TimeSpan.FromMinutes(BreakoutCooldownMinutes);
+    public TimeSpan TriggerEpisodeMaxAge() => TimeSpan.FromMinutes(TriggerEpisodeMaxAgeMinutes);
 
     /// <summary>
     /// canonical JSON: 정책 입력 속성만, 이름 ordinal 정렬, 고정 수치 표현. 실행 시각/파일 경로는 넣지 않는다(§16A).

@@ -114,16 +114,9 @@ public sealed class StructureAlertTests
         }
 
         var events = await Recent(harness);
-        Assert.Equal(4, events.Length);                                  // READY+ENTERED(m64 이벤트) + READY+BLOCKED(m65 이벤트)
+        Assert.Equal(2, events.Length);                                  // m64 episode의 READY+ENTERED만 남는다
         Assert.Equal(StructureAlertPublisher.TypeReady, events[0].Type);
         Assert.Equal(StructureAlertPublisher.TypeEntered, events[1].Type);
-        var ready = events[2];
-        var blocked = events[3];
-        Assert.Equal(StructureAlertPublisher.TypeReady, ready.Type);
-        Assert.Equal(StructureAlertPublisher.TypeBlocked, blocked.Type);
-        Assert.Equal(ready.EventId, blocked.EventId);
-        Assert.NotEqual(events[0].EventId, ready.EventId);               // 새 EventId여야 새 이벤트다
-        Assert.Equal(StructureAnalysisService.NoteEntryBlockedByOpenTrade, blocked.Reason);
 
         // 알림 발행 유무와 무관하게 실제 거래 저장은 바이트 동일 — 이벤트는 거래를 만들지도 바꾸지도 않는다.
         Assert.Equal(Json(baseline.Store.Trades), Json(harness.Store.Trades));
@@ -200,9 +193,7 @@ public sealed class StructureAlertTests
 
         await PollAt(restarted, 66);                                     // 새 트리거는 복원 최대 seq 다음부터
         var after = await Recent(restarted);
-        Assert.Equal(4, after.Length);
-        Assert.Equal(3, after[2].Seq);
-        Assert.Equal(4, after[3].Seq);
+        Assert.Equal(2, after.Length);
     }
 
     /// <summary>관측 append 도중 stop되면(§12.6 generation 재검증) 늦은 알림 이벤트를 만들지 않는다.</summary>

@@ -50,6 +50,7 @@ public static class StructuralLifecycle
     public const string NoteLiveInvalidated = "LIVE_PRICE_BROKE_INVALIDATION";
     public const string NoteTtlExpired = "CANDIDATE_TTL_EXPIRED";
     public const string CodeDuplicateGuard = "DUPLICATE_TRIGGER_GUARD";
+    public const string CodeEpisodeConsumed = "TRIGGER_EPISODE_CONSUMED";
     public const string CodeNewTriggerSuppressed = "NEW_TRIGGER_SUPPRESSED";
 
     /// <summary>
@@ -166,6 +167,17 @@ public static class StructuralLifecycle
                 });
                 continue;
             }
+            if (candidate.Disposition == CandidateDisposition.Ready && candidate.Kind is SetupKind.Pullback or SetupKind.Rebound &&
+                EpisodeConsumptionKey(candidate) is { } episodeKey && latch.ConsumedGuardKeys.Contains(episodeKey))
+            {
+                result.Add(candidate with
+                {
+                    Disposition = CandidateDisposition.Rejected,
+                    Plan = null,
+                    RejectionCodes = Add(candidate.RejectionCodes, CodeEpisodeConsumed)
+                });
+                continue;
+            }
             // §10 돌파 쿨다운: 비교 기준은 확정된 과거 시각인 트리거 봉 종료(TriggerConfirmedAt)이며 현재 시각이 아니다.
             // 경계는 "경과 < 쿨다운"만 차단한다 — 정확히 30분이면 새 발동을 허용한다.
             if (candidate.Disposition == CandidateDisposition.Ready && candidate.Kind == SetupKind.Breakout &&
@@ -194,6 +206,10 @@ public static class StructuralLifecycle
         DateTimeOffset activatedAt) =>
         string.Join('|', BreakoutCooldownKeyPrefix, symbol, StructureMath.Iso(sessionStart),
             SetupKinds.Name(SetupKind.Breakout), zoneId, StructureMath.Iso(activatedAt));
+
+    static string? EpisodeConsumptionKey(EntryCandidate candidate) => candidate.EpisodeStartAt is not { } episodeStart
+        ? null
+        : string.Join('|', "episode-consumed", candidate.KindName, candidate.ZoneId, StructureMath.Iso(episodeStart));
 
     /// <summary>래치에 남은 쿨다운 표식을 ZoneId별 마지막 발동 시각으로 정리한다.</summary>
     static Dictionary<string, DateTimeOffset> BreakoutActivations(StructuralLatch latch)
@@ -313,6 +329,9 @@ public static class StructuralLifecycle
             if (candidate.Disposition is CandidateDisposition.Ready or CandidateDisposition.Entered)
             {
                 guards = guards.Add(candidate.DuplicateGuardKey);
+                if (candidate.Disposition == CandidateDisposition.Entered && candidate.Kind is SetupKind.Pullback or SetupKind.Rebound &&
+                    EpisodeConsumptionKey(candidate) is { } episodeKey)
+                    guards = guards.Add(episodeKey);
                 // §10 돌파 쿨다운의 기준 시점은 "재발동"의 대상인 발동, 즉 READY 성립이다. ENTERED는 READY를
                 // 거친 뒤에만 나오므로 같은 키가 다시 들어가도 집합이라 중복되지 않는다. off/shadow처럼 실제
                 // 진입이 없는 모드에서도 같은 억제가 걸려야 하므로 ENTERED만을 기준으로 삼지 않는다.

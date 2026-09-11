@@ -153,6 +153,99 @@ public sealed class StructureD2CandidateTests
     }
 
     [Fact]
+    public void PullbackAndReboundRejectAnEpisodeOutsideItsValidityWindow()
+    {
+        var bars = PullbackBars(episodeLow: 99.10m).ToBuilder();
+        bars[5] = Bar(5, 99.10m, 99.40m, 99.30m, 99.25m);
+        var episodes = ImmutableArray.Create(D2.Episode("support-zone", 5, 8));
+
+        var result = SetupDetector.Detect(Request(bars.ToImmutable(), PullbackZones(), episodes,
+            D2.Trend(TrendState.Range, -30)), P with { TriggerEpisodeMaxAgeMinutes = 10 });
+
+        Assert.DoesNotContain(result.Candidates, x => x.Kind is SetupKind.Pullback or SetupKind.Rebound);
+    }
+
+    [Fact]
+    public void TriggerEpisodeValidityIncludesTheExactBoundaryButRejectsTheNextMinute()
+    {
+        var request = Request(PullbackBars(), PullbackZones(), PullbackEpisodes());
+
+        var atBoundary = SetupDetector.Detect(request, P with { TriggerEpisodeMaxAgeMinutes = 5 });
+        var beyondBoundary = SetupDetector.Detect(request, P with { TriggerEpisodeMaxAgeMinutes = 4 });
+
+        Assert.Contains(atBoundary.Candidates, x => x.Kind == SetupKind.Pullback);
+        Assert.DoesNotContain(beyondBoundary.Candidates, x => x.Kind is SetupKind.Pullback or SetupKind.Rebound);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void EpisodeCannotCrossAMissingOrDuplicateOneMinuteBar(bool missing)
+    {
+        var bars = PullbackBars().ToBuilder();
+        if (missing) bars.RemoveAt(28);
+        else bars.Add(bars[28]);
+
+        var result = SetupDetector.Detect(Request(bars.ToImmutable(), PullbackZones(), PullbackEpisodes()), P);
+
+        Assert.DoesNotContain(result.Candidates, x => x.Kind is SetupKind.Pullback or SetupKind.Rebound);
+    }
+
+    [Fact]
+    public void ReboundNeverFallsBackFromTheLatestEpisodeToAnOlderFailedBreakdown()
+    {
+        var bars = PullbackBars(episodeLow: 99.25m).ToBuilder();
+        bars[5] = Bar(5, 99.10m, 99.40m, 99.30m, 99.25m);
+        var episodes = ImmutableArray.Create(D2.Episode("support-zone", 5, 8), D2.Episode("support-zone", 25, 28));
+
+        var result = SetupDetector.Detect(Request(bars.ToImmutable(), PullbackZones(), episodes), P);
+
+        var pullback = Assert.Single(result.Candidates.Where(x => x.Kind == SetupKind.Pullback));
+        Assert.Equal(Fx.At(25), pullback.EpisodeStartAt);
+        Assert.DoesNotContain(result.Candidates, x => x.Kind == SetupKind.Rebound);
+    }
+
+    [Fact]
+    public void EpisodeDoesNotCreateASecondTriggerWithoutLifecycleConsumption()
+    {
+        var bars = PullbackBars().ToBuilder();
+        bars.Add(Bar(TriggerMinute + 1, 99.75m, 100.05m, 99.80m, 100.00m, 2000));
+        var request = Request(bars.ToImmutable(), PullbackZones(), PullbackEpisodes()) with
+        {
+            AnalysisAsOf = Fx.At(TriggerMinute + 2),
+            Now = Fx.At(TriggerMinute + 2),
+            QuoteAt = Fx.At(TriggerMinute + 2),
+            Liquidity = D2.Quote(99.99m, 100.01m, TriggerMinute + 2)
+        };
+
+        var result = SetupDetector.Detect(request, P);
+
+        Assert.Contains(result.Candidates, x => x.Kind == SetupKind.Pullback);
+    }
+
+    [Fact]
+    public void EpisodeEligibilityIsStableAcrossAReplayOfTheSameSnapshot()
+    {
+        var request = Request(PullbackBars(), PullbackZones(), PullbackEpisodes());
+
+        var first = SetupDetector.Detect(request, P);
+        var replay = SetupDetector.Detect(request, P);
+
+        Assert.Equal(first.Candidates.Select(x => x.Fingerprint()), replay.Candidates.Select(x => x.Fingerprint()));
+    }
+
+    [Fact]
+    public void PriorSessionEpisodeCannotArmThisSessionsCandidates()
+    {
+        var priorSessionEpisode = new TouchEpisode("support-zone", Fx.At(25).AddDays(-1), Fx.At(28).AddDays(-1),
+            EpisodeOutcome.Success, ZoneRole.Support, .2, 1, 0, ImmutableArray<string>.Empty);
+        var result = SetupDetector.Detect(Request(PullbackBars(episodeLow: 99.10m), PullbackZones(), [priorSessionEpisode],
+            D2.Trend(TrendState.Range, -30)), P);
+
+        Assert.DoesNotContain(result.Candidates, x => x.Kind is SetupKind.Pullback or SetupKind.Rebound);
+    }
+
+    [Fact]
     public void IneligibleOrBrokenSupportCannotAnchorACandidate()
     {
         var ineligible = D2.Zone("support-zone", 99.20m, 99.40m, ZoneRole.Support, .2, eligible: false);
