@@ -36,6 +36,13 @@ public sealed record StructurePolicy
     public int BreakoutCooldownMinutes { get; init; } = 30;
     public long ObservationDailyByteLimit { get; init; } = 20L * 1024 * 1024;
 
+    /// <summary>
+    /// §16 관측 저장의 보존 우선순위. 일자 상한(<see cref="ObservationDailyByteLimit"/>)의 이 비율만큼은
+    /// 핵심 관측(상태 전이·후보 결정)만 쓸 수 있는 예비 구간이다. 상한 자체를 늘리지 않고 "무엇을 먼저 버릴지"만
+    /// 정한다 — 주기 WAIT 요약이 먼저 희생되고 진입·READY·거절 근거가 마지막까지 남는다.
+    /// </summary>
+    public double ObservationCoreReserveRatio { get; init; } = .20;
+
     // ── 가격 단위 (§16A 표, §16B 비용·가격 단위) ──
     public decimal PriceTick { get; init; } = .01m;
     public decimal MinimumSupportedPrice { get; init; } = 1.00m;
