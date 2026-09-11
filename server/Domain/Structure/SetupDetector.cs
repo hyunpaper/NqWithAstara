@@ -182,7 +182,7 @@ public static class SetupDetector
         {
             foreach (var zone in zones)
             {
-                var pullback = DetectPullback(request, zone, trigger, previous, bars, structureCutoff, warnings);
+                var pullback = DetectPullback(request, policy, zone, trigger, previous, bars, structureCutoff, warnings);
                 if (pullback is not null) candidates.Add(Build(request, policy, pullback, trigger, bars, structureCutoff,
                     triggerConfirmedAt, expiresAt, entryReference, entryNotes, spread, readyBlockers));
 
@@ -190,7 +190,7 @@ public static class SetupDetector
                 if (breakout is not null) candidates.Add(Build(request, policy, breakout, trigger, bars, structureCutoff,
                     triggerConfirmedAt, expiresAt, entryReference, entryNotes, spread, readyBlockers));
 
-                var rebound = DetectRebound(request, zone, trigger, previous, bars, structureCutoff);
+                var rebound = DetectRebound(request, policy, zone, trigger, previous, bars, structureCutoff);
                 if (rebound is not null) candidates.Add(Build(request, policy, rebound, trigger, bars, structureCutoff,
                     triggerConfirmedAt, expiresAt, entryReference, entryNotes, spread, readyBlockers));
             }
@@ -218,14 +218,14 @@ public static class SetupDetector
     /// 이슈 #64: 추세 상태 하나로 탈락한 경우 <see cref="NotePullbackTrendState"/>를 관측에 남긴다.
     /// 후보를 만들지는 않는다 — 자격 조건과 임계값은 그대로다.
     /// </summary>
-    static Hypothesis? DetectPullback(SetupDetectionRequest request, PriceZone zone,
+    static Hypothesis? DetectPullback(SetupDetectionRequest request, StructurePolicy policy, PriceZone zone,
         StructureBar trigger, StructureBar previous, ImmutableArray<StructureBar> bars, DateTimeOffset structureCutoff,
         SortedSet<string> warnings)
     {
         if (!IsUsableSupport(zone)) return null;
         if (trigger.Close <= previous.High || trigger.Close <= zone.Upper) return null;
 
-        var episode = LatestEpisode(request.Episodes, zone, structureCutoff);
+        var episode = TriggerEligibleEpisode(request, policy, zone, bars, structureCutoff);
         if (episode is null) return null;
 
         if (request.Trend.State is not (TrendState.Up or TrendState.Transition))
@@ -244,20 +244,25 @@ public static class SetupDetector
     }
 
     /// <summary>
-    /// BREAKOUT: 트리거 직전 스냅샷의 자격 있는 resistance에서 직전 Close&lt;=Upper, 트리거 Close&gt;Upper이며 양봉,
-    /// livePrice&gt;Upper여야 한다. 무효화 anchor=resistance Lower다(§8, §16B InvalidationZoneSnapshot).
+    /// BREAKOUT: 트리거 직전 스냅샷의 자격 있는 resistance 또는 retest-confirmed flipped-support에서
+    /// 직전 Close&lt;=Upper, 트리거 Close&gt;Upper이며 양봉, livePrice&gt;Upper여야 한다.
+    /// 무효화 anchor=zone Lower다(§8, §16B InvalidationZoneSnapshot).
     /// </summary>
     static Hypothesis? DetectBreakout(PriceZone zone, StructureBar trigger, StructureBar previous)
     {
         if (!zone.Eligible || zone.Retired || zone.ProfileOnly) return null;
-        if (zone.Role is not (ZoneRole.Resistance or ZoneRole.FlippedResistance)) return null;
+        var retest = zone.RoleHistory.Any(x => x.Reason == "RETEST_HELD_ABOVE_UPPER");
+        // RETEST_HELD_ABOVE_UPPER의 도착 역할은 FlippedSupport다. 그 뒤 구간 안으로 재접촉했다가
+        // 다시 Upper를 회복하는 사건도 §8의 retest-confirmed breakout으로 관측한다.
+        var breakoutRole = zone.Role is ZoneRole.Resistance or ZoneRole.FlippedResistance
+            || (zone.Role == ZoneRole.FlippedSupport && retest);
+        if (!breakoutRole) return null;
         if (previous.Close > zone.Upper) return null;
         if (trigger.Close <= zone.Upper) return null;
         if (trigger.Close <= trigger.Open) return null;          // 양봉 요구
 
         var notes = new SortedSet<string>(StringComparer.Ordinal);
         // retest 확인 여부는 별도 필드다. retest 전후를 같은 검증 수준으로 표시하지 않는다(§8).
-        var retest = zone.RoleHistory.Any(x => x.Reason == "RETEST_HELD_ABOVE_UPPER");
         if (!retest) notes.Add(NoteRetestPending);
         // 트리거 봉 저점이 Lower 아래면 추격/넓은 위험으로 기록하되 손절을 더 먼 저점으로 옮기지 않는다.
         if (trigger.Low < zone.Lower) notes.Add(NoteChaseTriggerBelowAnchor);
@@ -269,13 +274,15 @@ public static class SetupDetector
     /// 이후 완료 봉이 support Upper 및 직전 봉 High 위로 마감한다(§8).
     /// 추세 점수가 낮다는 이유로 거절하지 않고 CounterTrend=true로 분리한다.
     /// </summary>
-    static Hypothesis? DetectRebound(SetupDetectionRequest request, PriceZone zone,
+    static Hypothesis? DetectRebound(SetupDetectionRequest request, StructurePolicy policy, PriceZone zone,
         StructureBar trigger, StructureBar previous, ImmutableArray<StructureBar> bars, DateTimeOffset structureCutoff)
     {
         if (!IsUsableSupport(zone)) return null;
         if (trigger.Close <= previous.High || trigger.Close <= zone.Upper) return null;
 
-        var episode = FailedBreakdownEpisode(zone, request.Episodes, bars, structureCutoff);
+        var episode = TriggerEligibleEpisode(request, policy, zone, bars, structureCutoff);
+        if (episode is not null && !IsFailedBreakdownEpisode(zone, episode, request.Episodes, bars, structureCutoff))
+            episode = null;
         if (episode is null) return null;
 
         var notes = new SortedSet<string>(StringComparer.Ordinal) { NoteCounterTrend };
@@ -289,26 +296,44 @@ public static class SetupDetector
         zone.Eligible && !zone.Retired && !zone.ProfileOnly &&
         zone.Role is ZoneRole.Support or ZoneRole.FlippedSupport;
 
-    static TouchEpisode? LatestEpisode(ImmutableArray<TouchEpisode> episodes, PriceZone zone, DateTimeOffset structureCutoff) =>
-        episodes.Where(x => x.ZoneId == zone.Id && x.StartAt < structureCutoff)
+    /// <summary>
+    /// 접촉 episode는 세션 내 유효기간 안에서만 후보를 무장한다. 소비 여부는 재시작 가능한 lifecycle
+    /// latch가 관리하므로, 탐지 자체는 현재 구조 스냅샷만 판정한다.
+    /// </summary>
+    static TouchEpisode? TriggerEligibleEpisode(SetupDetectionRequest request, StructurePolicy policy, PriceZone zone,
+        ImmutableArray<StructureBar> bars, DateTimeOffset structureCutoff)
+    {
+        // 최신 접촉만 현재 가설이다. 더 오래된 접촉으로 되돌아가면 최근 구조 변화를 무시하게 된다.
+        var episode = request.Episodes.Where(x => x.ZoneId == zone.Id
+                                                   && x.StartAt >= request.SessionStart
+                                                   && x.StartAt < structureCutoff)
             .OrderBy(x => x.StartAt).LastOrDefault();
+        if (episode is null) return null;
+        if (structureCutoff - episode.StartAt > policy.TriggerEpisodeMaxAge()) return null;
+
+        var timeline = bars.Where(x => x.Start >= episode.StartAt && x.Start <= structureCutoff)
+            .OrderBy(x => x.Start).ToArray();
+        if (timeline.Length == 0 || timeline[0].Start != episode.StartAt || timeline[^1].Start != structureCutoff)
+            return null;
+
+        // 누락/중복 봉을 넘어 오래된 사건을 되살리지 않는다. 다음 정상 관측은 새 episode를 만들어야 한다.
+        for (var i = 1; i < timeline.Length; i++)
+            if (timeline[i - 1].End != timeline[i].Start) return null;
+
+        return episode;
+    }
 
     /// <summary>
     /// 실패한 하향 이탈 episode: 구간 아래로 내려간 봉(Low&lt;Lower)이 있으나 완료 Close가 Lower 아래로 마감하지 않은 episode.
     /// 종가가 Lower 아래로 마감했다면 D1 규칙에 따라 그 구간은 BROKEN이며 원래 역할로 부활하지 않는다(§16B).
     /// </summary>
-    static TouchEpisode? FailedBreakdownEpisode(PriceZone zone, ImmutableArray<TouchEpisode> episodes,
+    static bool IsFailedBreakdownEpisode(PriceZone zone, TouchEpisode episode, ImmutableArray<TouchEpisode> episodes,
         ImmutableArray<StructureBar> bars, DateTimeOffset structureCutoff)
     {
-        foreach (var episode in episodes.Where(x => x.ZoneId == zone.Id && x.StartAt < structureCutoff)
-                     .OrderByDescending(x => x.StartAt))
-        {
-            var window = EpisodeBars(zone, episode, episodes, bars, structureCutoff);
-            if (window.Count == 0) continue;
-            if (window.Any(x => x.Close < zone.Lower)) continue;      // 완료 종가 이탈은 붕괴이지 실패한 이탈이 아니다
-            if (window.Any(x => x.Low < zone.Lower)) return episode;
-        }
-        return null;
+        var window = EpisodeBars(zone, episode, episodes, bars, structureCutoff);
+        if (window.Count == 0) return false;
+        if (window.Any(x => x.Close < zone.Lower)) return false;      // 완료 종가 이탈은 붕괴이지 실패한 이탈이 아니다
+        return window.Any(x => x.Low < zone.Lower);
     }
 
     /// <summary>

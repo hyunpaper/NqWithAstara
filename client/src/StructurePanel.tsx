@@ -3,7 +3,13 @@ import { Layers } from "lucide-react";
 import StructureChart, { ChartBar } from "./StructureChart";
 import PlanExplanation from "./PlanExplanation";
 // 이슈 #26: 라이브 목록(App)과 같은 비교 함수를 공용 모듈에서 가져와 두 화면의 정렬이 갈라지지 않게 한다(§3).
-import { compareByTrendStrength, compareByV5State } from "./structureSort";
+import {
+  compareByEntryQuality,
+  compareBySymbol,
+  compareByTrendDirection,
+  compareByTrendStrength,
+  compareByV5State,
+} from "./structureSort";
 import {
   StructureResponse,
   StructureSummary,
@@ -21,8 +27,7 @@ import {
 
 // v5 구조 엔진 D4 — 분리된 구조 분석 뷰(설계 §13).
 //
-// 이 화면은 v4 점수/배지/알림과 **시각적으로 분리된 별도 탭**이다.
-// - v5 숫자를 v4 scoreStyle 색상이나 BUY 의미에 연결하지 않는다(§19-10).
+// 이슈 #88: 화면 어디에도 참고 점수·배지 등 v4 표시가 남지 않는다 — 이 화면은 v5 숫자만 다룬다.
 // - 여기서는 어떤 알림도 발생시키지 않는다. shadow 후보를 새 진입 알림으로 보내지 않는다(§13).
 // - 조회는 마지막 공개 snapshot만 읽는다. 화면이 새 분석이나 거래를 유발하지 않는다(§12).
 
@@ -33,7 +38,7 @@ type Props = {
   summary?: StructureSummary | null;
   selected: string;
   onSelect: (symbol: string) => void;
-  /** 선택 종목의 v4 차트 배열(최근 완료 1분봉). 구조 차트의 배경으로만 쓴다. */
+  /** 선택 종목의 최근 완료 1분봉 종가 배열(라이브 시그널 차트와 공유). 구조 차트의 배경으로만 쓴다. */
   bars: ChartBar[];
 };
 
@@ -70,7 +75,9 @@ export default function StructurePanel({
   bars,
 }: Props) {
   const [fetched, setFetched] = useState<Fetched | null>(null);
-  const [sort, setSort] = useState<"ready" | "trend">("ready");
+  const [sort, setSort] = useState<"ready" | "trend" | "direction" | "quality" | "symbol">(
+    "ready",
+  );
   const [pickedCandidate, setPickedCandidate] = useState<string | null>(null);
 
   // 종목이 바뀌면 이전 종목의 후보 선택을 끌고 오지 않는다.
@@ -175,9 +182,19 @@ export default function StructurePanel({
 
   const ordered = useMemo(() => {
     // 기본 정렬: v5 상태 우선순위 → EntryQuality ↓ → |SignedTrend| ↓ → symbol(§13·이슈 #26 §3).
-    // 추세 강도 정렬은 방향이 아니라 |SignedTrend| 크기다. 비교 함수는 App 라이브 목록과 공용이다.
+    // 나머지 탭은 비교 함수는 App 라이브 목록과 공용이다(이슈 #88).
     const copy = [...rows];
-    copy.sort(sort === "trend" ? compareByTrendStrength : compareByV5State);
+    const cmp =
+      sort === "trend"
+        ? compareByTrendStrength
+        : sort === "direction"
+          ? compareByTrendDirection
+          : sort === "quality"
+            ? compareByEntryQuality
+            : sort === "symbol"
+              ? compareBySymbol
+              : compareByV5State;
+    copy.sort(cmp);
     return copy;
   }, [rows, sort]);
 
@@ -264,6 +281,27 @@ export default function StructurePanel({
                 title="추세 강도(절대값) 내림차순 → 심볼"
               >
                 추세 강도
+              </button>
+              <button
+                className={sort === "direction" ? "on" : ""}
+                onClick={() => setSort("direction")}
+                title="추세 방향(부호 있는 값) 내림차순 → 심볼 — 상승이 위, 하락이 아래"
+              >
+                추세 방향
+              </button>
+              <button
+                className={sort === "quality" ? "on" : ""}
+                onClick={() => setSort("quality")}
+                title="진입 품질 내림차순 → 심볼. 결측(후보 없음)은 항상 마지막"
+              >
+                진입 품질
+              </button>
+              <button
+                className={sort === "symbol" ? "on" : ""}
+                onClick={() => setSort("symbol")}
+                title="종목명 오름차순"
+              >
+                종목명
               </button>
             </div>
           </div>
