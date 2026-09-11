@@ -85,6 +85,94 @@ public sealed class StructureZoneEvaluatorTests
     }
 
     [Fact]
+    public void FormationBarsOfALaterSourceAreNotCountedInAMultiSourceZone()
+    {
+        var bars = Warmup();
+        bars.Add(Fx.Steady(14, 99.30m, 99.50m, 99.35m));
+        bars.Add(Fx.Steady(15, 99.32m, 99.52m, 99.40m));
+        bars.Add(Fx.Steady(16, 99.34m, 99.54m, 99.45m));
+        bars.Add(Fx.Steady(17, 99.45m, 99.65m, 99.55m));
+        bars.Add(Fx.Steady(18, 99.45m, 99.65m, 99.55m));
+
+        var zone = Fx.Zone(99.20m, 99.40m, Fx.Daily("prev-L", 99.30m), Fx.Pivot("late", 99.30m, 14, 17));
+        var result = Fx.Evaluate(zone, bars.ToImmutableArray(), 19);
+
+        var strength = result.Zones[0].Strength!;
+        Assert.Equal(Fx.SessionStart, result.Zones[0].FirstConfirmedAt);
+        Assert.Empty(result.Episodes);
+        Assert.Equal(0, strength.CompletedEpisodes);
+        Assert.Equal(0, strength.SuccessEpisodes);
+        Assert.Null(strength.TouchEvidence);
+        Assert.Null(strength.ReactionEvidence);
+    }
+
+    [Fact]
+    public void ARetouchAfterALaterSourceFormsIsStillCounted()
+    {
+        var bars = Warmup();
+        bars.Add(Fx.Steady(14, 99.30m, 99.50m, 99.35m));
+        bars.Add(Fx.Steady(15, 99.32m, 99.52m, 99.40m));
+        bars.Add(Fx.Steady(16, 99.34m, 99.54m, 99.45m));
+        bars.Add(Fx.Steady(17, 99.45m, 99.65m, 99.55m));
+        bars.Add(Fx.Steady(18, 99.45m, 99.65m, 99.55m));
+        bars.Add(Fx.Steady(19, 99.35m, 99.55m, 99.45m));
+        bars.Add(Fx.Steady(20, 99.50m, 99.70m, 99.65m));
+
+        var zone = Fx.Zone(99.20m, 99.40m, Fx.Daily("prev-L", 99.30m), Fx.Pivot("late", 99.30m, 14, 17));
+        var result = Fx.Evaluate(zone, bars.ToImmutableArray(), 21);
+
+        var episode = Assert.Single(result.Episodes);
+        Assert.Equal(Fx.At(19), episode.StartAt);
+        Assert.Equal(EpisodeOutcome.Success, episode.Outcome);
+    }
+
+    [Fact]
+    public void AZoneWhoseOnlyContactIsItsOwnFormationIsNotEligible()
+    {
+        var bars = Warmup();
+        bars.Add(Fx.Steady(14, 99.30m, 99.50m, 99.35m));
+        bars.Add(Fx.Steady(15, 99.32m, 99.52m, 99.40m));
+        bars.Add(Fx.Steady(16, 99.34m, 99.54m, 99.45m));
+        bars.Add(Fx.Steady(17, 99.60m, 99.80m, 99.75m));
+        bars.Add(Fx.Steady(18, 99.60m, 99.80m, 99.75m));
+        bars.Add(Fx.Steady(19, 99.60m, 99.80m, 99.75m));
+
+        var zone = Fx.Zone(99.20m, 99.40m, Fx.Pivot("early", 99.30m, 3, 5), Fx.Pivot("late", 99.30m, 14, 17));
+        var evaluated = Fx.Evaluate(zone, bars.ToImmutableArray(), 20).Zones[0];
+
+        Assert.Equal(0, evaluated.Strength!.SuccessEpisodes);
+        Assert.Equal(1, evaluated.Strength.IndependentNonProfileFamilies);
+        Assert.False(evaluated.Eligible);
+        Assert.Contains(ZoneEvaluator.ReasonEvidence, evaluated.RejectReasons);
+    }
+
+    [Fact]
+    public void ProfileSourceDoesNotHoldRecencyAtOne()
+    {
+        var bars = Enumerable.Range(0, 30).Select(i => Fx.Steady(i, 99.45m, 99.65m, 99.55m)).ToImmutableArray();
+        var zone = Fx.Zone(99.20m, 99.40m, Fx.Daily("prev-L", 99.30m), Fx.ProfileSource("poc", 99.30m));
+        var strength = Fx.Evaluate(zone, bars, 30).Zones[0].Strength!;
+
+        Assert.Equal(Math.Exp(-1d / P.RecencySessions), strength.Recency!.Value, 10);
+        Assert.Equal(1 - Math.Exp(-1d), strength.Confluence!.Value, 10);
+        Assert.Equal(Math.Sqrt(strength.Recency.Value * strength.Confluence.Value), strength.Value!.Value, 10);
+    }
+
+    [Fact]
+    public void ProfileEvidenceAloneDoesNotGrantEligibility()
+    {
+        var bars = Enumerable.Range(0, 30).Select(i => Fx.Steady(i, 99.45m, 99.65m, 99.55m)).ToImmutableArray();
+        var zone = Fx.Zone(99.20m, 99.40m, Fx.Pivot("p", 99.30m, 3, 5), Fx.ProfileSource("poc", 99.30m));
+        var evaluated = Fx.Evaluate(zone, bars, 30).Zones[0];
+
+        Assert.Equal(2, evaluated.Strength!.IndependentFamilies);
+        Assert.Equal(1, evaluated.Strength.IndependentNonProfileFamilies);
+        Assert.Equal(0, evaluated.Strength.SuccessEpisodes);
+        Assert.False(evaluated.Eligible);
+        Assert.Contains(ZoneEvaluator.ReasonEvidence, evaluated.RejectReasons);
+    }
+
+    [Fact]
     public void PendingEpisodeIsExcludedFromTouchEvidence()
     {
         var bars = Warmup();
@@ -421,6 +509,21 @@ public sealed class StructureZoneEvaluatorTests
         Assert.Equal(atCutoff.Zones.Select(x => x.Fingerprint()).ToArray(), truncated.Zones.Select(x => x.Fingerprint()).ToArray());
         Assert.Equal(atCutoff.Episodes.Select(x => x.Fingerprint()).ToArray(), truncated.Episodes.Select(x => x.Fingerprint()).ToArray());
         Assert.Equal(ZoneRole.Support, truncated.Zones[0].Role);
+    }
+
+    [Fact]
+    public void SnapshotRevisionDoesNotDriftWhileOnlyTheProfileWouldBeRestamped()
+    {
+        var bars = Enumerable.Range(0, 30).Select(i => Fx.Steady(i, 99.45m, 99.65m, 99.55m)).ToImmutableArray();
+        var zone = Fx.Zone(99.20m, 99.40m, Fx.Daily("prev-L", 99.30m), Fx.ProfileSource("poc", 99.30m));
+
+        var first = Fx.Evaluate(zone, bars, 30).Zones;
+        var next = ZoneEvaluator.Evaluate(first,
+            ZoneEvaluationRequest.Create(Fx.SessionStart, Fx.At(31), bars, first), P).Zones;
+
+        Assert.Equal(first[0].Id, next[0].Id);
+        Assert.Equal(first[0].SnapshotRevision, next[0].SnapshotRevision);
+        Assert.Equal(first[0].BoundsRevision, next[0].BoundsRevision);
     }
 
     [Fact]
