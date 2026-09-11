@@ -81,16 +81,35 @@ public sealed class StructureAlertPublisher(IStructureObservationStore store)
         finally { _gate.Release(); }
     }
 
-    /// <summary>/api/state용 최근 이벤트(seq 오름차순, 최대 <see cref="RecentLimit"/>건). 조회는 계산을 유발하지 않는다.</summary>
-    public async Task<ImmutableArray<StructureAlertEvent>> GetRecentAsync(CancellationToken ct)
+    /// <summary>
+    /// /api/state용 최근 이벤트(seq 오름차순, 최대 <see cref="RecentLimit"/>건). 조회는 계산을 유발하지 않는다.
+    /// 이슈 #67: <paramref name="sessionStart"/>와 같은 세션의 이벤트만 공개하고, 그보다 이전 세션의 이벤트는
+    /// 메모리에서도 버린다(§16 "메모리도 세션 종료 시 정리"). 영속 파일은 건드리지 않아 같은 세션 재시작의
+    /// dedup 키는 그대로 유지된다.
+    /// </summary>
+    public async Task<ImmutableArray<StructureAlertEvent>> GetRecentAsync(DateTimeOffset sessionStart,
+        CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
         try
         {
             await RestoreAsync(ct);
-            var events = _events;
+            if (_events.Any(x => x.SessionStart < sessionStart))
+                _events = [.. _events.Where(x => x.SessionStart >= sessionStart)];
+            var events = _events.Where(x => x.SessionStart == sessionStart).ToImmutableArray();
             return events.Length <= RecentLimit ? events : [.. events.Skip(events.Length - RecentLimit)];
         }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// 세션 종료·모니터링 중지 시 메모리 목록을 비운다(§16). 영속된 dedup 키는 지우지 않으며,
+    /// 다음 발행·조회가 파일에서 다시 복원하므로 같은 세션 안의 중복 방지는 유지된다.
+    /// </summary>
+    public void Clear()
+    {
+        _gate.Wait();
+        try { _events = ImmutableArray<StructureAlertEvent>.Empty; _restored = false; }
         finally { _gate.Release(); }
     }
 
@@ -108,7 +127,8 @@ public sealed class StructureAlertPublisher(IStructureObservationStore store)
             {
                 _events = restored.Where(x => x is { EventId.Length: > 0, Type.Length: > 0 })
                     .OrderBy(x => x.Seq).ToImmutableArray();
-                _seq = _events.Length == 0 ? 0 : _events[^1].Seq;
+                // seq는 재복원에서도 되돌아가지 않는다(§16B watermark: FE seed가 그대로 유효해야 한다).
+                _seq = Math.Max(_seq, _events.Length == 0 ? 0 : _events[^1].Seq);
             }
         }
         catch (JsonException)

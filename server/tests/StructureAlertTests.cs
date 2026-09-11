@@ -48,7 +48,7 @@ public sealed class StructureAlertTests
     }
 
     static Task<System.Collections.Immutable.ImmutableArray<StructureAlertEvent>> Recent(Harness harness) =>
-        harness.Alerts.GetRecentAsync(default);
+        harness.Alerts.GetRecentAsync(Fx.SessionStart, default);
 
     static string Json(object? value) =>
         JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web));
@@ -286,7 +286,7 @@ public sealed class StructureAlertTests
             await alerts.PublishAsync(Fx.Symbol, Fx.SessionStart, P.PolicyHash,
                 [new StructureAlertDraft(StructureAlertPublisher.TypeReady, $"TEST|event-{i:000}", "PULLBACK", 50.0, 1.2m)],
                 100m, Fx.At(60), default);
-        var recent = await alerts.GetRecentAsync(default);
+        var recent = await alerts.GetRecentAsync(Fx.SessionStart, default);
         Assert.Equal(StructureAlertPublisher.RecentLimit, recent.Length);
         Assert.Equal(6, recent[0].Seq);                                  // 55건 중 마지막 50건
         Assert.Equal(55, recent[^1].Seq);
@@ -305,7 +305,7 @@ public sealed class StructureAlertTests
         var nextSession = Fx.SessionStart.AddDays(1);
         await alerts.PublishAsync(Fx.Symbol, nextSession, P.PolicyHash, [draft], 100m, Fx.At(60).AddDays(1), default);
 
-        var recent = await alerts.GetRecentAsync(default);
+        var recent = await alerts.GetRecentAsync(nextSession, default);
         var evt = Assert.Single(recent);
         Assert.Equal(2, evt.Seq);                                        // seq는 이어진다
         Assert.Equal(nextSession, evt.SessionStart);
