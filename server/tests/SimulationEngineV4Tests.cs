@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Astra.Server;
 using Astra.Server.Domain;
 using Xunit;
@@ -40,6 +41,120 @@ public sealed class SimulationEngineV4Tests
     }
 
     [Fact]
+    public void EntryMinuteStartsUnobservedAndApostEntryQuoteMarksOnlyPartialCoverage()
+    {
+        var entered = T.AddSeconds(3);
+        var created = SimulationEngine.Process([], "NVDA", [], 100, entered, 50, 100,
+            [new SimulationEntry("SETUP", 100, 110, 95, null, null, 70, 0, 2, 60, 55, [], entered, T.AddHours(3), T)]);
+        Assert.Equal("UNOBSERVED", Assert.IsType<ExecutionProvenance>(created[0].Execution).EntryMinuteCoverage);
+
+        var observed = SimulationEngine.Process(created, "NVDA", [], 101, T.AddSeconds(17), 50, 100, []);
+        var execution = Assert.IsType<ExecutionProvenance>(observed[0].Execution);
+        Assert.Equal("PARTIALLY_OBSERVED_QUOTE", execution.EntryMinuteCoverage);
+        Assert.Equal(T.AddSeconds(17), execution.EntryMinuteEvidenceAt);
+    }
+
+    [Fact]
+    public void SampledQuoteUpdatesLastPriceAndEodFallbackUsesThatObservedPrice()
+    {
+        var end = T.AddHours(2);
+        var trade = Open(end: end) with { Execution = new ExecutionProvenance(T, T.AddMinutes(1), "UNOBSERVED", null) };
+        var updated = SimulationEngine.Process([trade], "NVDA", [], 103, T.AddMinutes(1), 50, 100, []);
+        var closed = SimulationEngine.CloseExpiredSessions(updated, end.AddMinutes(1));
+        Assert.Equal(103, closed[0].ExitPrice);
+        Assert.Equal(T.AddMinutes(1), closed[0].LastPriceAt);
+        Assert.Equal(T.AddMinutes(1), Assert.IsType<ExecutionProvenance>(closed[0].Execution).ExitEvidenceAt);
+    }
+
+    [Fact]
+    public void DelayedStopQuoteCannotRetroactivelyCloseAfterRestart()
+    {
+        var trade = Open(T.AddSeconds(3)) with { Execution = new ExecutionProvenance(T, T.AddMinutes(1), "UNOBSERVED", null) };
+        var first = SimulationEngine.Process([trade], "NVDA", [], 101, T.AddSeconds(17), 50, 100, []);
+        var restarted = SimulationEngine.Process(first, "NVDA", [], 94, T.AddSeconds(10), 50, 100, []);
+        var execution = Assert.IsType<ExecutionProvenance>(restarted[0].Execution);
+        Assert.Equal("OPEN", restarted[0].Status);
+        Assert.Equal(101, restarted[0].LastPrice);
+        Assert.Equal(T.AddSeconds(17), restarted[0].LastPriceAt);
+        Assert.Equal(T.AddSeconds(17), execution.EntryMinuteEvidenceAt);
+    }
+
+    [Fact]
+    public void SameTimestampConflictingQuoteUsesFirstObservedPrice()
+    {
+        var trade = Open(T.AddSeconds(3)) with { Execution = new ExecutionProvenance(T, T.AddMinutes(1), "UNOBSERVED", null) };
+        var first = SimulationEngine.Process([trade], "NVDA", [], 101, T.AddSeconds(17), 50, 100, []);
+        var conflicting = SimulationEngine.Process(first, "NVDA", [], 94, T.AddSeconds(17), 50, 100, []);
+        Assert.Equal("OPEN", conflicting[0].Status);
+        Assert.Equal(101, conflicting[0].LastPrice);
+        Assert.Equal(T.AddSeconds(17), conflicting[0].LastPriceAt);
+    }
+
+    [Fact]
+    public void FirstBarrierQuoteRemainsTheExitAcrossLaterOppositeQuotesAndRestart()
+    {
+        var trade = Open(T.AddSeconds(3)) with { Execution = new ExecutionProvenance(T, T.AddMinutes(1), "UNOBSERVED", null) };
+        var target = SimulationEngine.Process([trade], "NVDA", [], 111, T.AddSeconds(17), 50, 100, []);
+        var restarted = SimulationEngine.Process(target, "NVDA", [], 94, T.AddSeconds(30), 50, 100, []);
+        Assert.Equal("TARGET", restarted[0].Status);
+        Assert.Equal(110, restarted[0].ExitPrice);
+        Assert.Equal("SAMPLED_QUOTE", Assert.IsType<ExecutionProvenance>(restarted[0].Execution).ExitSource);
+    }
+
+    [Fact]
+    public void StopQuoteAlsoRemainsTheExitAcrossLaterTargetQuote()
+    {
+        var trade = Open(T.AddSeconds(3)) with { Execution = new ExecutionProvenance(T, T.AddMinutes(1), "UNOBSERVED", null) };
+        var stop = SimulationEngine.Process([trade], "NVDA", [], 94, T.AddSeconds(17), 50, 100, []);
+        var laterTarget = SimulationEngine.Process(stop, "NVDA", [], 111, T.AddSeconds(30), 50, 100, []);
+        Assert.Equal("STOP", laterTarget[0].Status);
+        Assert.Equal(94, laterTarget[0].ExitPrice);
+    }
+
+    [Fact]
+    public void CompletedBarKeepsCursorAtStartButRecordsCloseKnownTime()
+    {
+        var trade = Open() with { Execution = new ExecutionProvenance(T, T.AddMinutes(1), "UNOBSERVED", null) };
+        var result = SimulationEngine.Process([trade], "NVDA", [Bar(1, 100, 101, 99, 101)], 101, T.AddMinutes(2), 50, 100, []);
+        Assert.Equal(T.AddMinutes(1), result[0].LastEvaluatedBarAt);
+        Assert.Equal(T.AddMinutes(2), result[0].LastPriceAt);
+        var execution = Assert.IsType<ExecutionProvenance>(result[0].Execution);
+        Assert.Equal(T.AddMinutes(1), execution.EvaluatedBarStart);
+        Assert.Equal(T.AddMinutes(2), execution.EvaluatedBarCloseAt);
+        Assert.Equal(100, execution.EvaluatedBarOpen);
+        Assert.Equal(101, execution.EvaluatedBarHigh);
+        Assert.Equal(99, execution.EvaluatedBarLow);
+        Assert.Equal(101, execution.EvaluatedBarClose);
+    }
+
+    [Fact]
+    public void SameBarStopFirstRetainsOhlcAndRoundTripsThroughJson()
+    {
+        var trade = Open() with { Execution = new ExecutionProvenance(T, T.AddMinutes(1), "UNOBSERVED", null) };
+        var closed = SimulationEngine.Process([trade], "NVDA", [Bar(1, 100, 111, 94, 100)], 100, T.AddMinutes(2), 50, 100, []);
+        var execution = Assert.IsType<ExecutionProvenance>(closed[0].Execution);
+        Assert.Equal("SAME_BAR_STOP_FIRST", execution.BarrierDecision);
+        Assert.Equal("COMPLETED_BAR_REPLAY", execution.ExitSource);
+        Assert.Equal(T.AddMinutes(2), execution.ExitEvidenceAt);
+        var restored = JsonSerializer.Deserialize<SimTrade>(JsonSerializer.Serialize(closed[0], new JsonSerializerOptions(JsonSerializerDefaults.Web)), new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var roundTripped = Assert.IsType<ExecutionProvenance>(restored!.Execution);
+        Assert.Equal(100, roundTripped.EvaluatedBarOpen);
+        Assert.Equal(111, roundTripped.EvaluatedBarHigh);
+        Assert.Equal(94, roundTripped.EvaluatedBarLow);
+        Assert.Equal(100, roundTripped.EvaluatedBarClose);
+    }
+
+    [Fact]
+    public void ReorderedAndRepeatedBarsRemainIdempotentWithReplayEvidence()
+    {
+        var trade = Open() with { Execution = new ExecutionProvenance(T, T.AddMinutes(1), "UNOBSERVED", null) };
+        var first = SimulationEngine.ReplayBars([trade], "NVDA", [Bar(2, 100, 101, 99, 101), Bar(1, 100, 101, 99, 101)]);
+        var restarted = SimulationEngine.ReplayBars(first, "NVDA", [Bar(1, 100, 101, 99, 101), Bar(2, 100, 101, 99, 101)]);
+        Assert.Equal(T.AddMinutes(2), restarted[0].LastEvaluatedBarAt);
+        Assert.Equal(T.AddMinutes(3), Assert.IsType<ExecutionProvenance>(restarted[0].Execution).EvaluatedBarCloseAt);
+    }
+
+    [Fact]
     public void GapBelowStopUsesWorseOpeningPrice()
     {
         var result = SimulationEngine.Process([Open()], "NVDA", [Bar(1, 90, 92, 88, 91)], 91, T.AddMinutes(2), 50, 100, []);
@@ -67,11 +182,22 @@ public sealed class SimulationEngineV4Tests
     public void RestartClosesTradeAtPersistedSessionEndWithEstimatedProvenance()
     {
         var end = T.AddHours(2);
-        var result = SimulationEngine.CloseExpiredSessions([Open(end: end) with { LastPrice = 103 }], end.AddMinutes(1));
+        var result = SimulationEngine.CloseExpiredSessions([Open(end: end) with { LastPrice = 103, Execution = new ExecutionProvenance(T, T.AddMinutes(1), "UNOBSERVED", null) }], end.AddMinutes(1));
         Assert.Equal("EOD", result[0].Status);
         Assert.Equal(end, result[0].ExitAt);
         Assert.True(result[0].ExitEstimated);
         Assert.Equal(T, result[0].LastPriceAt); // session end is not fabricated as a market observation
+        var execution = Assert.IsType<ExecutionProvenance>(result[0].Execution);
+        Assert.Equal("EOD_LAST_PRICE_FALLBACK", execution.ExitSource);
+        Assert.Equal(T, execution.ExitEvidenceAt);
+    }
+
+    [Fact]
+    public void LegacyRowsWithoutExecutionRemainCompatible()
+    {
+        var result = SimulationEngine.Process([Open()], "NVDA", [Bar(1, 100, 101, 99, 101)], 101, T.AddMinutes(2), 50, 100, []);
+        Assert.Null(result[0].Execution);
+        Assert.Equal(T.AddMinutes(2), result[0].LastPriceAt);
     }
 
     [Fact]

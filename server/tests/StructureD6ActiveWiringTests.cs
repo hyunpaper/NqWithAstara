@@ -51,6 +51,10 @@ public sealed class StructureD6StructuralSimulationTests
         Assert.Equal(Fx.At(39), trade.TriggerBarAt);
         Assert.Equal(Fx.At(40), trade.EnteredAt);
         Assert.Equal(Fx.SessionEnd, trade.SessionEnd);
+        var execution = Assert.IsType<ExecutionProvenance>(trade.Execution);
+        Assert.Equal(Fx.At(40), execution.EntryBarStart);
+        Assert.Equal(Fx.At(41), execution.EntryBarCloseAt);
+        Assert.Equal("UNOBSERVED", execution.EntryMinuteCoverage);
         Assert.NotNull(trade.Structure);
         Assert.Equal("TEST|event-A", trade.Structure!.EntryEventId);
         Assert.Equal(plan.PlanId, trade.Structure.PlanSnapshot.PlanId);
@@ -315,10 +319,10 @@ public sealed class StructureD6ActiveWiringTests
         await PollAt(harness, 65, seconds: 15);                    // 같은 봉 재평가(캐시 경로)
         Assert.Single(harness.Store.Trades);
 
-        await PollAt(harness, 66);                                 // 새 트리거(m65)도 OPEN 제한에 막힌다
+        await PollAt(harness, 66);                                 // 같은 episode의 새 트리거는 소비 표식에 막힌다
         Assert.Single(harness.Store.Trades);
         Assert.True(harness.Structure.TryGetPublished(Fx.Symbol, out var afterNext));
-        Assert.Contains(StructureAnalysisService.NoteEntryBlockedByOpenTrade, afterNext.Notes);
+        Assert.Contains(afterNext.Candidates, x => x.RejectionCodes.Contains(StructuralLifecycle.CodeEpisodeConsumed));
 
         // 재시작: 같은 저장소(거래·관측·래치)를 공유하는 새 인스턴스가 같은 결론을 낸다.
         var restarted = Build(StructureEngineMode.Active, harness.Store, harness.Observations);
