@@ -60,6 +60,8 @@ public sealed class HostBootTests(AstraHostFixture host) : IClassFixture<AstraHo
         Assert.NotNull(services.GetRequiredService<IRealtimeMarketStream>());
         Assert.NotNull(services.GetRequiredService<Astra.Server.Domain.Structure.StructurePolicy>());
         Assert.NotNull(services.GetRequiredService<StructureEngineOptions>());
+        Assert.NotNull(services.GetRequiredService<StructureLiquidityFeed>());
+        Assert.NotNull(services.GetRequiredService<IStructuralTradeEntries>());
     }
 
     [Fact]
