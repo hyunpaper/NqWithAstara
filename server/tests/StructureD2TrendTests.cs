@@ -66,6 +66,49 @@ public sealed class StructureD2TrendTests
         Assert.Contains(TrendEvaluator.BlockerMissing5mStructure, trend.BlockersForReady);
     }
 
+    [Fact]
+    public void ThirtyBarsWithAGapInTheTrailingRunDoNotSatisfyTheConsecutiveRequirement()
+    {
+        var all = FromBuckets(RisingZigzag);
+        var gapped = all.Take(45).Where(x => x.Start != Fx.At(30)).ToImmutableArray();
+        var trend = TrendEvaluator.Evaluate(TrendRequest.Create(Fx.Symbol, Fx.SessionStart, gapped[^1].End,
+            gapped, BarAggregator.Aggregate(gapped, Fx.SessionStart, gapped[^1].End, P)), P);
+
+        Assert.Equal(44, trend.BarCount);
+        Assert.Equal(TrendState.Unknown, trend.State);
+        Assert.Null(trend.SignedTrend);
+        Assert.Contains(TrendEvaluator.WarningDiscontinuousBars, trend.Warnings);
+        Assert.DoesNotContain(TrendEvaluator.WarningInsufficientBars, trend.Warnings);
+        Assert.Contains(TrendEvaluator.BlockerTrendUnavailable, trend.BlockersForTrend);
+        Assert.Contains(TrendEvaluator.BlockerTrendUnavailable, trend.BlockersForReady);
+    }
+
+    [Fact]
+    public void AGapOlderThanTheTrailingThirtyBarsStillAllowsTheTrendNumber()
+    {
+        var all = FromBuckets(RisingZigzag);
+        var gapped = all.Where(x => x.Start != Fx.At(2)).ToImmutableArray();
+        var trend = TrendEvaluator.Evaluate(TrendRequest.Create(Fx.Symbol, Fx.SessionStart, gapped[^1].End,
+            gapped, BarAggregator.Aggregate(gapped, Fx.SessionStart, gapped[^1].End, P)), P);
+
+        Assert.NotEqual(TrendState.Unknown, trend.State);
+        Assert.NotNull(trend.SignedTrend);
+        Assert.DoesNotContain(TrendEvaluator.WarningDiscontinuousBars, trend.Warnings);
+    }
+
+    [Fact]
+    public void ContinuousBarsKeepTheExistingTrendResult()
+    {
+        var bars = FromBuckets(RisingZigzag);
+        var trend = Evaluate(bars);
+
+        Assert.NotNull(trend.SignedTrend);
+        Assert.Empty(trend.BlockersForTrend);
+        Assert.DoesNotContain(TrendEvaluator.WarningDiscontinuousBars, trend.Warnings);
+        Assert.DoesNotContain(TrendEvaluator.WarningInsufficientBars, trend.Warnings);
+        Assert.Equal(bars.Length, trend.BarCount);
+    }
+
     /// <summary>§16B: ATR&lt;=0 또는 필수 지표 결측이면 trend=null이다.</summary>
     [Fact]
     public void ZeroRangeBarsGiveZeroAtrAndThereforeNullTrend()

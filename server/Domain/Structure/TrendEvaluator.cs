@@ -142,6 +142,7 @@ public static class TrendEvaluator
     public const string BlockerTrendUnavailable = "TREND_UNAVAILABLE";
     public const string BlockerMissing5mStructure = "MISSING_5M_STRUCTURE";
     public const string WarningInsufficientBars = "INSUFFICIENT_1M_BARS";
+    public const string WarningDiscontinuousBars = "DISCONTINUOUS_1M_BARS";
     public const string WarningAtrUnavailable = "ATR_UNAVAILABLE";
     public const string WarningVwapUnavailable = "VWAP_UNAVAILABLE";
     public const string WarningEfficiencyUnavailable = "EFFICIENCY_UNAVAILABLE";
@@ -170,8 +171,10 @@ public static class TrendEvaluator
             bars5m, request.AnalysisCutoff, policy);
         var (structureDirection, deltaHigh, deltaLow) = StructureFamily(pivots5m, atr);
 
-        var enoughBars = bars.Length >= policy.Minimum1mBars;
-        if (!enoughBars) warnings.Add(WarningInsufficientBars);
+        // §16B "30개 연속 완료 1m 봉": 개수만이 아니라 cutoff 직전까지 끊기지 않은 구간을 요구한다.
+        var enoughBars = TrailingConsecutiveBars(bars) >= policy.Minimum1mBars;
+        if (bars.Length < policy.Minimum1mBars) warnings.Add(WarningInsufficientBars);
+        else if (!enoughBars) warnings.Add(WarningDiscontinuousBars);
         if (atr is null or <= 0 || !double.IsFinite(atr ?? double.NaN)) { warnings.Add(WarningAtrUnavailable); missing.Add("atr1m"); }
         if (vwap is null) { warnings.Add(WarningVwapUnavailable); missing.Add("vwap"); }
         if (efficiency is null) { warnings.Add(WarningEfficiencyUnavailable); missing.Add("efficiency"); }
@@ -302,6 +305,19 @@ public static class TrendEvaluator
         if (!double.IsFinite(deltaHigh) || !double.IsFinite(deltaLow)) return (null, null, null);
         var direction = (Math.Tanh(deltaHigh) + Math.Tanh(deltaLow)) / 2;
         return double.IsFinite(direction) ? (direction, deltaHigh, deltaLow) : (null, deltaHigh, deltaLow);
+    }
+
+    /// <summary>마지막 봉에서 거꾸로 이어지는 완료 봉 개수. 앞 봉 End와 뒤 봉 Start가 같아야 연속이다.</summary>
+    static int TrailingConsecutiveBars(ImmutableArray<StructureBar> bars)
+    {
+        if (bars.Length == 0) return 0;
+        var run = 1;
+        for (var i = bars.Length - 1; i > 0; i--)
+        {
+            if (bars[i].Start != bars[i - 1].End) break;
+            run++;
+        }
+        return run;
     }
 
     static ImmutableArray<StructureBar> Truncate(ImmutableArray<StructureBar> bars, DateTimeOffset cutoff,
