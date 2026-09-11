@@ -108,13 +108,7 @@ public static class SetupDetector
     /// </summary>
     public const string NoteReadyWithout5mStructure = "V5_READY_WITHOUT_5M_STRUCTURE";
 
-    /// <summary>
-    /// 이슈 #42: 추세 정렬을 전제로 하는 방향성 셋업(PULLBACK/BREAKOUT)이 signedTrend&lt;0인 국면에서
-    /// 롱으로 승격되는 것을 막는 거절 사유다. 점수 문턱이 아니라 0 기준 부호 검사이며 새 파라미터를 두지 않는다
-    /// — §9.4가 EntryQuality에 BUY=70 같은 기준을 붙이는 것을 금지하므로 품질 임계값으로 막지 않는다.
-    /// §16B가 "두 family 부호가 반대가 아닐 때만 UP/DOWN 허용"으로 쓰는 방향 일관성 원리와 같다.
-    /// #27/#28이 이 규칙으로 걸린 후보를 분리 집계할 수 있도록 RejectionCodes에 남는다.
-    /// </summary>
+    /// <summary>PULLBACK/BREAKOUT이 signedTrend&lt;0에서 롱으로 승격되는 것을 막는 거절 사유(#42).</summary>
     public const string CodeTrendDirectionOpposesLong = "TREND_DIRECTION_OPPOSES_LONG";
 
     public static SetupDetectionResult Detect(SetupDetectionRequest request, StructurePolicy policy)
@@ -371,11 +365,7 @@ public static class SetupDetector
         }
         foreach (var reason in quality.Reasons) rejections.Add(reason);
 
-        // 이슈 #42: 정렬 전제 셋업의 역방향 롱 진입 차단. PULLBACK의 기존 TrendState 게이트(Up/Transition)는
-        // 그대로 두고 그 위에 얹히는 독립 조건이며(TRANSITION+음수 조합이 여기서 걸린다), BREAKOUT에는
-        // 이것이 유일한 추세 조건이다. REBOUND는 §8이 높은 추세 점수를 요구하지 않고(CounterTrend=true)
-        // §9.4가 alignmentQuality를 제외하므로 면제다. signedTrend가 null이면 EntryQuality의
-        // TREND_UNAVAILABLE이 이미 READY를 막으므로 여기서 중복 사유를 만들지 않는다.
+        // null은 TREND_UNAVAILABLE이 이미 막으므로 중복 사유를 만들지 않는다(#42).
         if (RequiresTrendAlignment(hypothesis.Kind) && request.Trend.SignedTrend is { } signedTrend
             && double.IsFinite(signedTrend) && signedTrend < 0)
             rejections.Add(CodeTrendDirectionOpposesLong);
@@ -415,10 +405,7 @@ public static class SetupDetector
             hypothesis.RetestConfirmed, hypothesis.EpisodeStartAt);
     }
 
-    /// <summary>
-    /// 추세 정렬을 전제로 하는 종류. §9.4에서 alignmentQuality를 필수 구성요소로 갖는 유형과 같은 집합이며
-    /// (PULLBACK/BREAKOUT), REBOUND는 여기서 빠진다.
-    /// </summary>
+    /// <summary>추세 정렬을 전제로 하는 종류. REBOUND는 제외다(§8/§9.4).</summary>
     static bool RequiresTrendAlignment(SetupKind kind) => kind is SetupKind.Pullback or SetupKind.Breakout;
 
     /// <summary>§8 stable EventId=(symbol,sessionStart,kind,zoneId,triggerBarStart).</summary>
