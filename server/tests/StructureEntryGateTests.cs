@@ -31,14 +31,19 @@ public sealed class StructureEntryGateTests
         return new Harness(structure, store, observations, runtime, clock, entries, generation, market);
     }
 
-    static StructureObservationRequest Request(Harness harness, int minute, double? quotePrice = null) =>
-        new(Fx.Symbol, harness.Generation, harness.Session, D6.Bars(minute), D6.Daily(),
-            quotePrice ?? D6.QuotePrice(Fx.At(minute)), Fx.At(minute), null);
+    static StructureLiquidity AlignedBook(int minute) =>
+        new(99.60m, 99.61m, Fx.At(minute));
 
-    static async Task ObserveAt(Harness harness, int minute, double? quotePrice = null, TimeSpan? gateDelay = null)
+    static StructureObservationRequest Request(Harness harness, int minute, double? quotePrice = null,
+        StructureLiquidity? liquidity = null) =>
+        new(Fx.Symbol, harness.Generation, harness.Session, D6.Bars(minute), D6.Daily(),
+            quotePrice ?? D6.QuotePrice(Fx.At(minute)), Fx.At(minute), liquidity ?? AlignedBook(minute));
+
+    static async Task ObserveAt(Harness harness, int minute, double? quotePrice = null, TimeSpan? gateDelay = null,
+        StructureLiquidity? liquidity = null)
     {
         harness.Clock.Reset(Fx.At(minute), gateDelay ?? TimeSpan.Zero);
-        await harness.Structure.ObserveAsync(Request(harness, minute, quotePrice), default);
+        await harness.Structure.ObserveAsync(Request(harness, minute, quotePrice, liquidity), default);
     }
 
     static StructureAnalysisView Published(Harness harness)
@@ -54,54 +59,59 @@ public sealed class StructureEntryGateTests
     // ── #61 tick 판정 ────────────────────────────────────────────────────────
 
     [Theory]
-    [InlineData(99.62, null)]
-    [InlineData(99.60, null)]
-    [InlineData(99.625, StructureAnalysisService.NotePriceTickUnsupported)]
-    [InlineData(0.4321, StructureAnalysisService.NotePriceTickUnsupported)]
-    public void QuotePriceOffTheTickGridIsNotSupported(double quote, string? expected) =>
-        Assert.Equal(expected, StructureAnalysisService.PriceTickNote((decimal)quote, null, P));
+    [InlineData(99.61, 99.62, null)]
+    [InlineData(99.60, 99.61, null)]
+    [InlineData(99.625, 99.63, StructureAnalysisService.NotePriceTickUnsupported)]
+    [InlineData(0.4321, 0.44, StructureAnalysisService.NotePriceTickUnsupported)]
+    public void BookPricesOffTheTickGridAreNotSupported(double bid, double ask, string? expected) =>
+        Assert.Equal(expected, StructureAnalysisService.PriceTickNote(
+            new StructureLiquidity((decimal)bid, (decimal)ask, Fx.At(65)), P));
 
-    [Fact]
-    public void BookPricesOffTheTickGridAreNotSupported()
+    [Theory]
+    [InlineData(454.605, 454.35, 455.02)]
+    [InlineData(255.585, 255.15, 255.96)]
+    [InlineData(188.3025, 188.30, 190.31)]
+    [InlineData(13.235, 13.23, 13.24)]
+    public void AMidpointStyleQuoteDoesNotDecideTheTickWhenTheBookIsAligned(double quote, double bid, double ask)
     {
-        Assert.Null(StructureAnalysisService.PriceTickNote(211.92m,
-            new StructureLiquidity(211.91m, 211.93m, Fx.At(65)), P));
-        Assert.Equal(StructureAnalysisService.NotePriceTickUnsupported,
-            StructureAnalysisService.PriceTickNote(211.92m,
-                new StructureLiquidity(211.9125m, 211.93m, Fx.At(65)), P));
-        Assert.Equal(StructureAnalysisService.NotePriceTickUnsupported,
-            StructureAnalysisService.PriceTickNote(211.92m,
-                new StructureLiquidity(211.91m, 211.9375m, Fx.At(65)), P));
+        Assert.NotEqual(0m, decimal.Remainder((decimal)quote, P.PriceTick));
+        Assert.Null(StructureAnalysisService.PriceTickNote(
+            new StructureLiquidity((decimal)bid, (decimal)ask, Fx.At(65)), P));
     }
 
     [Fact]
-    public void MinuteBarClosesOffTheTickGridDoNotDecideTheTick()
-    {
-        Assert.Null(StructureAnalysisService.PriceTickNote(211.92m, null, P));
-        Assert.Null(StructureAnalysisService.PriceTickNote(213.03m,
+    public void MinuteBarClosesOffTheTickGridDoNotDecideTheTick() =>
+        Assert.Null(StructureAnalysisService.PriceTickNote(
             new StructureLiquidity(213.02m, 213.04m, Fx.At(65)), P));
-    }
 
     [Fact]
-    public void NoPriceEvidenceBlocksInsteadOfAllowing()
+    public void NoBookEvidenceBlocksInsteadOfAllowing()
     {
         Assert.Equal(StructureAnalysisService.NotePriceTickUnknown,
-            StructureAnalysisService.PriceTickNote(null, null, P));
+            StructureAnalysisService.PriceTickNote(null, P));
         Assert.Equal(StructureAnalysisService.NotePriceTickUnknown,
-            StructureAnalysisService.PriceTickNote(0m, new StructureLiquidity(0m, 0m, Fx.At(65)), P));
+            StructureAnalysisService.PriceTickNote(new StructureLiquidity(null, null, Fx.At(65)), P));
         Assert.Equal(StructureAnalysisService.NotePriceTickUnknown,
-            StructureAnalysisService.PriceTickNote(null, new StructureLiquidity(null, null, Fx.At(65)), P));
+            StructureAnalysisService.PriceTickNote(new StructureLiquidity(0m, 0m, Fx.At(65)), P));
     }
 
     [Fact]
-    public async Task TossShapedMinuteBarsWithAnAlignedQuoteNoLongerBlockTheEntry()
+    public void OneSidedBookStillDecidesTheTick()
+    {
+        Assert.Null(StructureAnalysisService.PriceTickNote(new StructureLiquidity(99.60m, null, Fx.At(65)), P));
+        Assert.Equal(StructureAnalysisService.NotePriceTickUnsupported,
+            StructureAnalysisService.PriceTickNote(new StructureLiquidity(null, 99.625m, Fx.At(65)), P));
+    }
+
+    [Fact]
+    public async Task AMidpointStyleQuoteWithAnAlignedBookNoLongerBlocksTheEntry()
     {
         var harness = Build(StructureEngineMode.Active);
         await ObserveAt(harness, 64);
         harness.Clock.Reset(Fx.At(65), TimeSpan.Zero);
         await harness.Structure.ObserveAsync(new StructureObservationRequest(Fx.Symbol, harness.Generation,
-            harness.Session, TossShapedBars(65), D6.Daily(), 211.92, Fx.At(65),
-            new StructureLiquidity(211.91m, 211.93m, Fx.At(65))), default);
+            harness.Session, TossShapedBars(65), D6.Daily(), 454.605, Fx.At(65),
+            new StructureLiquidity(454.35m, 455.02m, Fx.At(65))), default);
 
         var view = Published(harness);
         Assert.DoesNotContain(StructureAnalysisService.NotePriceTickUnsupported, view.Notes);
@@ -127,7 +137,7 @@ public sealed class StructureEntryGateTests
     {
         var harness = Build(StructureEngineMode.Active);
         await ObserveAt(harness, 64);
-        await ObserveAt(harness, 65, quotePrice: 99.625);
+        await ObserveAt(harness, 65, liquidity: new StructureLiquidity(99.6025m, 99.61m, Fx.At(65)));
 
         var view = Published(harness);
         Assert.Empty(harness.Store.Trades);
@@ -139,6 +149,26 @@ public sealed class StructureEntryGateTests
         Assert.Equal("REJECTED", candidate.State);
         Assert.Contains(StructuralPlanner.UnsupportedPriceTick, candidate.RejectionCodes);
         Assert.Null(candidate.Plan);
+    }
+
+    [Fact]
+    public async Task AMissingBookBlocksTheNewEntryAsUnknown()
+    {
+        var harness = Build(StructureEngineMode.Active);
+        await ObserveAt(harness, 64);
+        harness.Clock.Reset(Fx.At(65), TimeSpan.Zero);
+        await harness.Structure.ObserveAsync(new StructureObservationRequest(Fx.Symbol, harness.Generation,
+            harness.Session, D6.Bars(65), D6.Daily(), D6.QuotePrice(Fx.At(65)), Fx.At(65), null), default);
+
+        var view = Published(harness);
+        Assert.Empty(harness.Store.Trades);
+        Assert.Equal(0, harness.Entries.Calls);
+        Assert.Contains(StructureAnalysisService.NotePriceTickUnknown, view.Notes);
+        Assert.Contains(StructureAnalysisService.NotePriceTickUnknown, view.Warnings);
+
+        var candidate = Assert.Single(view.Candidates);
+        Assert.Equal("REJECTED", candidate.State);
+        Assert.Contains(StructuralPlanner.UnsupportedPriceTick, candidate.RejectionCodes);
     }
 
     [Fact]

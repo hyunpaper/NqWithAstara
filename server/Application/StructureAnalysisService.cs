@@ -293,7 +293,7 @@ public sealed class StructureAnalysisService(
             .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToImmutableArray();
 
         // #61 §16B: tick 지원 여부는 Application이 판정해서 넘긴다. Domain 기본값(허용)에 의존하지 않는다.
-        var tickNote = PriceTickNote(snapshot.QuotePrice, snapshot.OptionalLiquidity, _policy);
+        var tickNote = PriceTickNote(snapshot.OptionalLiquidity, _policy);
 
         var detection = SetupDetector.Detect(SetupDetectionRequest.Create(snapshot.Symbol, snapshot.SessionStart,
             snapshot.SessionEnd, snapshot.AnalysisAsOf, now, build.Bars.Bars, candidateLayer.Zones,
@@ -531,19 +531,19 @@ public sealed class StructureAnalysisService(
     }
 
     /// <summary>
-    /// #86 §16B: tick USD 0.01 종목만 신규 READY 대상이다. 앱에 tick metadata가 없으므로 관측 가격으로 판정하되,
-    /// 근거는 체결가 원천(현재 시세)과 호가 원천(최우선 매수·매도)으로만 한정한다. 1분봉·일봉 OHLC는 Toss가
-    /// 가공한 값이라 tick 격자를 벗어나므로(#86 실측: 211.475, 213.0326) 근거에서 뺀다.
+    /// #93 §16B: tick USD 0.01 종목만 신규 READY 대상이다. 앱에 tick metadata가 없으므로 관측 가격으로 판정하되,
+    /// 근거는 호가 원천(최우선 매수·매도)뿐이다. quotePrice는 체결가가 아니라 중간가 계열이라(#93 실측: WDC
+    /// 454.605 / bid 454.35 / ask 455.02) 스프레드 홀짝에 따라 반센트가 되며 tick 근거가 될 수 없다.
     /// 반환 null이 지원이며 그 외는 관측에 남길 사유다.
     /// </summary>
-    public static string? PriceTickNote(decimal? quotePrice, StructureLiquidity? liquidity, StructurePolicy policy)
+    public static string? PriceTickNote(StructureLiquidity? liquidity, StructurePolicy policy)
     {
         ArgumentNullException.ThrowIfNull(policy);
         var tick = policy.PriceTick;
         if (tick <= 0) return NotePriceTickUnknown;
 
         var observed = 0;
-        foreach (var candidate in new[] { quotePrice, liquidity?.BestBid, liquidity?.BestAsk })
+        foreach (var candidate in new[] { liquidity?.BestBid, liquidity?.BestAsk })
         {
             if (candidate is not { } price || price <= 0) continue;
             observed++;
