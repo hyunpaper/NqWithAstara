@@ -194,7 +194,7 @@ public sealed class StructureD3LifecycleTests
     }
 
     [Fact]
-    public void EnteredPullbackEpisodeIsConsumedAcrossRestartButANewEpisodeCanRearm()
+    public void EnteredPullbackEpisodeIsConsumedAcrossRestartButADetectedNewEpisodeCanRearm()
     {
         var ready = Detect().Candidates.First(x => x.Kind == SetupKind.Pullback && x.Disposition == CandidateDisposition.Ready);
         var entered = ready with { Disposition = CandidateDisposition.Entered };
@@ -206,12 +206,19 @@ public sealed class StructureD3LifecycleTests
         Assert.Equal(CandidateDisposition.Rejected, rejected.Disposition);
         Assert.Contains(StructuralLifecycle.CodeEpisodeConsumed, rejected.RejectionCodes);
 
-        var nextEpisode = ready with
-        {
-            EventId = "next-episode",
-            DuplicateGuardKey = "next-trigger",
-            EpisodeStartAt = ready.EpisodeStartAt!.Value.AddMinutes(1)
-        };
+        var bars = PullbackBars().ToBuilder();
+        bars[28] = Bar(28, 99.30m, 99.40m, 99.35m, 99.35m);
+        bars[30] = Bar(30, 99.55m, 99.65m, 99.60m, 99.60m);
+        bars.Add(Bar(31, 99.58m, 99.90m, 99.60m, 99.80m, 2000));
+        var analysisAsOf = Fx.At(32);
+        var nextEpisode = SetupDetector.Detect(SetupDetectionRequest.Create(Fx.Symbol, Fx.SessionStart, Fx.SessionEnd,
+            analysisAsOf, analysisAsOf, bars.ToImmutable(),
+            [D2.Support(99.20m, 99.40m), D2.Resistance(101.80m, 102.10m)],
+            [D2.Episode("support-zone", 28, 30)], D2.Trend(), .20, 100.00m, analysisAsOf,
+            D2.Quote(99.99m, 100.01m, 32)), P).Candidates.Single(x => x.Kind == SetupKind.Pullback);
+        Assert.NotEqual(ready.EpisodeStartAt, nextEpisode.EpisodeStartAt);
+        Assert.NotEqual(ready.EventId, nextEpisode.EventId);
+
         var rearmed = Assert.Single(StructuralLifecycle.ApplyLatch(persisted, [nextEpisode], allowNewTrigger: true, P));
         Assert.Equal(CandidateDisposition.Ready, rearmed.Disposition);
     }
