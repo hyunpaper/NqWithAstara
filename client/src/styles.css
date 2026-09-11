@@ -1378,13 +1378,6 @@ footer {
 .sr-trend.unknown b {
   color: var(--muted);
 }
-.structure-list-note {
-  margin: 0;
-  padding: 12px 18px 14px;
-  font-size: 10px;
-  color: var(--muted);
-  line-height: 1.6;
-}
 .se-state {
   display: inline-block;
   border-radius: 4px;
@@ -1557,12 +1550,6 @@ footer {
 .structure-chart-legend .sc-line.quote {
   border-color: var(--v5-quote);
 }
-.structure-chart-note {
-  margin: 8px 0 0;
-  font-size: 10px;
-  color: var(--muted);
-  line-height: 1.7;
-}
 .structure-explain {
   padding: 6px 18px 18px;
   display: flex;
@@ -1590,8 +1577,7 @@ footer {
 .se-line.warn {
   color: var(--v5-resistance);
 }
-.se-dim,
-.se-note {
+.se-dim {
   color: var(--muted);
   font-size: 11px;
 }
@@ -1630,6 +1616,18 @@ footer {
 .se-components th {
   color: var(--muted);
   font-weight: 500;
+}
+.se-diagnostics {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.se-diagnostics summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+.se-diagnostics[open] summary {
+  margin-bottom: 10px;
 }
 @media (max-width: 1100px) {
   .structure-body {
