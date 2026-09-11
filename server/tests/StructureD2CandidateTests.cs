@@ -249,6 +249,25 @@ public sealed class StructureD2CandidateTests
     }
 
     [Fact]
+    public void FlippedSupportWithoutTheConfirmedUpwardRetestCannotProduceABreakout()
+    {
+        var noHistory = D2.Zone("breakout-zone", 99.90m, 100.10m, ZoneRole.FlippedSupport, .8);
+        var unrelatedHistory = D2.Zone("breakout-zone", 99.90m, 100.10m, ZoneRole.FlippedSupport, .8,
+            history: new ZoneRoleChange(Fx.At(20), ZoneRole.Unresolved, ZoneRole.FlippedSupport,
+                "RETEST_HELD_BELOW_LOWER"));
+        var bars = BreakoutBars(100.10m, 100.30m);
+
+        foreach (var breakoutZone in new[] { noHistory, unrelatedHistory })
+        {
+            var result = SetupDetector.Detect(Request(bars,
+                [breakoutZone, D2.Resistance(101.80m, 102.10m, id: "target-zone")],
+                ImmutableArray<TouchEpisode>.Empty, live: 100.30m), P);
+
+            Assert.DoesNotContain(result.Candidates, x => x.Kind == SetupKind.Breakout);
+        }
+    }
+
+    [Fact]
     public void BreakoutIsSkippedWhenThePreviousBarAlreadyClosedAboveTheZone()
     {
         var resistance = D2.Resistance(99.90m, 100.10m, id: "breakout-zone");

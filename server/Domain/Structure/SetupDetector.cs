@@ -251,16 +251,18 @@ public static class SetupDetector
     static Hypothesis? DetectBreakout(PriceZone zone, StructureBar trigger, StructureBar previous)
     {
         if (!zone.Eligible || zone.Retired || zone.ProfileOnly) return null;
+        var retest = zone.RoleHistory.Any(x => x.Reason == "RETEST_HELD_ABOVE_UPPER");
         // RETEST_HELD_ABOVE_UPPER의 도착 역할은 FlippedSupport다. 그 뒤 구간 안으로 재접촉했다가
         // 다시 Upper를 회복하는 사건도 §8의 retest-confirmed breakout으로 관측한다.
-        if (zone.Role is not (ZoneRole.Resistance or ZoneRole.FlippedResistance or ZoneRole.FlippedSupport)) return null;
+        var breakoutRole = zone.Role is ZoneRole.Resistance or ZoneRole.FlippedResistance
+            || (zone.Role == ZoneRole.FlippedSupport && retest);
+        if (!breakoutRole) return null;
         if (previous.Close > zone.Upper) return null;
         if (trigger.Close <= zone.Upper) return null;
         if (trigger.Close <= trigger.Open) return null;          // 양봉 요구
 
         var notes = new SortedSet<string>(StringComparer.Ordinal);
         // retest 확인 여부는 별도 필드다. retest 전후를 같은 검증 수준으로 표시하지 않는다(§8).
-        var retest = zone.RoleHistory.Any(x => x.Reason == "RETEST_HELD_ABOVE_UPPER");
         if (!retest) notes.Add(NoteRetestPending);
         // 트리거 봉 저점이 Lower 아래면 추격/넓은 위험으로 기록하되 손절을 더 먼 저점으로 옮기지 않는다.
         if (trigger.Low < zone.Lower) notes.Add(NoteChaseTriggerBelowAnchor);
