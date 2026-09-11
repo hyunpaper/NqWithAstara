@@ -421,7 +421,7 @@ public static class ZoneBuilder
         var baseWidth = StructureMath.ScaledFloor(policy.PriceTick, policy.ProfileBinAtrFactor, atr1m);
         if (baseWidth <= 0) baseWidth = policy.PriceTick;
         var tickOnlyWidth = !Usable(atr1m);
-        if (bars.Count == 0) return EmptyProfile(baseWidth, tickOnlyWidth, "PROFILE_NO_BARS");
+        if (bars.Count == 0) return EmptyProfile(baseWidth, 1, 0, false, tickOnlyWidth, "PROFILE_NO_BARS");
 
         var inputVolume = bars.Sum(x => x.Volume);
         var minLow = bars.Min(x => x.Low);
@@ -441,12 +441,11 @@ public static class ZoneBuilder
         }
         var coarsened = multiple > 1;
         if (Span(minLow, maxHigh, width) > policy.ProfileMaxBins)
-            return EmptyProfile(width, tickOnlyWidth, "PROFILE_BIN_LIMIT_UNRESOLVED");
+            return EmptyProfile(width, multiple, inputVolume, coarsened, tickOnlyWidth,
+                "PROFILE_BIN_LIMIT_UNRESOLVED");
 
         if (inputVolume <= 0)
-            return coarsened
-                ? EmptyProfile(width, tickOnlyWidth, "ZERO_VOLUME_PROFILE", "CoarsenedProfile")
-                : EmptyProfile(width, tickOnlyWidth, "ZERO_VOLUME_PROFILE");
+            return EmptyProfile(width, multiple, inputVolume, coarsened, tickOnlyWidth, "ZERO_VOLUME_PROFILE");
 
         var minIndex = Index(minLow, width);
         var maxIndex = Index(maxHigh, width);
@@ -523,8 +522,15 @@ public static class ZoneBuilder
             allocated, coarsened, warnings.ToImmutableArray());
     }
 
-    static VolumeProfile EmptyProfile(decimal width, bool tickOnlyWidth, params string[] warnings) =>
-        VolumeProfile.Empty(width, tickOnlyWidth ? [.. warnings, FlagBinWidthFromTickOnly] : warnings);
+    /// <summary>coarsened 사실은 필드와 경고 문자열이 함께 가도록 한 곳에서 만든다(§16A, #65).</summary>
+    static VolumeProfile EmptyProfile(decimal width, int multiple, double inputVolume, bool coarsened,
+        bool tickOnlyWidth, params string[] warnings)
+    {
+        var all = new SortedSet<string>(warnings, StringComparer.Ordinal);
+        if (coarsened) all.Add("CoarsenedProfile");
+        if (tickOnlyWidth) all.Add(FlagBinWidthFromTickOnly);
+        return VolumeProfile.Empty(width, multiple, inputVolume, coarsened, [.. all]);
+    }
 
     static int Index(decimal price, decimal width) => (int)decimal.Floor(price / width);
 
