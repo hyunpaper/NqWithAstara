@@ -293,12 +293,14 @@ public sealed class StructureAnalysisService(
             .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToImmutableArray();
 
         // #61 §16B: tick 지원 여부는 Application이 판정해서 넘긴다. Domain 기본값(허용)에 의존하지 않는다.
-        var tickNote = PriceTickNote(snapshot.QuotePrice, snapshot.OptionalLiquidity, _policy);
+        // #93: 차단은 UNSUPPORTED(격자를 벗어난 호가)뿐이고 UNKNOWN(호가 결측)은 관측 note로만 남긴다.
+        var tickNote = PriceTickNote(snapshot.OptionalLiquidity, _policy);
+        var tickSupported = !string.Equals(tickNote, NotePriceTickUnsupported, StringComparison.Ordinal);
 
         var detection = SetupDetector.Detect(SetupDetectionRequest.Create(snapshot.Symbol, snapshot.SessionStart,
             snapshot.SessionEnd, snapshot.AnalysisAsOf, now, build.Bars.Bars, candidateLayer.Zones,
             candidateLayer.Episodes, trend, candidateLayer.Atr1m, snapshot.QuotePrice, snapshot.QuoteAt,
-            snapshot.OptionalLiquidity, blockers, tickNote is null), _policy);
+            snapshot.OptionalLiquidity, blockers, tickSupported), _policy);
 
         var candidates = StructuralLifecycle.ApplyLive(
             // zones는 §10 돌파 쿨다운의 zone lineage(Aliases) 확인용이며 후보 계층(structureCutoff) 스냅샷이다.
@@ -316,7 +318,8 @@ public sealed class StructureAnalysisService(
 
         var warnings = new SortedSet<string>(build.Warnings, StringComparer.Ordinal);
         foreach (var blocker in detection.ReadyBlockers) warnings.Add(blocker);
-        if (tickNote is not null) { notes.Add(tickNote); warnings.Add(tickNote); }
+        if (tickNote is not null) notes.Add(tickNote);
+        if (!tickSupported) warnings.Add(tickNote!);
 
         var signature = StructuralLifecycle.EventSignature(candidates, preferred);
         // #64: 관측 ID는 (봉, 이벤트 서명) 쌍이다. 같은 봉의 같은 상태는 그대로 중복 폐기되고 전이만 새 ID를 얻는다.
@@ -531,19 +534,22 @@ public sealed class StructureAnalysisService(
     }
 
     /// <summary>
-    /// #86 §16B: tick USD 0.01 종목만 신규 READY 대상이다. 앱에 tick metadata가 없으므로 관측 가격으로 판정하되,
-    /// 근거는 체결가 원천(현재 시세)과 호가 원천(최우선 매수·매도)으로만 한정한다. 1분봉·일봉 OHLC는 Toss가
-    /// 가공한 값이라 tick 격자를 벗어나므로(#86 실측: 211.475, 213.0326) 근거에서 뺀다.
+    /// #93 §16B: tick USD 0.01 종목만 신규 READY 대상이다. 앱에 tick metadata가 없으므로 관측 가격으로 판정하되,
+    /// 근거는 호가 원천(최우선 매수·매도)뿐이다. quotePrice는 체결가가 아니라 중간가 계열이라(#93 실측: WDC
+    /// 454.605 / bid 454.35 / ask 455.02) 스프레드 홀짝에 따라 반센트가 되며 tick 근거가 될 수 없다.
     /// 반환 null이 지원이며 그 외는 관측에 남길 사유다.
+    ///
+    /// 호가 결측은 tick을 막지 않는다 — 비용 결측 경로(assumedSpread=0 / MISSING_LIQUIDITY_COST)가 담당한다.
+    /// 차단은 <see cref="NotePriceTickUnsupported"/>, 즉 호가라는 실제 증거가 격자를 벗어난 경우뿐이다.
     /// </summary>
-    public static string? PriceTickNote(decimal? quotePrice, StructureLiquidity? liquidity, StructurePolicy policy)
+    public static string? PriceTickNote(StructureLiquidity? liquidity, StructurePolicy policy)
     {
         ArgumentNullException.ThrowIfNull(policy);
         var tick = policy.PriceTick;
         if (tick <= 0) return NotePriceTickUnknown;
 
         var observed = 0;
-        foreach (var candidate in new[] { quotePrice, liquidity?.BestBid, liquidity?.BestAsk })
+        foreach (var candidate in new[] { liquidity?.BestBid, liquidity?.BestAsk })
         {
             if (candidate is not { } price || price <= 0) continue;
             observed++;
