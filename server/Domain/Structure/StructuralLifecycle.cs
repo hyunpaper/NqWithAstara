@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 
 namespace Astra.Server.Domain.Structure;
 
@@ -9,6 +10,13 @@ namespace Astra.Server.Domain.Structure;
 /// <summary>
 /// 종목별 지속 래치(§16B). 세션 또는 PolicyHash가 바뀌면 새로 시작한다.
 /// Tombstones는 종결된 EventId의 상태이며 어떤 이유로도 되살리지 않는다.
+/// <para>
+/// <c>ConsumedGuardKeys</c>는 "이번 세션에서 소비된 lifecycle 키"의 단일 집합이며 두 종류가 들어간다.
+/// (1) §8 중복 방지 키 <see cref="EntryCandidate.DuplicateGuardKey"/>,
+/// (2) §10 돌파 쿨다운 표식 <see cref="StructuralLifecycle.BreakoutCooldownKey"/>.
+/// 두 형식은 접두사로 구분되며 서로 충돌하지 않는다. 쿨다운을 별도 필드로 두면 기존 래치 저장 레코드를
+/// 바꿔야 하므로, 이미 재시작 복원되는 이 집합을 그대로 재사용해 새 저장 경로를 만들지 않는다(§16B).
+/// </para>
 /// </summary>
 public sealed record StructuralLatch(string Symbol, DateTimeOffset SessionStart, string PolicyHash,
     DateTimeOffset? WatermarkBarStart, bool Seeded,
@@ -43,6 +51,16 @@ public static class StructuralLifecycle
     public const string NoteTtlExpired = "CANDIDATE_TTL_EXPIRED";
     public const string CodeDuplicateGuard = "DUPLICATE_TRIGGER_GUARD";
     public const string CodeNewTriggerSuppressed = "NEW_TRIGGER_SUPPRESSED";
+
+    /// <summary>
+    /// 이슈 #47(§10): "돌파 동일 ZoneId 재발동 쿨다운은 30분". 같은 zone lineage에서 직전 돌파 발동으로부터
+    /// <see cref="StructurePolicy.BreakoutCooldownMinutes"/> 이내면 새 트리거라도 READY로 승격하지 않는다.
+    /// PULLBACK/REBOUND에는 적용하지 않는다(§10이 돌파만 명시).
+    /// </summary>
+    public const string CodeBreakoutCooldown = "BREAKOUT_ZONE_COOLDOWN";
+
+    /// <summary>돌파 쿨다운 표식의 접두사. §8 중복 방지 키와 같은 집합에 들어가므로 형식이 겹치면 안 된다.</summary>
+    public const string BreakoutCooldownKeyPrefix = "BREAKOUT_COOLDOWN";
 
     /// <summary>
     /// §16B: 첫 시작/재시작/새 관심종목 등록 시 최신 완료 봉까지 watermark를 설정하고 그 봉으로 신규 트리거를 만들지 않는다.
@@ -94,11 +112,20 @@ public static class StructuralLifecycle
     /// <summary>
     /// 지속 상태를 계산 결과에 적용한다. 종결된 EventId는 tombstone 상태를 유지하고 계획을 되살리지 않으며,
     /// 이미 소비된 중복 방지 키의 신규 READY는 거절한다(§8, §16B).
+    /// 같은 zone lineage에서 돌파가 최근에 발동했다면 §10 쿨다운으로 새 READY도 거절한다(이슈 #47).
     /// </summary>
+    /// <param name="zones">
+    /// 후보 계층(structureCutoff 기준)의 zone 스냅샷. 병합으로 대표 ID가 바뀐 경우 <see cref="PriceZone.Aliases"/>로
+    /// 이전 ID의 쿨다운을 이어 받는다(§16B lineage). 비어 있으면 ZoneId 자기 자신만 본다.
+    /// </param>
     public static ImmutableArray<EntryCandidate> ApplyLatch(StructuralLatch latch,
-        ImmutableArray<EntryCandidate> candidates, bool allowNewTrigger)
+        ImmutableArray<EntryCandidate> candidates, bool allowNewTrigger, StructurePolicy policy,
+        ImmutableArray<PriceZone> zones = default)
     {
         ArgumentNullException.ThrowIfNull(latch);
+        ArgumentNullException.ThrowIfNull(policy);
+        var cooldown = policy.BreakoutCooldown();
+        var activations = BreakoutActivations(latch);
         var result = ImmutableArray.CreateBuilder<EntryCandidate>(candidates.Length);
         foreach (var candidate in candidates)
         {
@@ -133,9 +160,79 @@ public static class StructuralLifecycle
                 });
                 continue;
             }
+            // §10 돌파 쿨다운: 비교 기준은 확정된 과거 시각인 트리거 봉 종료(TriggerConfirmedAt)이며 현재 시각이 아니다.
+            // 경계는 "경과 < 쿨다운"만 차단한다 — 정확히 30분이면 새 발동을 허용한다.
+            if (candidate.Disposition == CandidateDisposition.Ready && candidate.Kind == SetupKind.Breakout &&
+                activations.Count > 0 &&
+                LastBreakoutActivation(activations, candidate.ZoneId, zones) is { } activatedAt &&
+                candidate.TriggerConfirmedAt - activatedAt < cooldown)
+            {
+                result.Add(candidate with
+                {
+                    Disposition = CandidateDisposition.Rejected,
+                    Plan = null,
+                    RejectionCodes = Add(candidate.RejectionCodes, CodeBreakoutCooldown)
+                });
+                continue;
+            }
             result.Add(candidate);
         }
         return result.ToImmutable();
+    }
+
+    /// <summary>
+    /// §10 돌파 쿨다운 표식. 세션·정책이 다르면 래치 자체가 승계되지 않으므로 키는 세션 안에서만 의미를 갖는다.
+    /// <paramref name="activatedAt"/>은 발동한 돌파 후보의 TriggerConfirmedAt(확정된 완료 봉 종료)이다.
+    /// </summary>
+    public static string BreakoutCooldownKey(string symbol, DateTimeOffset sessionStart, string zoneId,
+        DateTimeOffset activatedAt) =>
+        string.Join('|', BreakoutCooldownKeyPrefix, symbol, StructureMath.Iso(sessionStart),
+            SetupKinds.Name(SetupKind.Breakout), zoneId, StructureMath.Iso(activatedAt));
+
+    /// <summary>래치에 남은 쿨다운 표식을 ZoneId별 마지막 발동 시각으로 정리한다.</summary>
+    static Dictionary<string, DateTimeOffset> BreakoutActivations(StructuralLatch latch)
+    {
+        var activations = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        foreach (var key in latch.ConsumedGuardKeys)
+        {
+            if (!TryParseBreakoutCooldownKey(key, out var zoneId, out var activatedAt)) continue;
+            if (!activations.TryGetValue(zoneId, out var existing) || activatedAt > existing)
+                activations[zoneId] = activatedAt;
+        }
+        return activations;
+    }
+
+    /// <summary>
+    /// 같은 lineage(현재 ZoneId + 병합으로 흡수된 Aliases)의 마지막 돌파 발동 시각.
+    /// 무관한 원천으로 새로 만들어진 ZoneId에는 이전 쿨다운을 전달하지 않는다(§16B).
+    /// </summary>
+    static DateTimeOffset? LastBreakoutActivation(Dictionary<string, DateTimeOffset> activations, string zoneId,
+        ImmutableArray<PriceZone> zones)
+    {
+        DateTimeOffset? last = activations.TryGetValue(zoneId, out var own) ? own : null;
+        if (zones.IsDefaultOrEmpty) return last;
+        var zone = zones.FirstOrDefault(x => string.Equals(x.Id, zoneId, StringComparison.Ordinal));
+        if (zone is null) return last;
+        foreach (var alias in zone.Aliases)
+            if (activations.TryGetValue(alias, out var aliased) && (last is null || aliased > last.Value))
+                last = aliased;
+        return last;
+    }
+
+    static bool TryParseBreakoutCooldownKey(string key, out string zoneId, out DateTimeOffset activatedAt)
+    {
+        zoneId = string.Empty;
+        activatedAt = default;
+        if (!key.StartsWith(BreakoutCooldownKeyPrefix + "|", StringComparison.Ordinal)) return false;
+        var lastSeparator = key.LastIndexOf('|');
+        if (lastSeparator <= 0) return false;
+        if (!DateTimeOffset.TryParse(key[(lastSeparator + 1)..], CultureInfo.InvariantCulture,
+                DateTimeStyles.RoundtripKind, out activatedAt)) return false;
+        var head = key[..lastSeparator];
+        var zoneSeparator = head.LastIndexOf('|');
+        if (zoneSeparator <= 0) return false;
+        zoneId = head[(zoneSeparator + 1)..];
+        return zoneId.Length > 0;
     }
 
     /// <summary>
@@ -208,7 +305,15 @@ public static class StructuralLifecycle
             if (CandidateSelection.IsTerminal(candidate.Disposition))
                 tombstones = tombstones.SetItem(candidate.EventId, candidate.Disposition);
             if (candidate.Disposition is CandidateDisposition.Ready or CandidateDisposition.Entered)
+            {
                 guards = guards.Add(candidate.DuplicateGuardKey);
+                // §10 돌파 쿨다운의 기준 시점은 "재발동"의 대상인 발동, 즉 READY 성립이다. ENTERED는 READY를
+                // 거친 뒤에만 나오므로 같은 키가 다시 들어가도 집합이라 중복되지 않는다. off/shadow처럼 실제
+                // 진입이 없는 모드에서도 같은 억제가 걸려야 하므로 ENTERED만을 기준으로 삼지 않는다.
+                if (candidate.Kind == SetupKind.Breakout)
+                    guards = guards.Add(BreakoutCooldownKey(latch.Symbol, latch.SessionStart, candidate.ZoneId,
+                        candidate.TriggerConfirmedAt));
+            }
         }
 
         return latch with

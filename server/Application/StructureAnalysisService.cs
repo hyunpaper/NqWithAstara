@@ -212,7 +212,9 @@ public sealed class StructureAnalysisService(
             snapshot.OptionalLiquidity, blockers), _policy);
 
         var candidates = StructuralLifecycle.ApplyLive(
-            StructuralLifecycle.ApplyLatch(latch, detection.Candidates, gate.AllowNewTrigger),
+            // zones는 §10 돌파 쿨다운의 zone lineage(Aliases) 확인용이며 후보 계층(structureCutoff) 스냅샷이다.
+            StructuralLifecycle.ApplyLatch(latch, detection.Candidates, gate.AllowNewTrigger, _policy,
+                candidateLayer.Zones),
             snapshot.QuotePrice, now);
         var preferred = CandidateSelection.SelectPreferred(candidates)?.EventId;
 
