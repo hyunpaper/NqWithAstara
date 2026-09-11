@@ -22,6 +22,9 @@ public static class SimulationEngine
             if (!trade.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase) || trade.Status != "OPEN") continue;
             if (trade.Status == "OPEN" && quoteAt >= trade.EnteredAt && quoteAt < SessionEndOf(trade))
             {
+                // Quote timestamps are an ordered observation stream. A delayed duplicate must not
+                // change an already observed price or retroactively claim an earlier barrier hit.
+                if (!CanApplyQuote(trade, quoteAt)) { trades[i] = trade; continue; }
                 if (quotePrice <= trade.Stop)
                     trade = Close(trade, "STOP", quotePrice, quoteAt, quotePrice, false, "SAMPLED_QUOTE", "QUOTE_STOP");
                 else if (quotePrice >= trade.Target)
@@ -127,11 +130,11 @@ public static class SimulationEngine
 
     static SimTrade ObserveQuote(SimTrade trade, double quotePrice, DateTimeOffset quoteAt)
     {
-        if (trade.LastPriceAt is { } lastObservedAt && quoteAt < lastObservedAt) return trade;
         var execution = trade.Execution;
         if (execution is not null && SameMinute(quoteAt, execution.EntryBarStart) && quoteAt >= trade.EnteredAt &&
             (!execution.EntryMinuteEvidenceAt.HasValue || quoteAt >= execution.EntryMinuteEvidenceAt.Value))
-            execution = execution with { EntryMinuteCoverage = "PARTIALLY_OBSERVED_QUOTE", EntryMinuteEvidenceAt = quoteAt };
+            execution = execution with { EntryMinuteCoverage = "PARTIALLY_OBSERVED_QUOTE", EntryMinuteEvidenceAt = quoteAt, LastQuoteAt = quoteAt };
+        else if (execution is not null) execution = execution with { LastQuoteAt = quoteAt };
         return trade with { LastPrice = quotePrice, LastPriceAt = quoteAt, Execution = execution };
     }
 
@@ -163,7 +166,8 @@ public static class SimulationEngine
             ExitSource = source, ExitEvidenceAt = evidenceAt, EvaluatedBarStart = bar?.Timestamp,
             EvaluatedBarCloseAt = bar is null ? null : BarCloseAt(bar), BarrierDecision = decision,
             EvaluatedBarOpen = bar?.Open, EvaluatedBarHigh = bar?.High,
-            EvaluatedBarLow = bar?.Low, EvaluatedBarClose = bar?.Close
+            EvaluatedBarLow = bar?.Low, EvaluatedBarClose = bar?.Close,
+            LastQuoteAt = source == "SAMPLED_QUOTE" ? evidenceAt : execution.LastQuoteAt
         };
     }
 
@@ -175,6 +179,7 @@ public static class SimulationEngine
     };
 
     static DateTimeOffset BarCloseAt(Candle bar) => bar.Timestamp.AddMinutes(1);
+    static bool CanApplyQuote(SimTrade trade, DateTimeOffset quoteAt) => trade.Execution?.LastQuoteAt is not { } lastQuoteAt || quoteAt > lastQuoteAt;
     static bool SameMinute(DateTimeOffset left, DateTimeOffset right) => left.Year == right.Year && left.Month == right.Month &&
         left.Day == right.Day && left.Hour == right.Hour && left.Minute == right.Minute && left.Offset == right.Offset;
 }

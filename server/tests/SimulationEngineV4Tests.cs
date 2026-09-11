@@ -67,16 +67,27 @@ public sealed class SimulationEngineV4Tests
     }
 
     [Fact]
-    public void OlderOrDuplicateQuotesDoNotMoveObservedTimeOrEntryEvidenceBackward()
+    public void DelayedStopQuoteCannotRetroactivelyCloseAfterRestart()
     {
         var trade = Open(T.AddSeconds(3)) with { Execution = new ExecutionProvenance(T, T.AddMinutes(1), "UNOBSERVED", null) };
         var first = SimulationEngine.Process([trade], "NVDA", [], 101, T.AddSeconds(17), 50, 100, []);
-        var older = SimulationEngine.Process(first, "NVDA", [], 100, T.AddSeconds(10), 50, 100, []);
-        var duplicate = SimulationEngine.Process(older, "NVDA", [], 102, T.AddSeconds(17), 50, 100, []);
-        var execution = Assert.IsType<ExecutionProvenance>(duplicate[0].Execution);
-        Assert.Equal(102, duplicate[0].LastPrice);
-        Assert.Equal(T.AddSeconds(17), duplicate[0].LastPriceAt);
+        var restarted = SimulationEngine.Process(first, "NVDA", [], 94, T.AddSeconds(10), 50, 100, []);
+        var execution = Assert.IsType<ExecutionProvenance>(restarted[0].Execution);
+        Assert.Equal("OPEN", restarted[0].Status);
+        Assert.Equal(101, restarted[0].LastPrice);
+        Assert.Equal(T.AddSeconds(17), restarted[0].LastPriceAt);
         Assert.Equal(T.AddSeconds(17), execution.EntryMinuteEvidenceAt);
+    }
+
+    [Fact]
+    public void SameTimestampConflictingQuoteUsesFirstObservedPrice()
+    {
+        var trade = Open(T.AddSeconds(3)) with { Execution = new ExecutionProvenance(T, T.AddMinutes(1), "UNOBSERVED", null) };
+        var first = SimulationEngine.Process([trade], "NVDA", [], 101, T.AddSeconds(17), 50, 100, []);
+        var conflicting = SimulationEngine.Process(first, "NVDA", [], 94, T.AddSeconds(17), 50, 100, []);
+        Assert.Equal("OPEN", conflicting[0].Status);
+        Assert.Equal(101, conflicting[0].LastPrice);
+        Assert.Equal(T.AddSeconds(17), conflicting[0].LastPriceAt);
     }
 
     [Fact]
