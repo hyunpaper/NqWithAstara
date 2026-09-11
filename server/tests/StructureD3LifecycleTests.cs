@@ -58,7 +58,7 @@ public sealed class StructureD3LifecycleTests
 
         var ready = Detect().Candidates;
         Assert.Contains(ready, x => x.Disposition == CandidateDisposition.Ready);
-        var suppressed = StructuralLifecycle.ApplyLatch(Fresh(), ready, gate.AllowNewTrigger);
+        var suppressed = StructuralLifecycle.ApplyLatch(Fresh(), ready, gate.AllowNewTrigger, P);
         Assert.All(suppressed, x => Assert.Equal(CandidateDisposition.Wait, x.Disposition));
         Assert.All(suppressed, x => Assert.Null(x.Plan));
         Assert.All(suppressed, x => Assert.Contains(StructuralLifecycle.CodeNewTriggerSuppressed, x.Notes));
@@ -130,7 +130,7 @@ public sealed class StructureD3LifecycleTests
         var ready = computed.First(x => x.Disposition == CandidateDisposition.Ready);
         var latch = Fresh() with { Seeded = true, Tombstones = Fresh().Tombstones.SetItem(ready.EventId, terminal) };
 
-        var applied = StructuralLifecycle.ApplyLatch(latch, computed, allowNewTrigger: true);
+        var applied = StructuralLifecycle.ApplyLatch(latch, computed, allowNewTrigger: true, P);
         var same = applied.First(x => x.EventId == ready.EventId);
         Assert.Equal(terminal, same.Disposition);
         Assert.Null(same.Plan);
@@ -145,7 +145,7 @@ public sealed class StructureD3LifecycleTests
         var ready = computed.First(x => x.Disposition == CandidateDisposition.Ready);
         var latch = Fresh() with { Seeded = true, ConsumedGuardKeys = Fresh().ConsumedGuardKeys.Add(ready.DuplicateGuardKey) };
 
-        var applied = StructuralLifecycle.ApplyLatch(latch, computed, allowNewTrigger: true);
+        var applied = StructuralLifecycle.ApplyLatch(latch, computed, allowNewTrigger: true, P);
         var guarded = applied.Where(x => x.DuplicateGuardKey == ready.DuplicateGuardKey).ToArray();
         Assert.NotEmpty(guarded);
         Assert.All(guarded, x => Assert.NotEqual(CandidateDisposition.Ready, x.Disposition));
