@@ -109,6 +109,11 @@ public static class SimulationEngine
         // that a sell order could execute at a stop already skipped by the market.
         if (bar.Open <= trade.Stop)
             return Close(trade, "STOP", bar.Open, bar.Timestamp, bar.Close, false) with { LastEvaluatedBarAt = bar.Timestamp };
+        // A gap-up open already at/beyond target has the target order filled before the bar's
+        // own low can be checked against stop — the target print came first. Fill conservatively
+        // at Target rather than the more favorable Open (mirrors the stop-gap treatment above).
+        if (bar.Open >= trade.Target)
+            return Close(trade, "TARGET", trade.Target, bar.Timestamp, bar.Close, false) with { LastEvaluatedBarAt = bar.Timestamp };
         if (bar.Low <= trade.Stop)
             return Close(trade, "STOP", trade.Stop, bar.Timestamp, bar.Close, false) with { LastEvaluatedBarAt = bar.Timestamp };
         // When both levels occur within one minute and order is unknowable, stop-first is conservative.

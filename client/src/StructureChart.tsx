@@ -307,26 +307,29 @@ export default function StructureChart({ bars, analysis, candidate }: Props) {
   };
 
   const empty = series.length < 2;
+  // 이슈 #29: 구현 설명("…계획선을 그리지 않습니다") 대신 짧은 상태 문구만 남긴다.
+  // 상태를 지우지는 않는다 — 계획선이 없는 이유를 오인하지 않게 한 단어로 알린다.
   const planNote = !analysis
-    ? "구조 분석 결과가 없어 계획선을 그리지 않습니다."
+    ? "구조 분석 없음"
     : plan
       ? null
       : candidate
-        ? "이 후보에는 성립한 계획이 없어 진입·손절·목표 선을 그리지 않습니다 (사유는 아래 설명 참고)."
-        : "진입 후보가 없어 계획선을 그리지 않습니다.";
+        ? "성립한 계획 없음"
+        : "진입 후보 없음";
 
   return (
     <div className="structure-chart-block">
       <div className="structure-chart-meta">
-        <span className="sc-chip" title="마지막 완료 봉의 종료 시각 — 구조 표시 기준">
-          완료 봉 AsOf(표시 기준) <b>{clock(analysis?.analysisAsOf)}</b>
+        <span className="sc-chip">
+          완료 봉 AsOf <b>{clock(analysis?.analysisAsOf)}</b>
         </span>
-        <span className="sc-chip" title="후보 판정 cutoff — 트리거 봉 시작 시각">
+        <span className="sc-chip">
           후보 판정 cutoff <b>{clock(analysis?.lastCompletedBarStart)}</b>
         </span>
         <span className="sc-chip quote">
           실시간 호가 <b>{price(analysis?.quotePrice)}</b> · {clock(analysis?.quoteAt)}
         </span>
+        {planNote && <span className="sc-chip">{planNote}</span>}
       </div>
       <div
         className="structure-chart"
@@ -335,9 +338,8 @@ export default function StructureChart({ bars, analysis, candidate }: Props) {
         onMouseLeave={() => setTip(null)}
       >
         {empty ? (
-          <div className="structure-chart-empty">
-            배경 가격 곡선(완료 1분봉)이 아직 부족합니다. 구간·계획 값은 아래 설명에서 확인하세요.
-          </div>
+          // 이슈 #29: 표시용 배경 곡선의 구현 설명 대신 데이터 부족 상태만 적는다.
+          <div className="structure-chart-empty">가격 데이터 부족 — 차트 없음</div>
         ) : (
           <canvas ref={canvasRef} />
         )}
@@ -378,18 +380,6 @@ export default function StructureChart({ bars, analysis, candidate }: Props) {
           <i className="sc-line quote" /> 실시간 호가
         </span>
       </div>
-      <p className="structure-chart-note">
-        배경 곡선은 `/api/state`가 주는 최근 완료 1분봉 종가이며 표시용입니다. 구조 판단은 구간·계획
-        값으로만 하세요.
-        {pivots.length === 0 && (
-          <>
-            {" "}
-            확정 피벗 좌표는 현재 구조 API에 노출되지 않아 마커를 그리지 않습니다. 각 구간의 확정
-            시각은 음영 위에 마우스를 올리면 표시됩니다.
-          </>
-        )}
-        {planNote && <> {planNote}</>}
-      </p>
     </div>
   );
 }
