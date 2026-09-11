@@ -31,13 +31,10 @@ public sealed class StructureEntryGateTests
         return new Harness(structure, store, observations, runtime, clock, entries, generation, market);
     }
 
-    static StructureLiquidity AlignedBook(int minute) =>
-        new(99.60m, 99.61m, Fx.At(minute));
-
     static StructureObservationRequest Request(Harness harness, int minute, double? quotePrice = null,
         StructureLiquidity? liquidity = null) =>
         new(Fx.Symbol, harness.Generation, harness.Session, D6.Bars(minute), D6.Daily(),
-            quotePrice ?? D6.QuotePrice(Fx.At(minute)), Fx.At(minute), liquidity ?? AlignedBook(minute));
+            quotePrice ?? D6.QuotePrice(Fx.At(minute)), Fx.At(minute), liquidity);
 
     static async Task ObserveAt(Harness harness, int minute, double? quotePrice = null, TimeSpan? gateDelay = null,
         StructureLiquidity? liquidity = null)
@@ -85,7 +82,7 @@ public sealed class StructureEntryGateTests
             new StructureLiquidity(213.02m, 213.04m, Fx.At(65)), P));
 
     [Fact]
-    public void NoBookEvidenceBlocksInsteadOfAllowing()
+    public void NoBookEvidenceIsReportedAsUnknown()
     {
         Assert.Equal(StructureAnalysisService.NotePriceTickUnknown,
             StructureAnalysisService.PriceTickNote(null, P));
@@ -152,7 +149,7 @@ public sealed class StructureEntryGateTests
     }
 
     [Fact]
-    public async Task AMissingBookBlocksTheNewEntryAsUnknown()
+    public async Task AMissingBookIsNotedAsUnknownButNeverBlocksTheEntry()
     {
         var harness = Build(StructureEngineMode.Active);
         await ObserveAt(harness, 64);
@@ -161,22 +158,18 @@ public sealed class StructureEntryGateTests
             harness.Session, D6.Bars(65), D6.Daily(), D6.QuotePrice(Fx.At(65)), Fx.At(65), null), default);
 
         var view = Published(harness);
-        Assert.Empty(harness.Store.Trades);
-        Assert.Equal(0, harness.Entries.Calls);
         Assert.Contains(StructureAnalysisService.NotePriceTickUnknown, view.Notes);
-        Assert.Contains(StructureAnalysisService.NotePriceTickUnknown, view.Warnings);
-
-        var candidate = Assert.Single(view.Candidates);
-        Assert.Equal("REJECTED", candidate.State);
-        Assert.Contains(StructuralPlanner.UnsupportedPriceTick, candidate.RejectionCodes);
+        Assert.DoesNotContain(StructureAnalysisService.NotePriceTickUnknown, view.Warnings);
+        Assert.All(view.Candidates, x => Assert.DoesNotContain(StructuralPlanner.UnsupportedPriceTick, x.RejectionCodes));
+        Assert.True(harness.Store.Trades.Count == 1, Describe(view));
     }
 
     [Fact]
     public async Task ASupportedTickLeavesTheEntryPathUnchanged()
     {
         var harness = Build(StructureEngineMode.Active);
-        await ObserveAt(harness, 64);
-        await ObserveAt(harness, 65);
+        await ObserveAt(harness, 64, liquidity: new StructureLiquidity(99.60m, 99.61m, Fx.At(64)));
+        await ObserveAt(harness, 65, liquidity: new StructureLiquidity(99.60m, 99.61m, Fx.At(65)));
 
         var view = Published(harness);
         Assert.True(harness.Store.Trades.Count == 1, Describe(view));
