@@ -527,6 +527,10 @@ const CODE_TEXT: Record<string, string> = {
   RISK_TOO_WIDE: "손절 폭이 허용 위험을 넘습니다 (손절을 좁혀 통과시키지 않습니다)",
   STOP_NOT_BELOW_ENTRY: "계산된 손절이 진입가보다 낮지 않습니다",
   STOP_NOT_POSITIVE: "계산된 손절이 0 이하입니다",
+  // 이슈 #43: netR은 비용 대비 비율이라 손절폭이 비용보다 좁으면 위험을 재지 못한다.
+  STOP_INSIDE_COST: "손절 폭이 왕복 수수료보다 좁습니다",
+  // 이슈 #43: 구조 무효화 기준이 아니라 체결 잡음에 걸리는 선이라 거절한다.
+  STOP_INSIDE_NOISE: "손절 폭이 1분 ATR 절반보다 좁습니다 (체결 잡음 구간)",
   INVALID_ENTRY_REFERENCE: "진입 참고가가 유효하지 않습니다",
   ENTRY_REFERENCE_FROM_TRIGGER_CLOSE:
     "실시간 호가가 없어 트리거 봉 종가를 진입 참고가로 사용했습니다 (READY 아님)",
@@ -547,6 +551,8 @@ const CODE_TEXT: Record<string, string> = {
     "5분 구조 확인 전 반등 진입 — 구조 결측 상태 표식",
   COUNTER_TREND_SETUP: "추세와 반대 방향의 후보입니다",
   PULLBACK_REQUIRES_UP_OR_TRANSITION: "눌림 후보는 상승·전환 추세에서만 성립합니다",
+  // 이슈 #42: signedTrend<0에서 PULLBACK/BREAKOUT이 롱으로 승격되는 것을 막는 거절 사유.
+  TREND_DIRECTION_OPPOSES_LONG: "추세 방향이 롱 진입과 반대입니다 (역방향 진입은 거절합니다)",
   NO_VOLUME_BASELINE: "거래량 기준선이 없어 트리거 거래량 품질을 계산할 수 없습니다",
   MISSING_REQUIRED_QUALITY_COMPONENT: "필수 품질 요소가 결측입니다 (품질 점수 없음)",
   ZERO_REQUIRED_QUALITY_COMPONENT: "필수 품질 요소가 0입니다",
@@ -637,12 +643,19 @@ const CODE_TEXT: Record<string, string> = {
   AFTER_ENTRY_CUTOFF: "장 마감 전 신규 진입 차단 시간대입니다",
   ACTIVE_ENTRY_WIRING_PENDING:
     "active 모드라도 신규 진입 배선은 아직 연결되지 않았습니다 (D6 범위)",
+  // 이슈 #47: 같은 zone lineage에서 직전 돌파 발동으로부터 30분 이내면 새 트리거라도 승격하지 않는다.
+  BREAKOUT_ZONE_COOLDOWN: "같은 저항 구간의 돌파 재발동을 30분 동안 억제합니다",
 
   // v5 진입 관측 (D6 active 배선)
   V5_ENTRY_COMMITTED: "v5 구조 계획으로 진입을 생성했습니다",
   V5_ENTRY_BLOCKED_BY_OPEN_TRADE: "이 종목에 OPEN 거래가 있어 신규 진입을 보류했습니다",
   V5_ENTRY_PLAN_INVALID: "동결 계획의 가격 순서가 성립하지 않아 진입을 거절했습니다",
   V5_ENTRY_PORT_UNAVAILABLE: "진입 포트가 배선되지 않아 진입을 보류했습니다 (설정 문제)",
+
+  // 관측 저장 한도 (이슈 #44) — 서버 상수는 PascalCase(ObservationStorageLimited)다. 다른 코드와
+  // 대소문자 형식이 다르지만 codeText()는 원문 그대로 대조하므로 그대로 키로 쓴다.
+  ObservationStorageLimited: "관측 저장 한도로 주기 요약 일부가 축약되었습니다",
+  ObservationCoreStorageLimited: "관측 저장 한도로 핵심 관측까지 누락되어 전체 검증이 불가합니다",
 };
 
 // ── 결측 컴포넌트 이름 → 한국어 설명 ────────────────────────────────────────
