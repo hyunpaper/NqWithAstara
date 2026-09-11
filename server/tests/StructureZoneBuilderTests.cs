@@ -55,6 +55,18 @@ public sealed class StructureZoneBuilderTests
     }
 
     [Fact]
+    public void OverlappingLineCandidatesDoNotMergeBeyondTheWidthCap()
+    {
+        var a = Line(100.00m, .10m, Fx.Pivot("a", 100.00m, 10, 12));
+        var b = Line(100.05m, .10m, Fx.Pivot("b", 100.05m, 20, 22));
+
+        var zones = ZoneBuilder.Assemble([a, b], Request(30), .20, P).Zones;
+
+        Assert.Equal(2, zones.Length);
+        Assert.All(zones, z => Assert.True(z.Width > .15m));
+    }
+
+    [Fact]
     public void DistantCandidatesStayApart()
     {
         var zones = ZoneBuilder.Assemble(

@@ -234,20 +234,11 @@ public static class ZoneBuilder
             if (groups.Count == 0) { groups.Add(Clone(candidate)); continue; }
             var current = groups[^1];
             // 원래 폭이 큰 프로파일 구간을 강제로 줄이거나 다른 구간을 흡수하게 만들지 않는다(§6.3).
-            if ((current.Width > maxWidth || candidate.Width > maxWidth) &&
-                (HasProfileSource(current) || HasProfileSource(candidate)))
-            {
-                groups.Add(Clone(candidate));
-                continue;
-            }
+            if (current.Width > maxWidth || candidate.Width > maxWidth) { groups.Add(Clone(candidate)); continue; }
             if (candidate.Lower - current.Upper > gap) { groups.Add(Clone(candidate)); continue; }
             var lower = Math.Min(current.Lower, candidate.Lower);
             var upper = Math.Max(current.Upper, candidate.Upper);
-            if (upper - lower > maxWidth && candidate.Lower > current.Upper)
-            {
-                groups.Add(Clone(candidate));
-                continue;
-            }   // 연결식 과병합 차단
+            if (upper - lower > maxWidth) { groups.Add(Clone(candidate)); continue; }   // 연결식 과병합 차단
             current.Lower = lower;
             current.Upper = upper;
             foreach (var source in candidate.Sources)
@@ -256,8 +247,6 @@ public static class ZoneBuilder
         }
         return groups;
     }
-
-    static bool HasProfileSource(RawZone zone) => zone.Sources.Any(x => x.Family == ZoneSourceFamily.Profile);
 
     static RawZone Clone(RawZone source)
     {
