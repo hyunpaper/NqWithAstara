@@ -60,6 +60,10 @@ public sealed class StructureBreakoutCooldownTests
         return StructuralLifecycle.Commit(latch, Fx.At(triggerMinute), candidates, [], "sig", "obs");
     }
 
+    static string CooldownKey(EntryCandidate candidate) =>
+        StructuralLifecycle.BreakoutCooldownKey(Fx.Symbol, Fx.SessionStart, candidate.ZoneId,
+            candidate.TriggerConfirmedAt);
+
     // ── 기본 계약 ──
 
     [Fact]
@@ -231,9 +235,60 @@ public sealed class StructureBreakoutCooldownTests
     {
         var breakout = Breakout(Detect(30)) with { Disposition = disposition };
         var latch = StructuralLifecycle.Commit(Seeded(), Fx.At(30), [breakout], [], null, null);
-        var key = StructuralLifecycle.BreakoutCooldownKey(Fx.Symbol, Fx.SessionStart, BreakoutZoneId,
-            breakout.TriggerConfirmedAt);
-        Assert.Equal(recorded, latch.ConsumedGuardKeys.Contains(key));
+        Assert.Equal(recorded, latch.ConsumedGuardKeys.Contains(CooldownKey(breakout)));
+    }
+
+    /// <summary>
+    /// 이슈 #71: 같은 trigger에서 여러 BREAKOUT 후보가 READY여도 대표로 선택된 zone만 발동으로 본다.
+    /// 대표가 아닌 zone은 이후 독립 돌파 기회를 30분 cooldown으로 잃지 않아야 한다.
+    /// </summary>
+    [Fact]
+    public void CommitRecordsTheCooldownOnlyForThePreferredReadyBreakout()
+    {
+        var selected = Breakout(Detect(30));
+        var unselected = selected with
+        {
+            EventId = selected.EventId + "|unselected",
+            ZoneId = "unselected-zone",
+            EntryQuality = selected.EntryQuality!.Value - 1
+        };
+
+        var latch = StructuralLifecycle.Commit(Seeded(), Fx.At(30), [unselected, selected], [], null, null);
+
+        Assert.Equal(selected.EventId, CandidateSelection.SelectPreferred([unselected, selected])!.EventId);
+        Assert.Contains(CooldownKey(selected), latch.ConsumedGuardKeys);
+        Assert.DoesNotContain(CooldownKey(unselected), latch.ConsumedGuardKeys);
+
+        var laterUnselectedZone = Zones("unselected-zone");
+        var later = StructuralLifecycle.ApplyLatch(latch, Detect(45, laterUnselectedZone), allowNewTrigger: true, P,
+            laterUnselectedZone);
+        Assert.Equal(CandidateDisposition.Ready, Breakout(later).Disposition);
+        Assert.DoesNotContain(StructuralLifecycle.CodeBreakoutCooldown, Breakout(later).RejectionCodes);
+    }
+
+    /// <summary>active 모드에서 대표 후보가 ENTERED로 커밋되어도 같은 zone만 cooldown을 소비한다.</summary>
+    [Fact]
+    public void CommitRecordsTheCooldownOnlyForThePreferredEnteredBreakout()
+    {
+        var selected = Breakout(Detect(30)) with { Disposition = CandidateDisposition.Entered };
+        var unselected = selected with
+        {
+            EventId = selected.EventId + "|unselected",
+            ZoneId = "unselected-zone",
+            Disposition = CandidateDisposition.Ready,
+            EntryQuality = selected.EntryQuality!.Value - 1
+        };
+
+        var latch = StructuralLifecycle.Commit(Seeded(), Fx.At(30), [unselected, selected], [], null, null);
+
+        Assert.Contains(CooldownKey(selected), latch.ConsumedGuardKeys);
+        Assert.DoesNotContain(CooldownKey(unselected), latch.ConsumedGuardKeys);
+
+        var laterUnselectedZone = Zones("unselected-zone");
+        var later = StructuralLifecycle.ApplyLatch(latch, Detect(45, laterUnselectedZone), allowNewTrigger: true, P,
+            laterUnselectedZone);
+        Assert.Equal(CandidateDisposition.Ready, Breakout(later).Disposition);
+        Assert.DoesNotContain(StructuralLifecycle.CodeBreakoutCooldown, Breakout(later).RejectionCodes);
     }
 
     /// <summary>PULLBACK READY는 중복 방지 키만 남기고 돌파 쿨다운 표식을 남기지 않는다.</summary>

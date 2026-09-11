@@ -322,6 +322,7 @@ public static class StructuralLifecycle
 
         var tombstones = latch.Tombstones;
         var guards = latch.ConsumedGuardKeys;
+        var activatedBreakoutId = ActivatedBreakout(candidates)?.EventId;
         foreach (var candidate in candidates)
         {
             if (CandidateSelection.IsTerminal(candidate.Disposition))
@@ -332,10 +333,11 @@ public static class StructuralLifecycle
                 if (candidate.Disposition == CandidateDisposition.Entered && candidate.Kind is SetupKind.Pullback or SetupKind.Rebound &&
                     EpisodeConsumptionKey(candidate) is { } episodeKey)
                     guards = guards.Add(episodeKey);
-                // §10 돌파 쿨다운의 기준 시점은 "재발동"의 대상인 발동, 즉 READY 성립이다. ENTERED는 READY를
-                // 거친 뒤에만 나오므로 같은 키가 다시 들어가도 집합이라 중복되지 않는다. off/shadow처럼 실제
-                // 진입이 없는 모드에서도 같은 억제가 걸려야 하므로 ENTERED만을 기준으로 삼지 않는다.
-                if (candidate.Kind == SetupKind.Breakout)
+                // §10 돌파 쿨다운의 기준 시점은 "재발동"의 대상인 대표 발동이다. 같은 trigger에서 여러
+                // BREAKOUT 후보가 READY여도 §8의 실제 신규 거래 후보는 1개뿐이므로, 대표로 선택된 zone만
+                // cooldown을 소비한다. active에서 대표 후보가 ENTERED로 바뀐 뒤에도 같은 결론을 유지한다.
+                if (candidate.Kind == SetupKind.Breakout &&
+                    string.Equals(candidate.EventId, activatedBreakoutId, StringComparison.Ordinal))
                     guards = guards.Add(BreakoutCooldownKey(latch.Symbol, latch.SessionStart, candidate.ZoneId,
                         candidate.TriggerConfirmedAt));
             }
@@ -351,6 +353,26 @@ public static class StructuralLifecycle
             LastEventSignature = eventSignature ?? latch.LastEventSignature,
             LastObservationId = observationId ?? latch.LastObservationId
         };
+    }
+
+    static EntryCandidate? ActivatedBreakout(ImmutableArray<EntryCandidate> candidates)
+    {
+        var entered = SelectEnteredPreferred(candidates.Where(x => x.Kind == SetupKind.Breakout));
+        if (entered is not null) return entered;
+        var preferred = CandidateSelection.SelectPreferred(candidates);
+        return preferred?.Kind == SetupKind.Breakout
+            ? preferred
+            : null;
+    }
+
+    static EntryCandidate? SelectEnteredPreferred(IEnumerable<EntryCandidate> candidates)
+    {
+        var entered = candidates.Where(x => x.Disposition == CandidateDisposition.Entered && x.EntryQuality is not null);
+        return entered
+            .OrderByDescending(x => x.EntryQuality!.Value)
+            .ThenByDescending(x => x.NetR ?? decimal.MinValue)
+            .ThenBy(x => x.ZoneId, StringComparer.Ordinal)
+            .FirstOrDefault();
     }
 
     /// <summary>이벤트 상태 변화 감지용 canonical 서명. 변하면 full snapshot을 기록한다(§16).</summary>
