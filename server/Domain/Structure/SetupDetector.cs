@@ -182,7 +182,7 @@ public static class SetupDetector
         {
             foreach (var zone in zones)
             {
-                var pullback = DetectPullback(request, zone, trigger, previous, bars, structureCutoff);
+                var pullback = DetectPullback(request, zone, trigger, previous, bars, structureCutoff, warnings);
                 if (pullback is not null) candidates.Add(Build(request, policy, pullback, trigger, bars, structureCutoff,
                     triggerConfirmedAt, expiresAt, entryReference, entryNotes, spread, readyBlockers));
 
@@ -215,16 +215,24 @@ public static class SetupDetector
     /// <summary>
     /// PULLBACK: UP/TRANSITION에서 확인된 support(또는 retest된 flipped-support) 접촉 episode 뒤,
     /// 완료 봉이 직전 봉 High 위에서 마감하고 support Upper 위로 회복한다(§8).
+    /// 이슈 #64: 추세 상태 하나로 탈락한 경우 <see cref="NotePullbackTrendState"/>를 관측에 남긴다.
+    /// 후보를 만들지는 않는다 — 자격 조건과 임계값은 그대로다.
     /// </summary>
     static Hypothesis? DetectPullback(SetupDetectionRequest request, PriceZone zone,
-        StructureBar trigger, StructureBar previous, ImmutableArray<StructureBar> bars, DateTimeOffset structureCutoff)
+        StructureBar trigger, StructureBar previous, ImmutableArray<StructureBar> bars, DateTimeOffset structureCutoff,
+        SortedSet<string> warnings)
     {
         if (!IsUsableSupport(zone)) return null;
-        if (request.Trend.State is not (TrendState.Up or TrendState.Transition)) return null;
         if (trigger.Close <= previous.High || trigger.Close <= zone.Upper) return null;
 
         var episode = LatestEpisode(request.Episodes, zone, structureCutoff);
         if (episode is null) return null;
+
+        if (request.Trend.State is not (TrendState.Up or TrendState.Transition))
+        {
+            warnings.Add(NotePullbackTrendState);
+            return null;
+        }
 
         var notes = new SortedSet<string>(StringComparer.Ordinal);
         // §8/§16B: anchor=min(지지 Lower, 해당 눌림 episode의 확정된 Low). 트리거 저가로 anchor를 넓히지 않는다.
@@ -349,6 +357,7 @@ public static class SetupDetector
 
         var rejections = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var code in planning.ReasonCodes) rejections.Add(code);
+        var structureWaived = false;
         foreach (var code in readyBlockers)
         {
             // 이슈 #33(D7): MISSING_5M_STRUCTURE의 READY 차단은 추세 정렬(alignmentQuality)이 필수인
@@ -358,7 +367,7 @@ public static class SetupDetector
             // TrendAssessment.BlockersForReady 산출과 표시 경로(DataQuality)는 바꾸지 않는다 — 소비 지점 스코프다.
             if (hypothesis.Kind == SetupKind.Rebound && code == TrendEvaluator.BlockerMissing5mStructure)
             {
-                notes.Add(NoteReadyWithout5mStructure);   // 구조 결측 코호트 분리 집계용(#27/#28)
+                structureWaived = true;   // note는 최종 disposition 확정 후에 붙인다(#65)
                 continue;
             }
             rejections.Add(code);
@@ -396,6 +405,10 @@ public static class SetupDetector
             : expired ? CandidateDisposition.Expired
             : !planning.Viable || !quality.ReadyAllowed || rejections.Count > 0 ? CandidateDisposition.Rejected
             : CandidateDisposition.Ready;
+
+        // 구조 결측 코호트(#27/#28)는 실제로 READY에 도달한 후보만이다. 다른 사유로 거절·무효화된 후보에
+        // 같은 note를 달면 코호트가 "구조 결측 후보 전체"로 희석된다(#65).
+        if (structureWaived && disposition == CandidateDisposition.Ready) notes.Add(NoteReadyWithout5mStructure);
 
         return new EntryCandidate(eventId, guardKey, hypothesis.Kind, kindName, hypothesis.Zone.Id, trigger.Start,
             triggerConfirmedAt, structureCutoff, request.AnalysisAsOf, expiresAt, disposition, entryReference,

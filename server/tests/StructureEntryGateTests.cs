@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using Astra.Server;
 using Astra.Server.Application;
 using Astra.Server.Domain;
@@ -60,41 +59,67 @@ public sealed class StructureEntryGateTests
     [InlineData(99.625, StructureAnalysisService.NotePriceTickUnsupported)]
     [InlineData(0.4321, StructureAnalysisService.NotePriceTickUnsupported)]
     public void QuotePriceOffTheTickGridIsNotSupported(double quote, string? expected) =>
-        Assert.Equal(expected, StructureAnalysisService.PriceTickNote([], (decimal)quote, P));
+        Assert.Equal(expected, StructureAnalysisService.PriceTickNote((decimal)quote, null, P));
 
     [Fact]
-    public void ABarPriceOffTheTickGridIsNotSupported()
+    public void BookPricesOffTheTickGridAreNotSupported()
     {
-        ImmutableArray<StructureBar> clean = [Fx.Bar(0, 100.00m, 100.10m, 99.90m, 100.05m)];
-        ImmutableArray<StructureBar> dirty = [Fx.Bar(0, 100.00m, 100.1025m, 99.90m, 100.05m)];
-
-        Assert.Null(StructureAnalysisService.PriceTickNote(clean, 100.05m, P));
+        Assert.Null(StructureAnalysisService.PriceTickNote(211.92m,
+            new StructureLiquidity(211.91m, 211.93m, Fx.At(65)), P));
         Assert.Equal(StructureAnalysisService.NotePriceTickUnsupported,
-            StructureAnalysisService.PriceTickNote(dirty, 100.05m, P));
+            StructureAnalysisService.PriceTickNote(211.92m,
+                new StructureLiquidity(211.9125m, 211.93m, Fx.At(65)), P));
+        Assert.Equal(StructureAnalysisService.NotePriceTickUnsupported,
+            StructureAnalysisService.PriceTickNote(211.92m,
+                new StructureLiquidity(211.91m, 211.9375m, Fx.At(65)), P));
+    }
+
+    [Fact]
+    public void MinuteBarClosesOffTheTickGridDoNotDecideTheTick()
+    {
+        Assert.Null(StructureAnalysisService.PriceTickNote(211.92m, null, P));
+        Assert.Null(StructureAnalysisService.PriceTickNote(213.03m,
+            new StructureLiquidity(213.02m, 213.04m, Fx.At(65)), P));
     }
 
     [Fact]
     public void NoPriceEvidenceBlocksInsteadOfAllowing()
     {
         Assert.Equal(StructureAnalysisService.NotePriceTickUnknown,
-            StructureAnalysisService.PriceTickNote([], null, P));
+            StructureAnalysisService.PriceTickNote(null, null, P));
         Assert.Equal(StructureAnalysisService.NotePriceTickUnknown,
-            StructureAnalysisService.PriceTickNote([], 0m, P));
+            StructureAnalysisService.PriceTickNote(0m, new StructureLiquidity(0m, 0m, Fx.At(65)), P));
+        Assert.Equal(StructureAnalysisService.NotePriceTickUnknown,
+            StructureAnalysisService.PriceTickNote(null, new StructureLiquidity(null, null, Fx.At(65)), P));
     }
 
     [Fact]
-    public void OnlyTheMostRecentBarsDecideTheTick()
+    public async Task TossShapedMinuteBarsWithAnAlignedQuoteNoLongerBlockTheEntry()
     {
-        var bars = Enumerable.Range(0, StructureAnalysisService.PriceTickSampleBars + 1)
-            .Select(i => i == 0
-                ? Fx.Bar(i, 100.0001m, 100.0001m, 100.0001m, 100.0001m)
-                : Fx.Bar(i, 100.00m, 100.10m, 99.90m, 100.05m))
-            .ToImmutableArray();
+        var harness = Build(StructureEngineMode.Active);
+        await ObserveAt(harness, 64);
+        harness.Clock.Reset(Fx.At(65), TimeSpan.Zero);
+        await harness.Structure.ObserveAsync(new StructureObservationRequest(Fx.Symbol, harness.Generation,
+            harness.Session, TossShapedBars(65), D6.Daily(), 211.92, Fx.At(65),
+            new StructureLiquidity(211.91m, 211.93m, Fx.At(65))), default);
 
-        Assert.Null(StructureAnalysisService.PriceTickNote(bars, 100.05m, P));
-        Assert.Equal(StructureAnalysisService.NotePriceTickUnsupported,
-            StructureAnalysisService.PriceTickNote(bars.Take(2).ToImmutableArray(), 100.05m, P));
+        var view = Published(harness);
+        Assert.DoesNotContain(StructureAnalysisService.NotePriceTickUnsupported, view.Notes);
+        Assert.DoesNotContain(StructureAnalysisService.NotePriceTickUnknown, view.Notes);
+        Assert.DoesNotContain(StructureAnalysisService.NotePriceTickUnsupported, view.Warnings);
+        Assert.All(view.Candidates, x => Assert.DoesNotContain(StructuralPlanner.UnsupportedPriceTick, x.RejectionCodes));
     }
+
+    static Candle[] TossShapedBars(int count)
+    {
+        var bars = D6.Bars(count);
+        bars[^2] = Reprice(bars[^2], 211.475);
+        bars[^1] = Reprice(bars[^1], 213.0326);
+        return bars;
+    }
+
+    static Candle Reprice(Candle bar, double price) =>
+        bar with { Open = price, High = price, Low = price, Close = price };
 
     /// <summary>#41과 같은 미배선 재발 방지: Application이 판정을 넘기지 않으면 Domain 기본값(허용)으로 READY가 나온다.</summary>
     [Fact]

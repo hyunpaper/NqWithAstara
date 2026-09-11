@@ -25,7 +25,9 @@ import {
 import { useVisiblePolling } from "./useVisiblePolling";
 import LiquidityPanel from "./LiquidityPanel";
 import StructurePanel from "./StructurePanel";
-import SimStructurePanel from "./SimStructurePanel";
+// 이슈 #84: v5 코호트 섹션(SimStructurePanel)은 대시보드 렌더링에서 제거했다.
+// data.structure/서버 집계(SimulationCohorts.cs)는 유지되며, 아래 import와
+// <SimStructurePanel report={data.structure} /> 한 줄을 되돌리면 복원된다.
 import LiveStructureCells from "./LiveStructureCells";
 import { planV5Notifications, v4PushEnabled } from "./alertPlanner";
 import type {
@@ -1107,27 +1109,6 @@ export default function App() {
                         {percent(s.changePercent)}
                       </small>
                     </div>
-                    <div className="score" title="참고 점수(v4) · 100점 만점 — v5 평가와 별개">
-                      <b
-                        style={{
-                          color: scoreStyle(Math.round(s.score ?? 0), true)
-                            ?.color,
-                        }}
-                      >
-                        {Math.round(s.score ?? 0)}
-                      </b>
-                      <small>참고(v4)</small>
-                    </div>
-                    <span
-                      className={`tag ${s.action.toLowerCase()}`}
-                      title="v4 점수 기준 관찰 태그 — v5 진입 판단과 별개"
-                    >
-                      {s.action === "BUY"
-                        ? "v4 매수 관찰"
-                        : s.action === "SELL"
-                          ? "v4 매도 관찰"
-                          : "v4 중립"}
-                    </span>
                     <ChevronRight size={15} />
                     <LiveStructureCells row={rowOf(s.symbol)} mode={structureMode} />
                   </button>
@@ -1512,8 +1493,6 @@ function Dashboard() {
       )}
       {cohort && s.closed < 10 && !analysis?.sampleWarning && <div className="sample-warning">청산 {s.closed}건의 작은 표본입니다. 현재 수치는 잠정 관찰값이며 규칙 변경 근거로 확정하기 어렵습니다.</div>}
       {analysis?.sampleWarning && <div className="sample-warning">{analysis.sampleWarning}</div>}
-      {/* 이슈 #27: v5 동결 근거 코호트 — 집계는 전부 서버(Domain) 소유 */}
-      <SimStructurePanel report={data.structure} />
       {analysis && (
         <section className="panel metrics-panel">
           <div className="panel-head">
@@ -1667,7 +1646,6 @@ function Dashboard() {
               <tr>
                 <th>진입 시각</th>
                 <th>종목</th>
-                <th>신호</th>
                 <th>진입가</th>
                 <th>손절가</th>
                 <th>목표가</th>
@@ -1680,11 +1658,8 @@ function Dashboard() {
               {trades.map((t) => (
                 <tr key={t.id}>
                   <td>{dt(t.enteredAt)}</td>
-                  <td>
+                  <td className="has-tip" title={`${kindLabel(t.kind)} · ${tradeEntryTooltip(t)}`}>
                     <b>{t.symbol}</b>
-                  </td>
-                  <td className="has-tip" title={tradeEntryTooltip(t)}>
-                    {kindLabel(t.kind)}
                     {t.structure && <small className="estimated-exit">v5 동결</small>}
                   </td>
                   <td>{money(t.entryPrice)}</td>
@@ -1720,7 +1695,7 @@ function Dashboard() {
               ))}
               {!trades.length && (
                 <tr>
-                  <td colSpan={9} className="muted">
+                  <td colSpan={8} className="muted">
                     기록이 없습니다.
                   </td>
                 </tr>

@@ -31,7 +31,9 @@ public sealed class StructureObservationRetentionTests : IDisposable
 
     static StructureZoneDto Zone(int i) => new($"zone-{i}", 1, 1, 99m, 100m, "SUPPORT", "SUPPORT",
         D3.At(0), D3.At(10), ["pivot", "profile"], 3, 2, .5, .4, .3, .2, .1, 0, 4, 3, 1, 0,
-        [], true, [], [], false, false);
+        [], true, [], [], false, false, [$"src-{i}-a", $"src-{i}-b"],
+        [new StructureEvidenceGroupDto("PIVOT", D3.At(0), D3.At(10), [$"src-{i}-a", $"src-{i}-b"])],
+        [new StructureRoleChangeDto(D3.At(10), "UNRESOLVED", "SUPPORT", "CONFIRMED")]);
 
     static StructurePlanDto Plan() => new("plan-1", "PULLBACK", 100m, 99m, 98.90m, 102m, "zone-1", 98.80m, 99.20m,
         "zone-9", 101.80m, 102.20m, .15m, "ATR", .01m, 2m, 1.10m, 1.80m, 1.1, .02m, .01m, .03m, false,

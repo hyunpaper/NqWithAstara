@@ -113,9 +113,14 @@ public sealed record VolumeProfile(decimal BinWidth, int BinWidthMultiple, Immut
     ImmutableArray<ProfileNode> Nodes, int? PocIndex, double InputVolume, double AllocatedVolume,
     bool Coarsened, ImmutableArray<string> Warnings)
 {
-    public static VolumeProfile Empty(decimal binWidth, params string[] warnings) => new(binWidth, 1,
-        ImmutableArray<VolumeProfileBin>.Empty, ImmutableArray<ProfileNode>.Empty, null, 0, 0, false,
-        warnings.ToImmutableArray());
+    /// <summary>
+    /// bin을 만들지 못한 프로파일. 실제 입력 거래량과 coarsening 사실은 그대로 싣는다 — 실패 원인이
+    /// "거래량 없음"인지 "bin 상한 미달"인지 사후 구분할 수 있어야 한다(§16A, #65).
+    /// AllocatedVolume만 0인 것은 배분된 거래량이 실제로 없기 때문이다.
+    /// </summary>
+    public static VolumeProfile Empty(decimal binWidth, int binWidthMultiple, double inputVolume, bool coarsened,
+        params string[] warnings) => new(binWidth, binWidthMultiple, ImmutableArray<VolumeProfileBin>.Empty,
+        ImmutableArray<ProfileNode>.Empty, null, inputVolume, 0, coarsened, warnings.ToImmutableArray());
 }
 
 /// <summary>원천별 데이터 품질(§16B). expectedCount를 정의할 수 없으면 CoverageRatio=null이다.</summary>

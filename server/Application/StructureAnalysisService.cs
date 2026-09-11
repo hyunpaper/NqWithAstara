@@ -39,12 +39,23 @@ public sealed record StructureTrendDto(string State, double? SignedTrend, double
     double? VwapSd, bool StructureEvidenceMissing, int BarCount, DateTimeOffset AnalysisCutoff,
     string[] UsedFamilies, string[] MissingComponents, string[] Warnings);
 
+/// <summary>
+/// §11 Zone 저장 계약의 증거 묶음. Key는 (family, from, to)의 SHA-256이라 이 세 필드로 다시 계산되므로
+/// 관측 크기를 위해 싣지 않는다(#65). 그래서 Family는 다른 DTO와 달리 대문자화하지 않고 enum 이름 그대로다.
+/// </summary>
+public sealed record StructureEvidenceGroupDto(string Family, DateTimeOffset From, DateTimeOffset To,
+    string[] SourceIds);
+
+/// <summary>§16B Zone 역할 전이. "언제 왜 BROKEN이 됐는지"를 관측만으로 복원하기 위한 최소 기록이다.</summary>
+public sealed record StructureRoleChangeDto(DateTimeOffset At, string From, string To, string Reason);
+
 public sealed record StructureZoneDto(string Id, int BoundsRevision, int SnapshotRevision, decimal Lower,
     decimal Upper, string Role, string OriginalRole, DateTimeOffset FirstConfirmedAt, DateTimeOffset LastConfirmedAt,
     string[] SourceKinds, int SourceCount, int IndependentFamilies, double? Strength, double? TouchEvidence,
     double? ReactionEvidence, double? Recency, double? Confluence, double? BreachPenalty, int CompletedEpisodes,
     int SuccessEpisodes, int FailedEpisodes, int PendingEpisodes, string[] MissingEvidence, bool Eligible,
-    string[] RejectReasons, string[] ApproximationFlags, bool ProfileOnly, bool Retired);
+    string[] RejectReasons, string[] ApproximationFlags, bool ProfileOnly, bool Retired,
+    string[] SourceIds, StructureEvidenceGroupDto[] EvidenceGroups, StructureRoleChangeDto[] RoleHistory);
 
 public sealed record StructurePlanDto(string PlanId, string Kind, decimal EntryReference, decimal InvalidationAnchor,
     decimal Stop, decimal Target, string InvalidationZoneId, decimal InvalidationLower, decimal InvalidationUpper,
@@ -117,14 +128,22 @@ public sealed class StructureAnalysisService(
     /// <summary>§12.5 gate 재확인에서 신규 진입이 막혔다. 뒤의 코드가 구체 사유다.</summary>
     public const string NoteEntryGateRecheck = "V5_ENTRY_BLOCKED_BY_GATE_RECHECK";
 
-    /// <summary>tick 판정에 쓰는 최근 완료 봉 수. 과거 한 건의 이상 호가가 하루 전체를 막지 않게 한다.</summary>
-    public const int PriceTickSampleBars = 30;
+    /// <summary>#64 §16: 같은 봉 안의 상태 전이 관측. 봉의 full 관측이 이미 가진 zones/quality를 반복하지 않는다.</summary>
+    public const string DetailTransition = "transition";
+
+    /// <summary>
+    /// #64 §19-9: v5 평가가 예외로 죽은 상태. 자료 부족(UNAVAILABLE)과 달리 계산 자체가 실패했다는 뜻이며
+    /// 워밍업으로 위장하지 않는다.
+    /// </summary>
+    public const string WarningEvaluationFailed = "V5_EVALUATION_FAILED";
 
     readonly StructureEngineOptions _options = options ?? StructureEngineOptions.Off;
     readonly StructurePolicy _policy = policy ?? StructurePolicy.Default;
     readonly ConcurrentDictionary<string, CacheEntry> _cache = new(StringComparer.OrdinalIgnoreCase);
     readonly ConcurrentDictionary<string, StructuralLatch> _latches = new(StringComparer.OrdinalIgnoreCase);
     readonly ConcurrentDictionary<string, StructureAnalysisView> _published = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>#64: 마지막 평가가 예외로 끝난 종목. 성공하면 즉시 사라진다.</summary>
+    readonly ConcurrentDictionary<string, byte> _failed = new(StringComparer.OrdinalIgnoreCase);
     readonly SemaphoreSlim _restoreGate = new(1, 1);
     int _restored;
 
@@ -140,13 +159,14 @@ public sealed class StructureAnalysisService(
     public string EntryOwner => _options.Mode == StructureEngineMode.Active ? EntryOwnerV5 : EntryOwnerV4;
 
     /// <summary>세션 종료·모니터링 중지 시 메모리를 정리한다(§16 "메모리도 세션 종료 시 정리한다").</summary>
-    public void Clear() { _cache.Clear(); _published.Clear(); _latches.Clear(); }
+    public void Clear() { _cache.Clear(); _published.Clear(); _latches.Clear(); _failed.Clear(); }
 
     public void Remove(string symbol)
     {
         _cache.TryRemove(symbol, out _);
         _published.TryRemove(symbol, out _);
         _latches.TryRemove(symbol, out _);
+        _failed.TryRemove(symbol, out _);
     }
 
     public bool TryGetPublished(string symbol, out StructureAnalysisView view) =>
@@ -159,7 +179,23 @@ public sealed class StructureAnalysisService(
         ArgumentNullException.ThrowIfNull(request);
         // off는 계산을 유발하지 않는다(§16B).
         if (_options.Mode == StructureEngineMode.Off) return;
+        try
+        {
+            await EvaluateAsync(request, ct);
+            _failed.TryRemove(request.Symbol, out _);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch
+        {
+            // #64 §19-9: 실패를 워밍업으로 위장하지 않는다. 예외 자체는 그대로 올려 보내 호출자의
+            // 종목 단위 격리·진단 기록을 바꾸지 않는다.
+            _failed[request.Symbol] = 0;
+            throw;
+        }
+    }
 
+    async Task EvaluateAsync(StructureObservationRequest request, CancellationToken ct)
+    {
         var now = clock.GetLocalNow();
         var build = StructureSnapshotFactory.Create(request.Symbol, request.Market, request.OneMinuteBars,
             request.DailyBars, request.QuotePrice, request.QuoteAt, now, request.Generation, _policy,
@@ -183,17 +219,55 @@ public sealed class StructureAnalysisService(
                        string.Equals(cached.PolicyHash, PolicyHash, StringComparison.Ordinal);
 
         // §12.4: 새 봉이 없는 poll은 구조를 전체 재계산하지 않는다. live 무효화·신선도는 매 poll 확인한다.
-        if (reusable && cached!.AnalysisAsOf == snapshot.AnalysisAsOf && cached.Generation == request.Generation)
+        // #64: generation은 구조 입력이 아니다. 관심종목 추가로 generation이 올라도 이미 평가된 봉을
+        // 다시 계산해 READY를 WAIT로 되돌리지 않는다(재계산 결과는 gate가 신규 트리거를 막아 퇴행한다).
+        if (reusable && cached!.AnalysisAsOf == snapshot.AnalysisAsOf)
         {
             var refreshed = StructuralLifecycle.ApplyLive(cached.Candidates, snapshot.QuotePrice, now);
-            if (Signature(refreshed) == Signature(cached.Candidates)) return;
+            var liveSignature = Signature(refreshed);
+            var transitioned = !string.Equals(liveSignature, Signature(cached.Candidates), StringComparison.Ordinal);
+            if (!transitioned && cached.Generation == request.Generation) return;
+
             var preferredId = CandidateSelection.SelectPreferred(refreshed)?.EventId;
-            var liveView = View(request, build, snapshot, lastBarStart, cached.Trend, cached.Zones, refreshed,
-                cached.Quality, cached.Notes, cached.Warnings, preferredId, now, ImmutableArray<string>.Empty);
+            var liveCandidateDtos = refreshed.Select(StructureViewMapper.Candidate).ToArray();
+            var liveSummary = (refreshed.Length == 0
+                ? CandidateDisposition.Wait
+                : CandidateSelection.Summarize(refreshed)).ToString().ToUpperInvariant();
+
             using (await runtime.EnterControlAsync(ct))
             {
-                if (!Current(request, snapshot, now)) return;
-                _cache[request.Symbol] = cached with { Candidates = refreshed, View = liveView };
+                if (!Current(request, snapshot, clock.GetLocalNow())) return;
+
+                var liveWarnings = ImmutableArray<string>.Empty;
+                if (transitioned)
+                {
+                    // #64 §16/§16B: 같은 봉 안의 상태 전이(READY→INVALIDATED/EXPIRED)도 관측에 남긴다.
+                    // 기록은 이벤트 서명이 바뀐 poll에서만 일어나고 ID가 그 서명을 포함하므로 주기 반복은
+                    // 그대로 중복 폐기된다. 상태는 종결 방향으로만 움직여 봉당 기록 수는 후보 수로 제한된다.
+                    var liveRecord = new StructureObservationRecord(
+                        StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash, liveSignature),
+                        RecordVersion, snapshot.Symbol, now, snapshot.SessionStart, snapshot.AnalysisAsOf,
+                        snapshot.QuoteAt, lastBarStart, PolicyHash, EngineVersion, ModeName, EntryOwner,
+                        DetailTransition, build.Status, liveSummary, preferredId,
+                        cached.Trend is null ? null : StructureViewMapper.Trend(cached.Trend), null, null,
+                        liveCandidateDtos, cached.Warnings.ToArray(), cached.Notes.ToArray());
+                    var liveWrite = await observations.AppendAsync(liveRecord, ct);
+                    if (!Current(request, snapshot, clock.GetLocalNow())) return;
+                    liveWarnings = StructureObservationWriter.StorageWarnings(liveWrite);
+
+                    // 저장 성공 뒤에만 래치를 올린다(§12.6). 종결된 후보의 tombstone이 여기서 남는다.
+                    _latches[request.Symbol] = StructuralLifecycle.Commit(latch, lastBarStart, refreshed,
+                        latch.RetiredZoneIds, liveSignature, liveRecord.ObservationId);
+                    await PersistAsync(ct);
+                }
+
+                var liveView = View(request, build, snapshot, lastBarStart, cached.Trend, cached.Zones, refreshed,
+                    cached.Quality, cached.Notes, cached.Warnings, preferredId, now, liveWarnings,
+                    candidateDtos: liveCandidateDtos, summary: liveSummary);
+                _cache[request.Symbol] = cached with
+                {
+                    Candidates = refreshed, Generation = request.Generation, View = liveView
+                };
                 _published[request.Symbol] = liveView;
             }
             return;
@@ -219,7 +293,7 @@ public sealed class StructureAnalysisService(
             .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToImmutableArray();
 
         // #61 §16B: tick 지원 여부는 Application이 판정해서 넘긴다. Domain 기본값(허용)에 의존하지 않는다.
-        var tickNote = PriceTickNote(build.Bars.Bars, snapshot.QuotePrice, _policy);
+        var tickNote = PriceTickNote(snapshot.QuotePrice, snapshot.OptionalLiquidity, _policy);
 
         var detection = SetupDetector.Detect(SetupDetectionRequest.Create(snapshot.Symbol, snapshot.SessionStart,
             snapshot.SessionEnd, snapshot.AnalysisAsOf, now, build.Bars.Bars, candidateLayer.Zones,
@@ -244,8 +318,9 @@ public sealed class StructureAnalysisService(
         foreach (var blocker in detection.ReadyBlockers) warnings.Add(blocker);
         if (tickNote is not null) { notes.Add(tickNote); warnings.Add(tickNote); }
 
-        var observationId = StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash);
         var signature = StructuralLifecycle.EventSignature(candidates, preferred);
+        // #64: 관측 ID는 (봉, 이벤트 서명) 쌍이다. 같은 봉의 같은 상태는 그대로 중복 폐기되고 전이만 새 ID를 얻는다.
+        var observationId = StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash, signature);
         var full = !string.Equals(signature, latch.LastEventSignature, StringComparison.Ordinal);
 
         var zoneDtos = displayLayer.Zones.Select(StructureViewMapper.Zone).ToArray();
@@ -456,30 +531,23 @@ public sealed class StructureAnalysisService(
     }
 
     /// <summary>
-    /// #61 §16B: 첫 버전은 tick USD 0.01 종목만 신규 READY 대상이다. 앱에 tick metadata가 없으므로 관측된
-    /// 가격(최근 완료 봉 OHLC + 현재 시세)이 전부 정책 tick의 배수인지로 판정하고, 근거가 없으면 차단한다.
+    /// #86 §16B: tick USD 0.01 종목만 신규 READY 대상이다. 앱에 tick metadata가 없으므로 관측 가격으로 판정하되,
+    /// 근거는 체결가 원천(현재 시세)과 호가 원천(최우선 매수·매도)으로만 한정한다. 1분봉·일봉 OHLC는 Toss가
+    /// 가공한 값이라 tick 격자를 벗어나므로(#86 실측: 211.475, 213.0326) 근거에서 뺀다.
     /// 반환 null이 지원이며 그 외는 관측에 남길 사유다.
     /// </summary>
-    public static string? PriceTickNote(IEnumerable<StructureBar> bars, decimal? quotePrice, StructurePolicy policy)
+    public static string? PriceTickNote(decimal? quotePrice, StructureLiquidity? liquidity, StructurePolicy policy)
     {
-        ArgumentNullException.ThrowIfNull(bars);
         ArgumentNullException.ThrowIfNull(policy);
         var tick = policy.PriceTick;
         if (tick <= 0) return NotePriceTickUnknown;
 
         var observed = 0;
-        foreach (var bar in bars.TakeLast(PriceTickSampleBars))
-            foreach (var price in new[] { bar.Open, bar.High, bar.Low, bar.Close })
-            {
-                if (price <= 0) continue;
-                observed++;
-                if (decimal.Remainder(price, tick) != 0m) return NotePriceTickUnsupported;
-            }
-
-        if (quotePrice is { } quote && quote > 0)
+        foreach (var candidate in new[] { quotePrice, liquidity?.BestBid, liquidity?.BestAsk })
         {
+            if (candidate is not { } price || price <= 0) continue;
             observed++;
-            if (decimal.Remainder(quote, tick) != 0m) return NotePriceTickUnsupported;
+            if (decimal.Remainder(price, tick) != 0m) return NotePriceTickUnsupported;
         }
 
         return observed == 0 ? NotePriceTickUnknown : null;
@@ -595,9 +663,17 @@ public sealed class StructureAnalysisService(
             return (200, Response(symbol, StructureAnalysisStatus.MarketClosed, now,
                 "미국 정규장 외에는 구조 분석을 갱신하지 않습니다.", null));
 
+        // #64 §19-9: 마지막 평가가 예외로 끝났으면 워밍업도 정상도 아니다. 자료 부족과 구분되는 문구로 드러낸다.
+        var failed = _failed.ContainsKey(symbol);
         if (!_published.TryGetValue(symbol, out var view))
-            return (200, Response(symbol, StructureAnalysisStatus.Warmup, now,
-                "완료된 정규장 1분봉이 모이면 구조 분석을 표시합니다.", null));
+            return (200, failed
+                ? Response(symbol, StructureAnalysisStatus.Unavailable, now,
+                    "구조 분석 계산이 실패했습니다. 자료 부족이 아니라 엔진 오류입니다.", null)
+                : Response(symbol, StructureAnalysisStatus.Warmup, now,
+                    "완료된 정규장 1분봉이 모이면 구조 분석을 표시합니다.", null));
+        if (failed)
+            return (200, Response(symbol, StructureAnalysisStatus.Unavailable, now,
+                "최근 구조 분석 계산이 실패했습니다. 아래 값은 마지막으로 성공한 평가입니다.", view));
 
         return (200, Response(symbol, view.Status, now, null, view));
     }
@@ -614,12 +690,15 @@ public sealed class StructureAnalysisService(
             .Select(symbol =>
             {
                 _published.TryGetValue(symbol, out var view);
+                var failed = _options.Mode != StructureEngineMode.Off && _failed.ContainsKey(symbol);
                 return (object)new
                 {
                     symbol,
-                    status = view?.Status ?? (_options.Mode == StructureEngineMode.Off
-                        ? StructureAnalysisStatus.Disabled
-                        : StructureAnalysisStatus.Warmup),
+                    status = failed
+                        ? StructureAnalysisStatus.Unavailable
+                        : view?.Status ?? (_options.Mode == StructureEngineMode.Off
+                            ? StructureAnalysisStatus.Disabled
+                            : StructureAnalysisStatus.Warmup),
                     trendState = view?.Trend?.State,
                     signedTrend = view?.Trend?.SignedTrend,
                     candidateState = view?.CandidateSummary,
@@ -633,7 +712,10 @@ public sealed class StructureAnalysisService(
                         .Select(x => x.Kind).FirstOrDefault(),
                     analysisAsOf = view?.AnalysisAsOf,
                     quoteAt = view?.QuoteAt,
-                    warnings = view?.Warnings ?? []
+                    warnings = failed
+                        ? (view?.Warnings ?? []).Append(WarningEvaluationFailed).Distinct(StringComparer.Ordinal)
+                            .OrderBy(x => x, StringComparer.Ordinal).ToArray()
+                        : view?.Warnings ?? []
                 };
             })
             .ToArray();
@@ -696,7 +778,12 @@ public static class StructureViewMapper
             Finite(strength?.Confluence), Finite(strength?.BreachPenalty), strength?.CompletedEpisodes ?? 0,
             strength?.SuccessEpisodes ?? 0, strength?.FailedEpisodes ?? 0, strength?.PendingEpisodes ?? 0,
             strength?.MissingComponents.ToArray() ?? [], zone.Eligible, zone.RejectReasons.ToArray(),
-            zone.ApproximationFlags.ToArray(), zone.ProfileOnly, zone.Retired);
+            zone.ApproximationFlags.ToArray(), zone.ProfileOnly, zone.Retired,
+            zone.SourceIds.ToArray(),
+            zone.EvidenceGroups.Select(x => new StructureEvidenceGroupDto(x.Family.ToString(), x.From, x.To,
+                x.SourceIds.ToArray())).ToArray(),
+            zone.RoleHistory.Select(x => new StructureRoleChangeDto(x.At, x.From.ToString().ToUpperInvariant(),
+                x.To.ToString().ToUpperInvariant(), x.Reason)).ToArray());
     }
 
     public static StructurePlanDto? Plan(StructuralTradePlan? plan) => plan is null

@@ -226,7 +226,11 @@ public static class TrendEvaluator
             new TrendComponent("emaDirection", "price", emaRaw, emaDirection),
             new TrendComponent("slopeDirection", "price", slopeRaw, slopeDirection),
             new TrendComponent("vwapDirection", "price", vwapRaw, vwapDirection),
-            new TrendComponent("structureDirection", "structure", deltaHigh is null && deltaLow is null ? null : (deltaHigh ?? 0) + (deltaLow ?? 0), structureDirection),
+            // 두 delta는 별개 원값이라 합으로 뭉개지 않는다(§9.4, #65). structureDirection은 두 tanh의 평균이라
+            // 되돌릴 수 있는 단일 원값이 없으므로 Raw는 결측이고, 원값은 아래 두 구성요소가 그대로 보존한다.
+            new TrendComponent("structureDirection", "structure", null, structureDirection),
+            new TrendComponent("structureDeltaHigh", "structure", deltaHigh, deltaHigh is null ? null : Math.Tanh(deltaHigh.Value)),
+            new TrendComponent("structureDeltaLow", "structure", deltaLow, deltaLow is null ? null : Math.Tanh(deltaLow.Value)),
             new TrendComponent("efficiency", "path", efficiency, efficiency));
 
         var structureMissing = structureDirection is null;
