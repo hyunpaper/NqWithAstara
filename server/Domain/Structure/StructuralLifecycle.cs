@@ -141,6 +141,12 @@ public static class StructuralLifecycle
             }
             if (!allowNewTrigger)
             {
+                // §16B 예시 D: 신규 트리거 억제는 계산된 종결 상태를 WAIT로 되돌리지 않는다.
+                if (CandidateSelection.IsTerminal(candidate.Disposition))
+                {
+                    result.Add(candidate with { Plan = null });
+                    continue;
+                }
                 result.Add(candidate with
                 {
                     Disposition = CandidateDisposition.Wait,

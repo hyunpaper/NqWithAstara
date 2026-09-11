@@ -137,6 +137,47 @@ public sealed class StructureD3LifecycleTests
         Assert.Contains(StructuralLifecycle.NoteTombstoned, same.Notes);
     }
 
+    [Theory]
+    [InlineData(CandidateDisposition.Rejected)]
+    [InlineData(CandidateDisposition.Invalidated)]
+    [InlineData(CandidateDisposition.Expired)]
+    [InlineData(CandidateDisposition.Entered)]
+    public void SuppressedNewTriggerKeepsAComputedTerminalDispositionInsteadOfWait(CandidateDisposition terminal)
+    {
+        var computed = Detect().Candidates;
+        var target = computed.First(x => x.Disposition == CandidateDisposition.Ready);
+        var withTerminal = computed
+            .Select(x => x.EventId == target.EventId ? x with { Disposition = terminal } : x)
+            .ToImmutableArray();
+
+        var applied = StructuralLifecycle.ApplyLatch(Fresh(), withTerminal, allowNewTrigger: false, P);
+        var same = applied.First(x => x.EventId == target.EventId);
+
+        Assert.Equal(terminal, same.Disposition);
+        Assert.Null(same.Plan);
+        Assert.DoesNotContain(StructuralLifecycle.CodeNewTriggerSuppressed, same.Notes);
+        Assert.All(applied.Where(x => x.EventId != target.EventId),
+            x => Assert.Equal(CandidateDisposition.Wait, x.Disposition));
+    }
+
+    [Fact]
+    public void SuppressedTerminalCandidateStillBecomesATombstoneOnCommit()
+    {
+        var computed = Detect().Candidates;
+        var target = computed.First(x => x.Disposition == CandidateDisposition.Ready);
+        var withTerminal = computed
+            .Select(x => x.EventId == target.EventId
+                ? x with { Disposition = CandidateDisposition.Invalidated }
+                : x)
+            .ToImmutableArray();
+
+        var applied = StructuralLifecycle.ApplyLatch(Fresh(), withTerminal, allowNewTrigger: false, P);
+        var latch = StructuralLifecycle.Commit(Fresh(), Fx.At(TriggerMinute), applied, [], null, null);
+
+        Assert.Equal(CandidateDisposition.Invalidated, latch.Tombstones[target.EventId]);
+        Assert.DoesNotContain(target.DuplicateGuardKey, latch.ConsumedGuardKeys);
+    }
+
     /// <summary>같은 중복 방지 키에서 이미 이벤트를 소비했다면 새 READY를 만들지 않는다(§8).</summary>
     [Fact]
     public void ConsumedDuplicateGuardKeyRejectsAnotherReadyForTheSameTrigger()
