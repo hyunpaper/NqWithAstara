@@ -36,6 +36,7 @@ public static class EntryQualityEvaluator
 {
     public const string ReasonNoVolumeBaseline = "NO_VOLUME_BASELINE";
     public const string ReasonTrendUnavailable = "TREND_UNAVAILABLE";
+    public const string ReasonAtrUnavailable = "ATR_UNAVAILABLE";
     public const string ReasonMissingRequiredComponent = "MISSING_REQUIRED_QUALITY_COMPONENT";
     public const string ReasonZeroRequiredComponent = "ZERO_REQUIRED_QUALITY_COMPONENT";
 
@@ -77,16 +78,22 @@ public static class EntryQualityEvaluator
         double? room = roomRaw is null ? null : Normalized(1 - Math.Exp(-Math.Max(roomRaw.Value, 0) / policy.RoomQualityScale));
         components.Add(Component(RoomQuality, roomRaw, room, required));
 
+        // §16A: ATR 결측·0·비유한은 결측으로 흘린다. IndicatorFloor는 NaN 방지용이며 결측 대체값이 아니다.
+        double? usableAtr = input.Atr1mAtPlan is { } a && double.IsFinite(a) && a > 0 ? a : null;
+
         // extensionQuality=exp(-max(Entry-anchor,0)/max(ATR1m,0.01)/3)
         double? extensionRaw = null;
         double? extension = null;
         if (input.InvalidationAnchor is { } anchor)
         {
-            var distance = (double)(input.EntryReference - anchor);
-            if (distance < 0) distance = 0;
-            var atr = Math.Max(input.Atr1mAtPlan is { } a && double.IsFinite(a) ? a : 0, policy.IndicatorFloor);
-            extensionRaw = distance / atr;
-            extension = Normalized(Math.Exp(-extensionRaw.Value / policy.ExtensionQualityAtrScale));
+            if (usableAtr is { } atr)
+            {
+                var distance = (double)(input.EntryReference - anchor);
+                if (distance < 0) distance = 0;
+                extensionRaw = distance / Math.Max(atr, policy.IndicatorFloor);
+                extension = Normalized(Math.Exp(-extensionRaw.Value / policy.ExtensionQualityAtrScale));
+            }
+            else reasons.Add(ReasonAtrUnavailable);
         }
         components.Add(Component(ExtensionQuality, extensionRaw, extension, required));
 
@@ -112,11 +119,14 @@ public static class EntryQualityEvaluator
             double? reclaim = null;
             if (input.TriggerClose is { } close && input.SupportUpper is { } upper)
             {
-                var distance = (double)(close - upper);
-                if (distance < 0) distance = 0;
-                var atr = Math.Max(input.Atr1mAtPlan is { } a && double.IsFinite(a) ? a : 0, policy.IndicatorFloor);
-                reclaimRaw = distance / atr;
-                reclaim = Normalized(1 - Math.Exp(-reclaimRaw.Value));
+                if (usableAtr is { } atr)
+                {
+                    var distance = (double)(close - upper);
+                    if (distance < 0) distance = 0;
+                    reclaimRaw = distance / Math.Max(atr, policy.IndicatorFloor);
+                    reclaim = Normalized(1 - Math.Exp(-reclaimRaw.Value));
+                }
+                else reasons.Add(ReasonAtrUnavailable);
             }
             components.Add(Component(ReclaimQuality, reclaimRaw, reclaim, required));
             // 참고: alignmentQuality는 REBOUND에서 제외한다(§9.4).

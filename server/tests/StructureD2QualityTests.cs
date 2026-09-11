@@ -209,17 +209,51 @@ public sealed class StructureD2QualityTests
     // ── 수치 안전과 결정성 ──
 
     [Theory]
-    [InlineData(0)]
+    [InlineData(null)]
+    [InlineData(0d)]
+    [InlineData(-1d)]
     [InlineData(double.NaN)]
     [InlineData(double.PositiveInfinity)]
-    public void NonUsableAtrNeverProducesNaNQuality(double atr)
+    public void NonUsableAtrMakesAtrBasedComponentsMissingRatherThanFlooredOrNaN(double? atr)
     {
-        var result = EntryQualityEvaluator.Evaluate(Input(atr: atr), P);
+        var pullback = EntryQualityEvaluator.Evaluate(Input(atr: atr), P);
 
-        Assert.NotNull(result.Score);
-        Assert.True(double.IsFinite(result.Score!.Value));
-        Assert.All(result.Components, component =>
+        Assert.Null(pullback.Score);
+        Assert.False(pullback.ReadyAllowed);
+        Assert.Null(pullback.Components.Single(x => x.Name == "extensionQuality").Value);
+        Assert.Contains("extensionQuality", pullback.MissingRequired);
+        Assert.Contains(EntryQualityEvaluator.ReasonAtrUnavailable, pullback.Reasons);
+        Assert.All(pullback.Components, component =>
             Assert.True(component.Value is null || double.IsFinite(component.Value.Value)));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0d)]
+    [InlineData(-1d)]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    public void NonUsableAtrMakesReclaimQualityNullInsteadOfAPerfectScore(double? atr)
+    {
+        var result = EntryQualityEvaluator.Evaluate(Input(SetupKind.Rebound, atr: atr), P);
+
+        Assert.Null(result.Components.Single(x => x.Name == "reclaimQuality").Value);
+        Assert.Null(result.Components.Single(x => x.Name == "reclaimQuality").Raw);
+        Assert.Contains("reclaimQuality", result.MissingRequired);
+        Assert.Null(result.Score);
+        Assert.False(result.ReadyAllowed);
+        Assert.Contains(EntryQualityEvaluator.ReasonAtrUnavailable, result.Reasons);
+    }
+
+    [Fact]
+    public void UsableAtrKeepsTheIndicatorFloorOnlyAsTheNaNGuard()
+    {
+        var tiny = EntryQualityEvaluator.Evaluate(Input(SetupKind.Rebound, atr: 1e-9), P);
+
+        Assert.Equal((double)(99.75m - 99.40m) / P.IndicatorFloor,
+            tiny.Components.Single(x => x.Name == "reclaimQuality").Raw!.Value, 12);
+        Assert.NotNull(tiny.Score);
+        Assert.DoesNotContain(EntryQualityEvaluator.ReasonAtrUnavailable, tiny.Reasons);
     }
 
     [Fact]
