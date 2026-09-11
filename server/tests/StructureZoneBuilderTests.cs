@@ -124,6 +124,63 @@ public sealed class StructureZoneBuilderTests
     }
 
     [Fact]
+    public void ProfileOnlyZoneIdDoesNotChangeBetweenConsecutiveCutoffs()
+    {
+        var profile = Fx.ProfileSource("node", 100.00m);
+        ZoneCandidate[] Candidates() => [ZoneCandidate.FromBounds(99.95m, 100.05m, profile, "EstimatedVolumeProfile")];
+
+        var early = Assert.Single(ZoneBuilder.Assemble(Candidates(), Request(30), .20, P).Zones);
+        var later = Assert.Single(ZoneBuilder.Assemble(Candidates(), Request(31), .20, P).Zones);
+        var muchLater = Assert.Single(ZoneBuilder.Assemble(Candidates(), Request(120), .20, P).Zones);
+
+        Assert.True(early.ProfileOnly);
+        Assert.Equal(early.Id, later.Id);
+        Assert.Equal(early.Id, muchLater.Id);
+        Assert.NotEqual(profile.Id, early.Id);
+        Assert.DoesNotContain(StructureMath.Price(early.Lower), early.Id);
+    }
+
+    [Fact]
+    public void SplitZoneIdIsStableAcrossConsecutiveCutoffs()
+    {
+        var shared = Fx.Pivot("shared", 100.00m, 10, 12);
+        ZoneCandidate[] Candidates() => [Line(100.00m, .03m, shared), Line(101.00m, .03m, shared)];
+
+        var early = ZoneBuilder.Assemble(Candidates(), Request(30), .20, P);
+        var later = ZoneBuilder.Assemble(Candidates(), Request(120), .20, P);
+
+        Assert.Equal(2, early.Zones.Length);
+        Assert.Contains("ZONE_LINEAGE_SPLIT", early.Warnings);
+        Assert.Equal(early.Zones.Select(x => x.Id).ToArray(), later.Zones.Select(x => x.Id).ToArray());
+        Assert.Equal(2, early.Zones.Select(x => x.Id).Distinct().Count());
+    }
+
+    [Fact]
+    public void MissingAtrAtCutoffLeavesTheMergeParameterSubstitutionVisible()
+    {
+        var a = Fx.Pivot("a", 100.00m, 10, 12);
+        var b = Fx.Pivot("b", 100.02m, 20, 22);
+        ZoneCandidate[] Candidates() => [Line(100.00m, .01m, a), Line(100.02m, .01m, b)];
+
+        var missing = ZoneBuilder.Assemble(Candidates(), Request(14), null, P);
+        Assert.Contains(ZoneBuilder.FlagMergeParamsFromTickOnly, missing.Warnings);
+        Assert.All(missing.Zones,
+            z => Assert.Contains(ZoneBuilder.FlagMergeParamsFromTickOnly, z.ApproximationFlags));
+
+        var present = ZoneBuilder.Assemble(Candidates(), Request(30), .20, P);
+        Assert.DoesNotContain(ZoneBuilder.FlagMergeParamsFromTickOnly, present.Warnings);
+        Assert.All(present.Zones,
+            z => Assert.DoesNotContain(ZoneBuilder.FlagMergeParamsFromTickOnly, z.ApproximationFlags));
+    }
+
+    [Fact]
+    public void ZeroAtrAtCutoffIsTreatedAsMissingForMergeParameters()
+    {
+        var assembly = ZoneBuilder.Assemble([Line(100.00m, .01m, Fx.Pivot("a", 100.00m, 10, 12))], Request(14), 0, P);
+        Assert.Contains(ZoneBuilder.FlagMergeParamsFromTickOnly, assembly.Warnings);
+    }
+
+    [Fact]
     public void ProfileOnlyZoneKeepsATemporaryIdAndIsNotEligible()
     {
         var profile = Fx.ProfileSource("node", 100.00m);
