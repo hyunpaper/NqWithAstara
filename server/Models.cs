@@ -35,7 +35,11 @@ public sealed record FrozenPlanSnapshot(string PlanId, string Kind, decimal Entr
     decimal FrontRunBuffer, decimal NetReward, decimal NetRisk, decimal NetR, double RiskPercent,
     decimal FeePerShare, decimal ExtraCostPerShare, decimal? ValidSpread, bool MissingLiquidity,
     string EligibilityCostModelVersion, string RealizedFillCostModelVersion, DateTimeOffset CreatedAt,
-    DateTimeOffset ExpiresAt, string EngineVersion, string PolicyHash, string[] ReasonCodes, string Explanation);
+    DateTimeOffset ExpiresAt, string EngineVersion, string PolicyHash, string[] ReasonCodes, string Explanation,
+    // #43 additive: 계획 시점 1분 ATR. 기존 필드 순서·의미를 바꾸지 않으려고 마지막에 선택 필드로 붙인다.
+    // 이 값이 있어야 거래 기록만으로 "손절폭이 ATR 대비 얼마였나"를 사후 재구성할 수 있다(#28 분석 입력).
+    // 과거에 저장된 행은 null로 복원되며 결측을 0으로 대체하지 않는다(§16A).
+    double? Atr1mAtPlan = null);
 public sealed record IndicatorSnapshot(double Rsi, double EmaFast, double EmaSlow, double Vwap, double Atr, double RelativeVolume, double BollingerLower, double BollingerUpper, double VwapSd = 0);
 public sealed record SignalResult(int Score, string Action, string[] Reasons, IndicatorSnapshot Indicators);
 public sealed record SignalView(string Symbol, string Name, double Price, double ChangePercent, int Score, string Action, string[] Reasons, DateTimeOffset UpdatedAt, bool Stale, object Indicators, IEnumerable<object> Bars, object? Position, double Atr, string? Setup = null, DateTimeOffset? SetupAt = null, string? Breakout = null, DateTimeOffset? BreakoutAt = null);

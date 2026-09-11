@@ -164,8 +164,12 @@ public sealed class StructureBottleneckVerificationTests
         Assert.Contains(TrendEvaluator.BlockerMissing5mStructure, trend.BlockersForReady);
 
         var atr = SessionAtr.At(bars, SessionAtr.Series(bars, P), Fx.At(89));
+        // [#43에서 fixture 갱신] 돌파 구간 Lower 104.30은 손절(104.27)을 진입 104.47의 왕복 수수료
+        // ($0.2089) 안쪽인 $0.20에 두고 있었다 — #43이 막으려는 바로 그 초근접 손절이라 이 fixture로는
+        // "MISSING_5M_STRUCTURE 단독 거절"을 더 이상 재현할 수 없다. Upper(=돌파 판정 기준선)는 그대로 두고
+        // Lower만 내려 무효화 구조를 비용 밖에 둔다. 이 테스트의 관심사는 계획 비용이 아니라 5m 구조 차단이다.
         var zones = ImmutableArray.Create(
-            D2.Resistance(104.30m, 104.45m, id: "breakout-zone"),
+            D2.Resistance(104.15m, 104.45m, id: "breakout-zone"),
             D2.Resistance(105.50m, 105.80m, id: "target-zone"));
         var result = SetupDetector.Detect(SetupDetectionRequest.Create(Fx.Symbol, Fx.SessionStart, Fx.SessionEnd,
             analysisAsOf, analysisAsOf, bars, zones, ImmutableArray<TouchEpisode>.Empty, trend, atr,

@@ -98,6 +98,13 @@ public sealed record StructurePolicy
     public decimal StopBufferFloor { get; init; } = .01m;
     public decimal FrontRunBufferFloor { get; init; } = .01m;
 
+    /// <summary>
+    /// §9.1 최소 손절 거리의 변동성 하한 계수(#43). `Entry-Stop &lt; MinStopAtrFactor*Atr1mAtPlan`이면 계획을 거절한다.
+    /// 0.5는 "1분 노이즈의 절반"이라는 물리적 의미에서 고른 값이며 성과가 좋아지는 값을 탐색해 얻은 값이 아니다.
+    /// 손절을 넓히는 데 쓰지 않는다 — 하한 미달은 거절이지 손절 재배치가 아니다(§9.1 MaxRiskPercent와 대칭).
+    /// </summary>
+    public double MinStopAtrFactor { get; init; } = .5;
+
     // ── 품질 점수 척도 (§9.4) ──
     public double RoomQualityScale { get; init; } = 2;
     public double ExtensionQualityAtrScale { get; init; } = 3;
