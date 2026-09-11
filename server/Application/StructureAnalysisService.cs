@@ -39,12 +39,23 @@ public sealed record StructureTrendDto(string State, double? SignedTrend, double
     double? VwapSd, bool StructureEvidenceMissing, int BarCount, DateTimeOffset AnalysisCutoff,
     string[] UsedFamilies, string[] MissingComponents, string[] Warnings);
 
+/// <summary>
+/// §11 Zone 저장 계약의 증거 묶음. Key는 (family, from, to)의 SHA-256이라 이 세 필드로 다시 계산되므로
+/// 관측 크기를 위해 싣지 않는다(#65). 그래서 Family는 다른 DTO와 달리 대문자화하지 않고 enum 이름 그대로다.
+/// </summary>
+public sealed record StructureEvidenceGroupDto(string Family, DateTimeOffset From, DateTimeOffset To,
+    string[] SourceIds);
+
+/// <summary>§16B Zone 역할 전이. "언제 왜 BROKEN이 됐는지"를 관측만으로 복원하기 위한 최소 기록이다.</summary>
+public sealed record StructureRoleChangeDto(DateTimeOffset At, string From, string To, string Reason);
+
 public sealed record StructureZoneDto(string Id, int BoundsRevision, int SnapshotRevision, decimal Lower,
     decimal Upper, string Role, string OriginalRole, DateTimeOffset FirstConfirmedAt, DateTimeOffset LastConfirmedAt,
     string[] SourceKinds, int SourceCount, int IndependentFamilies, double? Strength, double? TouchEvidence,
     double? ReactionEvidence, double? Recency, double? Confluence, double? BreachPenalty, int CompletedEpisodes,
     int SuccessEpisodes, int FailedEpisodes, int PendingEpisodes, string[] MissingEvidence, bool Eligible,
-    string[] RejectReasons, string[] ApproximationFlags, bool ProfileOnly, bool Retired);
+    string[] RejectReasons, string[] ApproximationFlags, bool ProfileOnly, bool Retired,
+    string[] SourceIds, StructureEvidenceGroupDto[] EvidenceGroups, StructureRoleChangeDto[] RoleHistory);
 
 public sealed record StructurePlanDto(string PlanId, string Kind, decimal EntryReference, decimal InvalidationAnchor,
     decimal Stop, decimal Target, string InvalidationZoneId, decimal InvalidationLower, decimal InvalidationUpper,
@@ -767,7 +778,12 @@ public static class StructureViewMapper
             Finite(strength?.Confluence), Finite(strength?.BreachPenalty), strength?.CompletedEpisodes ?? 0,
             strength?.SuccessEpisodes ?? 0, strength?.FailedEpisodes ?? 0, strength?.PendingEpisodes ?? 0,
             strength?.MissingComponents.ToArray() ?? [], zone.Eligible, zone.RejectReasons.ToArray(),
-            zone.ApproximationFlags.ToArray(), zone.ProfileOnly, zone.Retired);
+            zone.ApproximationFlags.ToArray(), zone.ProfileOnly, zone.Retired,
+            zone.SourceIds.ToArray(),
+            zone.EvidenceGroups.Select(x => new StructureEvidenceGroupDto(x.Family.ToString(), x.From, x.To,
+                x.SourceIds.ToArray())).ToArray(),
+            zone.RoleHistory.Select(x => new StructureRoleChangeDto(x.At, x.From.ToString().ToUpperInvariant(),
+                x.To.ToString().ToUpperInvariant(), x.Reason)).ToArray());
     }
 
     public static StructurePlanDto? Plan(StructuralTradePlan? plan) => plan is null

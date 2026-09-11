@@ -357,6 +357,7 @@ public static class SetupDetector
 
         var rejections = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var code in planning.ReasonCodes) rejections.Add(code);
+        var structureWaived = false;
         foreach (var code in readyBlockers)
         {
             // 이슈 #33(D7): MISSING_5M_STRUCTURE의 READY 차단은 추세 정렬(alignmentQuality)이 필수인
@@ -366,7 +367,7 @@ public static class SetupDetector
             // TrendAssessment.BlockersForReady 산출과 표시 경로(DataQuality)는 바꾸지 않는다 — 소비 지점 스코프다.
             if (hypothesis.Kind == SetupKind.Rebound && code == TrendEvaluator.BlockerMissing5mStructure)
             {
-                notes.Add(NoteReadyWithout5mStructure);   // 구조 결측 코호트 분리 집계용(#27/#28)
+                structureWaived = true;   // note는 최종 disposition 확정 후에 붙인다(#65)
                 continue;
             }
             rejections.Add(code);
@@ -404,6 +405,10 @@ public static class SetupDetector
             : expired ? CandidateDisposition.Expired
             : !planning.Viable || !quality.ReadyAllowed || rejections.Count > 0 ? CandidateDisposition.Rejected
             : CandidateDisposition.Ready;
+
+        // 구조 결측 코호트(#27/#28)는 실제로 READY에 도달한 후보만이다. 다른 사유로 거절·무효화된 후보에
+        // 같은 note를 달면 코호트가 "구조 결측 후보 전체"로 희석된다(#65).
+        if (structureWaived && disposition == CandidateDisposition.Ready) notes.Add(NoteReadyWithout5mStructure);
 
         return new EntryCandidate(eventId, guardKey, hypothesis.Kind, kindName, hypothesis.Zone.Id, trigger.Start,
             triggerConfirmedAt, structureCutoff, request.AnalysisAsOf, expiresAt, disposition, entryReference,
