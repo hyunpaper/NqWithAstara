@@ -24,9 +24,11 @@ public sealed class StateQueryService(ILocalStore store, IMonitorSignals signals
         var structureSummary = structure?.Summary(watch.Select(x => x.Symbol));
         // 이슈 #26: additive `structureEvents` — 서버가 발행한 v5 알림 이벤트(최근 50건, seq 단조 증가).
         // off/shadow에서는 v5 이벤트를 발행·노출하지 않는다(§16B). FE는 seq seed + Notification tag로 소비만 한다.
+        // 이슈 #67: 현재 세션의 이벤트만 내려준다 — 세션이 확정되지 않았거나 바뀌었으면 빈 배열이다.
         var structureEvents = alerts is null || structure is null || structure.Mode != StructureEngineMode.Active
+                || state.Market.Start is not { } eventSession
             ? Array.Empty<object>()
-            : (await alerts.GetRecentAsync(default)).Select(x => (object)new
+            : (await alerts.GetRecentAsync(eventSession, default)).Select(x => (object)new
             {
                 seq = x.Seq, type = x.Type, symbol = x.Symbol, eventId = x.EventId, kind = x.Kind,
                 entryQuality = x.EntryQuality, netR = x.NetR, quotePrice = x.QuotePrice, at = x.At,
