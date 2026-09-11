@@ -108,6 +108,9 @@ public static class SetupDetector
     /// </summary>
     public const string NoteReadyWithout5mStructure = "V5_READY_WITHOUT_5M_STRUCTURE";
 
+    /// <summary>PULLBACK/BREAKOUT이 signedTrend&lt;0에서 롱으로 승격되는 것을 막는 거절 사유(#42).</summary>
+    public const string CodeTrendDirectionOpposesLong = "TREND_DIRECTION_OPPOSES_LONG";
+
     public static SetupDetectionResult Detect(SetupDetectionRequest request, StructurePolicy policy)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -362,6 +365,11 @@ public static class SetupDetector
         }
         foreach (var reason in quality.Reasons) rejections.Add(reason);
 
+        // null은 TREND_UNAVAILABLE이 이미 막으므로 중복 사유를 만들지 않는다(#42).
+        if (RequiresTrendAlignment(hypothesis.Kind) && request.Trend.SignedTrend is { } signedTrend
+            && double.IsFinite(signedTrend) && signedTrend < 0)
+            rejections.Add(CodeTrendDirectionOpposesLong);
+
         // 실시간 유지 조건 붕괴는 INVALIDATED이며 재상승했다고 같은 이벤트를 되살리지 않는다(§10, §16B).
         var invalidated = false;
         if (request.LivePrice is { } live)
@@ -396,6 +404,9 @@ public static class SetupDetector
             rejections.ToImmutableArray(), notes.ToImmutableArray(), hypothesis.CounterTrend,
             hypothesis.RetestConfirmed, hypothesis.EpisodeStartAt);
     }
+
+    /// <summary>추세 정렬을 전제로 하는 종류. REBOUND는 제외다(§8/§9.4).</summary>
+    static bool RequiresTrendAlignment(SetupKind kind) => kind is SetupKind.Pullback or SetupKind.Breakout;
 
     /// <summary>§8 stable EventId=(symbol,sessionStart,kind,zoneId,triggerBarStart).</summary>
     public static string EventId(string symbol, DateTimeOffset sessionStart, string kindName, string zoneId,
