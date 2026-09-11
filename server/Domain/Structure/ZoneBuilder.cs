@@ -90,10 +90,11 @@ public static class ZoneBuilder
 
         foreach (var node in profile.Nodes)
         {
-            var id = StructureMath.SourceId("profile", request.Symbol, StructureMath.Iso(request.Cutoff),
+            // 프로파일은 세션 누적 보조 근거다. cutoff로 재스탬프하면 ID와 recency가 매 봉 흔들린다(§6.2).
+            var id = StructureMath.SourceId("profile", request.Symbol, sessionDate.ToString("yyyy-MM-dd"),
                 StructureMath.Price(profile.BinWidth), node.StartIndex.ToString(CultureInfo.InvariantCulture));
             var source = new ZoneSource(id, ZoneSourceFamily.Profile, node.IsPoc ? "profile-poc" : "profile-node",
-                node.Lower + (node.Upper - node.Lower) / 2m, request.Cutoff, request.Cutoff, true);
+                node.Lower + (node.Upper - node.Lower) / 2m, request.SessionStart, request.SessionStart, true);
             candidates.Add(profile.Coarsened
                 ? ZoneCandidate.FromBounds(node.Lower, node.Upper, source, "EstimatedVolumeProfile", "CoarsenedProfile")
                 : ZoneCandidate.FromBounds(node.Lower, node.Upper, source, "EstimatedVolumeProfile"));
@@ -265,8 +266,10 @@ public static class ZoneBuilder
         {
             var (group, sources) = pieces[index];
             var profileOnly = sources.All(x => x.Family == ZoneSourceFamily.Profile);
-            var firstConfirmed = sources.Min(x => x.ConfirmedAt);
-            var lastConfirmed = sources.Max(x => x.ConfirmedAt);
+            // 임시 프로파일 원천은 Zone의 확정 lineage를 정하지 않는다(§16B). 영구 원천이 없을 때만 cutoff를 쓴다.
+            var durable = sources.Where(x => !x.Temporary).ToArray();
+            var firstConfirmed = durable.Length > 0 ? durable.Min(x => x.ConfirmedAt) : request.Cutoff;
+            var lastConfirmed = durable.Length > 0 ? durable.Max(x => x.ConfirmedAt) : request.Cutoff;
 
             var matched = inherited[index].Where(x => owner[x.Id] == index).ToArray();
 
