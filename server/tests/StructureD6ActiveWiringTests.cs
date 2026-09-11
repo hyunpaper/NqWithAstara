@@ -51,6 +51,10 @@ public sealed class StructureD6StructuralSimulationTests
         Assert.Equal(Fx.At(39), trade.TriggerBarAt);
         Assert.Equal(Fx.At(40), trade.EnteredAt);
         Assert.Equal(Fx.SessionEnd, trade.SessionEnd);
+        var execution = Assert.IsType<ExecutionProvenance>(trade.Execution);
+        Assert.Equal(Fx.At(40), execution.EntryBarStart);
+        Assert.Equal(Fx.At(41), execution.EntryBarCloseAt);
+        Assert.Equal("UNOBSERVED", execution.EntryMinuteCoverage);
         Assert.NotNull(trade.Structure);
         Assert.Equal("TEST|event-A", trade.Structure!.EntryEventId);
         Assert.Equal(plan.PlanId, trade.Structure.PlanSnapshot.PlanId);
