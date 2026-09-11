@@ -30,7 +30,7 @@ public static class SimulationEngine
                 // Stop/Target과 EOD만으로 관리한다(설계 §10 "v5에 v4 score<40 CUT을 적용하지 않는다").
                 else if (trade.Kind != "REBOUND" && !StructuralSimulation.OwnsTrade(trade) && score < 40 && completedBars.Count > 0 && completedBars[^1].Close < vwap)
                     trade = Close(trade, "CUT", quotePrice, quoteAt, quotePrice, false, "SAMPLED_QUOTE", "QUOTE_CUT");
-                else trade = ObserveQuote(trade, quoteAt);
+                else trade = ObserveQuote(trade, quotePrice, quoteAt);
             }
             trades[i] = trade;
         }
@@ -125,12 +125,14 @@ public static class SimulationEngine
             Execution = WithBarEvidence(trade.Execution, bar) };
     }
 
-    static SimTrade ObserveQuote(SimTrade trade, DateTimeOffset quoteAt)
+    static SimTrade ObserveQuote(SimTrade trade, double quotePrice, DateTimeOffset quoteAt)
     {
+        if (trade.LastPriceAt is { } lastObservedAt && quoteAt < lastObservedAt) return trade;
         var execution = trade.Execution;
-        if (execution is not null && SameMinute(quoteAt, execution.EntryBarStart) && quoteAt >= trade.EnteredAt)
+        if (execution is not null && SameMinute(quoteAt, execution.EntryBarStart) && quoteAt >= trade.EnteredAt &&
+            (!execution.EntryMinuteEvidenceAt.HasValue || quoteAt >= execution.EntryMinuteEvidenceAt.Value))
             execution = execution with { EntryMinuteCoverage = "PARTIALLY_OBSERVED_QUOTE", EntryMinuteEvidenceAt = quoteAt };
-        return trade with { LastPriceAt = quoteAt, Execution = execution };
+        return trade with { LastPrice = quotePrice, LastPriceAt = quoteAt, Execution = execution };
     }
 
     static SimTrade Close(SimTrade trade, string status, double exitPrice, DateTimeOffset exitAt, double lastPrice, bool estimated,
@@ -139,8 +141,8 @@ public static class SimulationEngine
         {
             Status = status, ExitPrice = exitPrice, ExitAt = exitAt,
             PnlPercent = Math.Round((exitPrice / trade.EntryPrice - 1) * 100 - MarketRules.RoundTripFeePercent, 2),
-            LastPrice = lastPrice, LastPriceAt = estimated ? trade.LastPriceAt : exitAt, ExitEstimated = estimated,
-            Execution = WithExitEvidence(trade.Execution, source, estimated ? trade.LastPriceAt : exitAt, decision, bar)
+            LastPrice = lastPrice, LastPriceAt = estimated ? trade.LastPriceAt : bar is null ? exitAt : BarCloseAt(bar), ExitEstimated = estimated,
+            Execution = WithExitEvidence(trade.Execution, source, estimated ? trade.LastPriceAt : bar is null ? exitAt : BarCloseAt(bar), decision, bar)
         };
 
     static ExecutionProvenance EntryProvenance(DateTimeOffset enteredAt)
@@ -159,13 +161,17 @@ public static class SimulationEngine
             EntryMinuteCoverage = entryObserved ? "PARTIALLY_OBSERVED_QUOTE" : execution.EntryMinuteCoverage,
             EntryMinuteEvidenceAt = entryObserved ? evidenceAt : execution.EntryMinuteEvidenceAt,
             ExitSource = source, ExitEvidenceAt = evidenceAt, EvaluatedBarStart = bar?.Timestamp,
-            EvaluatedBarCloseAt = bar is null ? null : BarCloseAt(bar), BarrierDecision = decision
+            EvaluatedBarCloseAt = bar is null ? null : BarCloseAt(bar), BarrierDecision = decision,
+            EvaluatedBarOpen = bar?.Open, EvaluatedBarHigh = bar?.High,
+            EvaluatedBarLow = bar?.Low, EvaluatedBarClose = bar?.Close
         };
     }
 
     static ExecutionProvenance? WithBarEvidence(ExecutionProvenance? execution, Candle bar) => execution is null ? null : execution with
     {
-        EvaluatedBarStart = bar.Timestamp, EvaluatedBarCloseAt = BarCloseAt(bar)
+        EvaluatedBarStart = bar.Timestamp, EvaluatedBarCloseAt = BarCloseAt(bar),
+        EvaluatedBarOpen = bar.Open, EvaluatedBarHigh = bar.High,
+        EvaluatedBarLow = bar.Low, EvaluatedBarClose = bar.Close
     };
 
     static DateTimeOffset BarCloseAt(Candle bar) => bar.Timestamp.AddMinutes(1);

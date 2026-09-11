@@ -19,7 +19,9 @@ public sealed record SimTrade(string Id, string Symbol, string Kind, DateTimeOff
 public sealed record ExecutionProvenance(DateTimeOffset EntryBarStart, DateTimeOffset EntryBarCloseAt,
     string EntryMinuteCoverage, DateTimeOffset? EntryMinuteEvidenceAt, string? ExitSource = null,
     DateTimeOffset? ExitEvidenceAt = null, DateTimeOffset? EvaluatedBarStart = null,
-    DateTimeOffset? EvaluatedBarCloseAt = null, string? BarrierDecision = null);
+    DateTimeOffset? EvaluatedBarCloseAt = null, string? BarrierDecision = null,
+    double? EvaluatedBarOpen = null, double? EvaluatedBarHigh = null,
+    double? EvaluatedBarLow = null, double? EvaluatedBarClose = null);
 
 /// <summary>
 /// 설계 §11 FrozenStructureContext. v5 거래가 체결된 시점의 구조 계획·추세·품질 스냅샷으로, 진입 이후

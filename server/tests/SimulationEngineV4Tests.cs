@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Astra.Server;
 using Astra.Server.Domain;
 using Xunit;
@@ -54,6 +55,52 @@ public sealed class SimulationEngineV4Tests
     }
 
     [Fact]
+    public void SampledQuoteUpdatesLastPriceAndEodFallbackUsesThatObservedPrice()
+    {
+        var end = T.AddHours(2);
+        var trade = Open(end: end) with { Execution = new ExecutionProvenance(T, T.AddMinutes(1), "UNOBSERVED", null) };
+        var updated = SimulationEngine.Process([trade], "NVDA", [], 103, T.AddMinutes(1), 50, 100, []);
+        var closed = SimulationEngine.CloseExpiredSessions(updated, end.AddMinutes(1));
+        Assert.Equal(103, closed[0].ExitPrice);
+        Assert.Equal(T.AddMinutes(1), closed[0].LastPriceAt);
+        Assert.Equal(T.AddMinutes(1), Assert.IsType<ExecutionProvenance>(closed[0].Execution).ExitEvidenceAt);
+    }
+
+    [Fact]
+    public void OlderOrDuplicateQuotesDoNotMoveObservedTimeOrEntryEvidenceBackward()
+    {
+        var trade = Open(T.AddSeconds(3)) with { Execution = new ExecutionProvenance(T, T.AddMinutes(1), "UNOBSERVED", null) };
+        var first = SimulationEngine.Process([trade], "NVDA", [], 101, T.AddSeconds(17), 50, 100, []);
+        var older = SimulationEngine.Process(first, "NVDA", [], 100, T.AddSeconds(10), 50, 100, []);
+        var duplicate = SimulationEngine.Process(older, "NVDA", [], 102, T.AddSeconds(17), 50, 100, []);
+        var execution = Assert.IsType<ExecutionProvenance>(duplicate[0].Execution);
+        Assert.Equal(102, duplicate[0].LastPrice);
+        Assert.Equal(T.AddSeconds(17), duplicate[0].LastPriceAt);
+        Assert.Equal(T.AddSeconds(17), execution.EntryMinuteEvidenceAt);
+    }
+
+    [Fact]
+    public void FirstBarrierQuoteRemainsTheExitAcrossLaterOppositeQuotesAndRestart()
+    {
+        var trade = Open(T.AddSeconds(3)) with { Execution = new ExecutionProvenance(T, T.AddMinutes(1), "UNOBSERVED", null) };
+        var target = SimulationEngine.Process([trade], "NVDA", [], 111, T.AddSeconds(17), 50, 100, []);
+        var restarted = SimulationEngine.Process(target, "NVDA", [], 94, T.AddSeconds(30), 50, 100, []);
+        Assert.Equal("TARGET", restarted[0].Status);
+        Assert.Equal(110, restarted[0].ExitPrice);
+        Assert.Equal("SAMPLED_QUOTE", Assert.IsType<ExecutionProvenance>(restarted[0].Execution).ExitSource);
+    }
+
+    [Fact]
+    public void StopQuoteAlsoRemainsTheExitAcrossLaterTargetQuote()
+    {
+        var trade = Open(T.AddSeconds(3)) with { Execution = new ExecutionProvenance(T, T.AddMinutes(1), "UNOBSERVED", null) };
+        var stop = SimulationEngine.Process([trade], "NVDA", [], 94, T.AddSeconds(17), 50, 100, []);
+        var laterTarget = SimulationEngine.Process(stop, "NVDA", [], 111, T.AddSeconds(30), 50, 100, []);
+        Assert.Equal("STOP", laterTarget[0].Status);
+        Assert.Equal(94, laterTarget[0].ExitPrice);
+    }
+
+    [Fact]
     public void CompletedBarKeepsCursorAtStartButRecordsCloseKnownTime()
     {
         var trade = Open() with { Execution = new ExecutionProvenance(T, T.AddMinutes(1), "UNOBSERVED", null) };
@@ -63,6 +110,27 @@ public sealed class SimulationEngineV4Tests
         var execution = Assert.IsType<ExecutionProvenance>(result[0].Execution);
         Assert.Equal(T.AddMinutes(1), execution.EvaluatedBarStart);
         Assert.Equal(T.AddMinutes(2), execution.EvaluatedBarCloseAt);
+        Assert.Equal(100, execution.EvaluatedBarOpen);
+        Assert.Equal(101, execution.EvaluatedBarHigh);
+        Assert.Equal(99, execution.EvaluatedBarLow);
+        Assert.Equal(101, execution.EvaluatedBarClose);
+    }
+
+    [Fact]
+    public void SameBarStopFirstRetainsOhlcAndRoundTripsThroughJson()
+    {
+        var trade = Open() with { Execution = new ExecutionProvenance(T, T.AddMinutes(1), "UNOBSERVED", null) };
+        var closed = SimulationEngine.Process([trade], "NVDA", [Bar(1, 100, 111, 94, 100)], 100, T.AddMinutes(2), 50, 100, []);
+        var execution = Assert.IsType<ExecutionProvenance>(closed[0].Execution);
+        Assert.Equal("SAME_BAR_STOP_FIRST", execution.BarrierDecision);
+        Assert.Equal("COMPLETED_BAR_REPLAY", execution.ExitSource);
+        Assert.Equal(T.AddMinutes(2), execution.ExitEvidenceAt);
+        var restored = JsonSerializer.Deserialize<SimTrade>(JsonSerializer.Serialize(closed[0], new JsonSerializerOptions(JsonSerializerDefaults.Web)), new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var roundTripped = Assert.IsType<ExecutionProvenance>(restored!.Execution);
+        Assert.Equal(100, roundTripped.EvaluatedBarOpen);
+        Assert.Equal(111, roundTripped.EvaluatedBarHigh);
+        Assert.Equal(94, roundTripped.EvaluatedBarLow);
+        Assert.Equal(100, roundTripped.EvaluatedBarClose);
     }
 
     [Fact]
