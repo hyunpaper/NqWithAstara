@@ -272,7 +272,7 @@ public sealed class StructureBottleneckVerificationTests
 
     /// <summary>
     /// #33(D7) 경계 고정: 구조 결측이어도 나머지 게이트는 REBOUND에 전부 유지된다.
-    /// 목표 구조가 없으면(§9.2) 여전히 거절이고, 관측 note는 면제 표식으로 남는다.
+    /// 목표 구조가 없으면(§9.2) 여전히 거절이다. 코호트 note는 READY에 도달한 후보에만 붙는다(#65).
     /// </summary>
     [Fact]
     public void AReboundWithoutStructureStillKeepsEveryOtherGate()
