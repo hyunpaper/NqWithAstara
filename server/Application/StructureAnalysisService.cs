@@ -291,9 +291,9 @@ public sealed class StructureAnalysisService(
                         snapshot.QuotePrice, now, ct);
             }
 
-            var storageWarnings = write.Limited
-                ? ImmutableArray.Create(StructureObservationWriter.LimitWarning)
-                : ImmutableArray<string>.Empty;
+            // 이슈 #44: 한도 압박은 조용히 넘어가지 않는다. 주기 요약 희생은 ObservationStorageLimited로,
+            // 핵심 관측까지 누락된 전체 검증 불가 상태는 ObservationCoreStorageLimited로 API에 드러난다.
+            var storageWarnings = StructureObservationWriter.StorageWarnings(write);
             var view = View(request, build, snapshot, lastBarStart, trend, displayLayer.Zones, candidates, quality,
                 notes.ToImmutableArray(), warnings.ToImmutableArray(), preferred, now, storageWarnings,
                 zoneDtos, candidateDtos, trendDto, qualityDto, summary);
