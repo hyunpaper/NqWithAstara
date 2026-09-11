@@ -180,6 +180,7 @@ public sealed class StructureD3ApplicationTests
             Path.Combine(serverRoot, "Application", "StructureAnalysisService.cs"),
             Path.Combine(serverRoot, "Application", "StructureSnapshotFactory.cs"),
             Path.Combine(serverRoot, "Application", "StructureObservationWriter.cs"),
+            Path.Combine(serverRoot, "Application", "StructureAlertPublisher.cs"),
             .. Directory.GetFiles(Path.Combine(serverRoot, "Domain", "Structure"), "*.cs")
         ];
         Assert.True(owned.Length >= 12, $"v5 소유 파일을 찾지 못했다: {owned.Length}");
@@ -572,6 +573,10 @@ public sealed class StructureD3ApplicationTests
         var row = Assert.Single(summary.GetProperty("symbols").EnumerateArray().ToArray());
         Assert.Equal(D3.Symbol, row.GetProperty("symbol").GetString());
         Assert.Equal(StructureAnalysisStatus.Available, row.GetProperty("status").GetString());
+        // 이슈 #26: 대표 후보 종류 필드는 additive이며 대표 후보가 없으면 null이다(0·기본값으로 위장하지 않음).
+        Assert.True(row.TryGetProperty("preferredKind", out var preferredKind));
+        if (row.GetProperty("preferredCandidateId").ValueKind == JsonValueKind.Null)
+            Assert.Equal(JsonValueKind.Null, preferredKind.ValueKind);
 
         // v4 점수는 여전히 정수 score/action으로만 표현된다.
         var signal = Assert.Single(root.GetProperty("signals").EnumerateArray().ToArray());

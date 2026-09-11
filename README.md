@@ -53,11 +53,11 @@ gitGraph
 
 | 요소 | 허용 값 |
 |---|---|
-| `type` | `feature` `fix` `refactor` `release` |
+| `type` | `feature` `fix` `refactor` `release` `test` `ci` `docs` `chore` |
 | `area` | `BE` `FE` `COMMON` |
 | `slug` | 소문자 kebab-case (`[a-z0-9]+(-[a-z0-9]+)*`) |
 
-예: `feature/FE/structure-chart` · `fix/BE/polling-timeout` · `release/COMMON/v1-2-0`
+예: `feature/FE/structure-chart` · `fix/BE/polling-timeout` · `test/BE/30-structure-bottleneck-verification` · `release/COMMON/v1-2-0` (master 대상 PR은 `release/*`만 허용)
 
 ## 3. 커밋 컨벤션 + 에이전트 구분자
 
@@ -129,6 +129,12 @@ flowchart LR
 | 메타 | `priority-high` `blocked` `agent:claude` `agent:codex` |
 
 성격 라벨과 브랜치 `type`은 별개 축이다 (예: `bug` 이슈 → `fix/...` 브랜치). 라벨 중복 금지 — 같은 의미의 라벨을 새로 만들지 않는다.
+
+## 3.6 주석 컨벤션
+
+- **테스트 파일에는 주석을 달지 않는다.** 의도는 테스트 이름으로 표현한다.
+- 일반 코드 주석은 **짧게** 쓴다. 설계 근거·문서 인용을 장문으로 달지 않는다.
+- 변경 사유·설계 판단은 커밋 메시지와 PR 본문에 쓴다 (§3 커밋 컨벤션 참고).
 
 ## 4. PR → CI → 리뷰 → 머지 파이프라인
 

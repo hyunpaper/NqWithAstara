@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Layers } from "lucide-react";
 import StructureChart, { ChartBar } from "./StructureChart";
 import PlanExplanation from "./PlanExplanation";
+// 이슈 #26: 라이브 목록(App)과 같은 비교 함수를 공용 모듈에서 가져와 두 화면의 정렬이 갈라지지 않게 한다(§3).
+import { compareByTrendStrength, compareByV5State } from "./structureSort";
 import {
   StructureResponse,
   StructureSummary,
@@ -44,12 +46,6 @@ type Fetched = {
 };
 
 const POLL_MS = 15000;
-
-const qualitySort = (a: number | null | undefined, b: number | null | undefined) => {
-  const av = a == null || !Number.isFinite(a) ? Number.NEGATIVE_INFINITY : a;
-  const bv = b == null || !Number.isFinite(b) ? Number.NEGATIVE_INFINITY : b;
-  return bv - av;
-};
 
 const trendClass = (state: string | null | undefined) => {
   switch ((state ?? "").toUpperCase()) {
@@ -178,22 +174,10 @@ export default function StructurePanel({
     watchlist.find((w) => w.symbol === symbol)?.name ?? "";
 
   const ordered = useMemo(() => {
+    // 기본 정렬: v5 상태 우선순위 → EntryQuality ↓ → |SignedTrend| ↓ → symbol(§13·이슈 #26 §3).
+    // 추세 강도 정렬은 방향이 아니라 |SignedTrend| 크기다. 비교 함수는 App 라이브 목록과 공용이다.
     const copy = [...rows];
-    copy.sort((a, b) => {
-      if (sort === "trend") {
-        const diff = qualitySort(a.signedTrend, b.signedTrend);
-        if (diff !== 0) return diff;
-        return a.symbol.localeCompare(b.symbol);
-      }
-      // 기본 정렬: READY 우선 → EntryQuality 내림차순 → symbol(§13).
-      const rank = (row: StructureSummaryRow) =>
-        candidateGroup(row.candidateState) === "ready" ? 0 : 1;
-      const rankDiff = rank(a) - rank(b);
-      if (rankDiff !== 0) return rankDiff;
-      const qDiff = qualitySort(a.entryQuality, b.entryQuality);
-      if (qDiff !== 0) return qDiff;
-      return a.symbol.localeCompare(b.symbol);
-    });
+    copy.sort(sort === "trend" ? compareByTrendStrength : compareByV5State);
     return copy;
   }, [rows, sort]);
 
@@ -232,11 +216,7 @@ export default function StructurePanel({
       <section className="panel structure-head-panel">
         <div className="panel-head">
           <div>
-            <h2>구조 분석 (v5) — 실험 뷰</h2>
-            <p>
-              추세 · 진입 위치 품질 · 구조 계획을 분리해서 봅니다. 왼쪽 시그널 점수(v4)와 다른
-              엔진이며 서로 값을 옮겨 쓰지 않습니다.
-            </p>
+            <h2>구조 분석 (v5)</h2>
           </div>
           <Layers size={18} />
         </div>
@@ -246,9 +226,6 @@ export default function StructurePanel({
           </span>
           <span>
             신규 진입 소유 <b>{summary?.entryOwner ?? body?.entryOwner ?? "—"}</b>
-          </span>
-          <span>
-            기존 점수 엔진 <b>{summary?.legacyScoreEngine ?? "v4"}</b>
           </span>
           <span>
             버전 <b>{summary?.engineVersion ?? body?.engineVersion ?? "—"}</b>
@@ -263,11 +240,8 @@ export default function StructurePanel({
         {arr(summary?.notes).length > 0 && (
           <p className="structure-mode-note">{arr(summary?.notes).join(" · ")}</p>
         )}
-        {!summary && (
-          <p className="structure-mode-note">
-            `/api/state`에 structureSummary가 없어 목록은 종목별 조회 상태만 보여줍니다.
-          </p>
-        )}
+        {/* 이슈 #29: `/api/state` 계약 설명 대신 짧은 상태만 남긴다. 결측을 정상처럼 보이게 하지 않는다. */}
+        {!summary && <p className="structure-mode-note">목록 요약 없음 — 종목별 조회 상태만 표시</p>}
       </section>
 
       <div className="structure-body">
@@ -275,20 +249,19 @@ export default function StructurePanel({
           <div className="panel-head">
             <div>
               <h2>종목별 구조 상태</h2>
-              <p>READY · 대기 · 부적합을 분리해서 표시합니다</p>
             </div>
             <div className="structure-sort">
               <button
                 className={sort === "ready" ? "on" : ""}
                 onClick={() => setSort("ready")}
-                title="READY 우선 → 진입 품질 내림차순 → 심볼"
+                title="v5 상태 우선 → 진입 품질 → 추세 강도 → 심볼"
               >
                 기본
               </button>
               <button
                 className={sort === "trend" ? "on" : ""}
                 onClick={() => setSort("trend")}
-                title="추세 강도 내림차순 → 심볼"
+                title="추세 강도(절대값) 내림차순 → 심볼"
               >
                 추세 강도
               </button>
@@ -330,7 +303,8 @@ export default function StructurePanel({
                       <div className="sr-quality">
                         <small>진입 품질</small>
                         <b>{row.entryQuality == null ? "—" : num1(row.entryQuality)}</b>
-                        <span>0~100 · 확률 아님</span>
+                        {/* 이슈 #29: 지표 범위(0~100)는 유지하고 반복 교육 문구만 뺀다. */}
+                        <span>0~100</span>
                       </div>
                       <div className="sr-state">
                         <span className={`se-state ${candidateGroup(row.candidateState)}`}>
@@ -344,21 +318,18 @@ export default function StructurePanel({
               );
             })
           )}
-          <p className="structure-list-note">
-            이 목록의 값은 v5 구조 엔진 결과입니다. v4의 점수·BUY/CUT·알림과 의미가 다르며 색이
-            같더라도 같은 뜻이 아닙니다.
-          </p>
         </section>
 
         <section className="panel structure-detail">
           <div className="panel-head">
             <div>
               <h2>{selected || "종목 미선택"} 구조 상세</h2>
-              <p>
-                {analysis
-                  ? `${statusLabel(analysis.status ?? body?.status)} · 세션 ${clock(analysis.sessionStart)}~${clock(analysis.sessionEnd)}`
-                  : "지지·저항 구간, 확정 근거, 계획 근거를 표시합니다"}
-              </p>
+              {analysis && (
+                <p>
+                  {statusLabel(analysis.status ?? body?.status)} · 세션{" "}
+                  {clock(analysis.sessionStart)}~{clock(analysis.sessionEnd)}
+                </p>
+              )}
             </div>
           </div>
 
@@ -399,7 +370,8 @@ export default function StructurePanel({
                       ? "산출 불가"
                       : num1(candidate.entryQuality)}
                   </b>
-                  <span>순위 지표 · 확률 아님</span>
+                  {/* 이슈 #29: 지표 성격(순위 지표)·범위는 유지, '확률 아님' 반복 교육은 뺀다. */}
+                  <span>0~100 순위 지표</span>
                 </div>
                 <div>
                   <small>후보 상태</small>
@@ -414,7 +386,7 @@ export default function StructurePanel({
                 <div>
                   <small>완료 봉 AsOf</small>
                   <b>{clock(analysis?.analysisAsOf)}</b>
-                  <span>표시 기준 · 후보 cutoff {clock(analysis?.lastCompletedBarStart)}</span>
+                  <span>후보 cutoff {clock(analysis?.lastCompletedBarStart)}</span>
                 </div>
               </div>
 
@@ -424,10 +396,8 @@ export default function StructurePanel({
           )}
         </section>
       </div>
-      <p className="structure-footer">
-        구조 분석은 기술적 구조 근거를 정리한 화면이며 수익 확률이나 투자 권유가 아닙니다. 이
-        화면은 알림을 발생시키지 않습니다.
-      </p>
+      {/* 이슈 #29: 반복 교육 문단은 뺐지만 투자 권유 아님·알림 없음 고지는 한 줄로 남긴다. */}
+      <p className="structure-footer">이 화면은 알림을 발생시키지 않으며 투자 권유가 아닙니다.</p>
     </div>
   );
 }

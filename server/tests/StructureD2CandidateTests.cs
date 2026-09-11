@@ -420,7 +420,12 @@ public sealed class StructureD2CandidateTests
         Assert.Equal(99.80m, missing.EntryReference);                     // 트리거 종가를 참고값으로만 쓴다
     }
 
-    /// <summary>§16B: 5m 구조 결측은 READY 차단이며 구체적 사유를 남긴다.</summary>
+    /// <summary>
+    /// §16B: 5m 구조 결측은 READY 차단이며 구체적 사유를 남긴다.
+    /// [#33(D7)에서 기대값 갱신] 차단은 alignmentQuality가 필수인 유형(PULLBACK/BREAKOUT)으로 한정됐다.
+    /// 이 fixture의 눌림 저점(99.15)은 지지 하단 아래라 REBOUND도 함께 생기는데, REBOUND는 §8/§9.4에 따라
+    /// 이 차단의 스코프 밖이므로 코호트 note를 달고 READY(대표 후보)가 된다.
+    /// </summary>
     [Fact]
     public void MissingFiveMinuteStructureBlocksReadyWithAReason()
     {
@@ -431,7 +436,11 @@ public sealed class StructureD2CandidateTests
 
         Assert.Equal(CandidateDisposition.Rejected, candidate.Disposition);
         Assert.Contains(TrendEvaluator.BlockerMissing5mStructure, candidate.RejectionCodes);
-        Assert.Null(result.PreferredCandidateId);
+
+        var rebound = result.Candidates.Single(x => x.Kind == SetupKind.Rebound);
+        Assert.Equal(CandidateDisposition.Ready, rebound.Disposition);
+        Assert.Contains(SetupDetector.NoteReadyWithout5mStructure, rebound.Notes);
+        Assert.Equal(rebound.EventId, result.PreferredCandidateId);
     }
 
     [Fact]

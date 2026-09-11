@@ -1,6 +1,6 @@
 namespace Astra.Server.Application;
 
-public sealed class StateQueryService(ILocalStore store, IMonitorSignals signals, IRealtimeMarketStream stream, MonitorRuntimeState runtime, TimeProvider clock, StructureAnalysisService? structure = null)
+public sealed class StateQueryService(ILocalStore store, IMonitorSignals signals, IRealtimeMarketStream stream, MonitorRuntimeState runtime, TimeProvider clock, StructureAnalysisService? structure = null, StructureAlertPublisher? alerts = null)
 {
     public async Task<object> GetAsync()
     {
@@ -22,6 +22,18 @@ public sealed class StateQueryService(ILocalStore store, IMonitorSignals signals
         var websocket = stream.Status == "connected";
         // 설계 §12: additive `structureSummary`만 붙이고 기존 score/action(=v4)의 의미는 덮어쓰지 않는다.
         var structureSummary = structure?.Summary(watch.Select(x => x.Symbol));
-        return new { running = state.Running, mode = "live", connection = new { status = state.ConnectionStatus, message = state.ConnectionMessage, guideUrl = state.ConnectionMessage.Contains("허용 IP") ? "https://developers.tossinvest.com/docs" : null }, transport = new { mode = websocket ? "websocket" : "polling", status = stream.Status, message = websocket ? stream.Message : "REST 폴링 사용 중 · " + stream.Message, lastTickAt = stream.LastTickAt }, market = new { isOpen = open, label = open ? "정규장" : state.Market.Label, nextOpen = state.Market.NextOpen }, updatedAt = state.UpdatedAt, watchlist = watch, signals = rows, events = Array.Empty<object>(), structureSummary };
+        // 이슈 #26: additive `structureEvents` — 서버가 발행한 v5 알림 이벤트(최근 50건, seq 단조 증가).
+        // off/shadow에서는 v5 이벤트를 발행·노출하지 않는다(§16B). FE는 seq seed + Notification tag로 소비만 한다.
+        // 이슈 #67: 현재 세션의 이벤트만 내려준다 — 세션이 확정되지 않았거나 바뀌었으면 빈 배열이다.
+        var structureEvents = alerts is null || structure is null || structure.Mode != StructureEngineMode.Active
+                || state.Market.Start is not { } eventSession
+            ? Array.Empty<object>()
+            : (await alerts.GetRecentAsync(eventSession, default)).Select(x => (object)new
+            {
+                seq = x.Seq, type = x.Type, symbol = x.Symbol, eventId = x.EventId, kind = x.Kind,
+                entryQuality = x.EntryQuality, netR = x.NetR, quotePrice = x.QuotePrice, at = x.At,
+                planId = x.PlanId, stop = x.Stop, target = x.Target, reason = x.Reason
+            }).ToArray();
+        return new { running = state.Running, mode = "live", connection = new { status = state.ConnectionStatus, message = state.ConnectionMessage, guideUrl = state.ConnectionMessage.Contains("허용 IP") ? "https://developers.tossinvest.com/docs" : null }, transport = new { mode = websocket ? "websocket" : "polling", status = stream.Status, message = websocket ? stream.Message : "REST 폴링 사용 중 · " + stream.Message, lastTickAt = stream.LastTickAt }, market = new { isOpen = open, label = open ? "정규장" : state.Market.Label, nextOpen = state.Market.NextOpen }, updatedAt = state.UpdatedAt, watchlist = watch, signals = rows, events = Array.Empty<object>(), structureSummary, structureEvents };
     }
 }

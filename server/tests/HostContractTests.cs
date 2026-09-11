@@ -44,10 +44,12 @@ public sealed class HostBootTests(AstraHostFixture host) : IClassFixture<AstraHo
         Assert.NotNull(services.GetRequiredService<MetricsQueryService>());
         Assert.NotNull(services.GetRequiredService<LiquidityQueryService>());
         Assert.NotNull(services.GetRequiredService<SimulationReportQueryService>());
+        Assert.NotNull(services.GetRequiredService<ValidationQueryService>());
         Assert.NotNull(services.GetRequiredService<CatalogQueryService>());
         Assert.NotNull(services.GetRequiredService<PositionService>());
         Assert.NotNull(services.GetRequiredService<StructureAnalysisService>());
         Assert.NotNull(services.GetRequiredService<StructureObservationWriter>());
+        Assert.NotNull(services.GetRequiredService<StructureAlertPublisher>());
         Assert.NotNull(services.GetRequiredService<MonitorPollingService>());
         Assert.NotNull(services.GetRequiredService<MonitorRuntimeState>());
         Assert.NotNull(services.GetRequiredService<IMonitorSignals>());
@@ -59,6 +61,8 @@ public sealed class HostBootTests(AstraHostFixture host) : IClassFixture<AstraHo
         Assert.NotNull(services.GetRequiredService<IRealtimeMarketStream>());
         Assert.NotNull(services.GetRequiredService<Astra.Server.Domain.Structure.StructurePolicy>());
         Assert.NotNull(services.GetRequiredService<StructureEngineOptions>());
+        Assert.NotNull(services.GetRequiredService<StructureLiquidityFeed>());
+        Assert.NotNull(services.GetRequiredService<IStructuralTradeEntries>());
     }
 
     [Fact]
@@ -160,6 +164,10 @@ public sealed class HttpContractTests(AstraHostFixture host) : IClassFixture<Ast
         var rows = summary.GetProperty("symbols").EnumerateArray().ToArray();
         var tsla = Assert.Single(rows, row => row.GetProperty("symbol").GetString() == "TSLA");
         Assert.Equal("disabled", tsla.GetProperty("status").GetString());
+
+        // 이슈 #26: additive `structureEvents` — off에서는 v5 이벤트가 없으므로 빈 배열이다.
+        Assert.Equal(JsonValueKind.Array, root.GetProperty("structureEvents").ValueKind);
+        Assert.Equal(0, root.GetProperty("structureEvents").GetArrayLength());
     }
 
     [Fact]

@@ -36,6 +36,13 @@ public sealed record StructurePolicy
     public int BreakoutCooldownMinutes { get; init; } = 30;
     public long ObservationDailyByteLimit { get; init; } = 20L * 1024 * 1024;
 
+    /// <summary>
+    /// §16 관측 저장의 보존 우선순위. 일자 상한(<see cref="ObservationDailyByteLimit"/>)의 이 비율만큼은
+    /// 핵심 관측(상태 전이·후보 결정)만 쓸 수 있는 예비 구간이다. 상한 자체를 늘리지 않고 "무엇을 먼저 버릴지"만
+    /// 정한다 — 주기 WAIT 요약이 먼저 희생되고 진입·READY·거절 근거가 마지막까지 남는다.
+    /// </summary>
+    public double ObservationCoreReserveRatio { get; init; } = .20;
+
     // ── 가격 단위 (§16A 표, §16B 비용·가격 단위) ──
     public decimal PriceTick { get; init; } = .01m;
     public decimal MinimumSupportedPrice { get; init; } = 1.00m;
@@ -90,6 +97,13 @@ public sealed record StructurePolicy
     public double StopBufferAtrFactor { get; init; } = .15;
     public decimal StopBufferFloor { get; init; } = .01m;
     public decimal FrontRunBufferFloor { get; init; } = .01m;
+
+    /// <summary>
+    /// §9.1 최소 손절 거리의 변동성 하한 계수(#43). `Entry-Stop &lt; MinStopAtrFactor*Atr1mAtPlan`이면 계획을 거절한다.
+    /// 0.5는 "1분 노이즈의 절반"이라는 물리적 의미에서 고른 값이며 성과가 좋아지는 값을 탐색해 얻은 값이 아니다.
+    /// 손절을 넓히는 데 쓰지 않는다 — 하한 미달은 거절이지 손절 재배치가 아니다(§9.1 MaxRiskPercent와 대칭).
+    /// </summary>
+    public double MinStopAtrFactor { get; init; } = .5;
 
     // ── 품질 점수 척도 (§9.4) ──
     public double RoomQualityScale { get; init; } = 2;

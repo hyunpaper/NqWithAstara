@@ -180,7 +180,7 @@ public static class ZoneEvaluator
     /// <summary>
     /// §6.4 한 봉이 구간과 겹친 것이 Touch, 연속 접촉 봉은 하나의 episode다.
     /// 구간에서 완전히 벗어난 완료 봉 2개가 나온 뒤 재접촉해야 새 episode다.
-    /// 형성 자체는 재접촉 episode가 아니므로 확정 이후 시작한 접촉만 집계한다(§16A/§16B).
+    /// 형성 자체는 재접촉 episode가 아니므로 어떤 원천의 형성 구간에서 시작한 접촉도 집계하지 않는다(§16A/§16B).
     /// </summary>
     static ImmutableArray<TouchEpisode> Episodes(PriceZone zone, ZoneRole originalRole,
         ImmutableArray<ZoneRoleChange> history, ImmutableArray<StructureBar> forward,
@@ -207,6 +207,7 @@ public static class ZoneEvaluator
         foreach (var start in starts)
         {
             var touch = forward[start];
+            if (IsFormationBar(zone, touch)) continue;
             var notes = new SortedSet<string>(StringComparer.Ordinal);
             // 접촉 시점의 역할만 본다. BROKEN/UNRESOLVED로 방향이 없으면 최초 역할로 되돌리지 않는다(§16B:
             // BROKEN/retired ID는 원래 역할로 부활하지 않고, 확인 전 상태는 방향 평가 대상이 아니다).
@@ -259,6 +260,13 @@ public static class ZoneEvaluator
         }
         return result.ToImmutable();
     }
+
+    /// <summary>
+    /// 어떤 원천의 형성 봉·우측 확인 봉인지(§16B). Zone 단위 최솟값이 아니라 원천별 [OccurredAt,ConfirmedAt]로 판정한다.
+    /// 다중 원천 Zone에서 나중에 병합된 피벗의 형성 움직임이 재접촉 성공으로 집계되는 것을 막는다.
+    /// </summary>
+    static bool IsFormationBar(PriceZone zone, StructureBar bar) =>
+        zone.Sources.Any(x => bar.Start >= x.OccurredAt && bar.End <= x.ConfirmedAt);
 
     static ZoneRole? Directional(ZoneRole role) => role switch
     {
@@ -330,7 +338,15 @@ public static class ZoneEvaluator
         return reasons.ToImmutableArray();
     }
 
-    /// <summary>SnapshotRevision 판단용. 자기 자신의 revision 번호는 비교에서 제외한다.</summary>
+    /// <summary>
+    /// SnapshotRevision 판단용. 자기 자신의 revision 번호와 시간 연속 성분(recency, 그에 의존하는 strength value)을
+    /// 비교에서 제외한다. 이 둘은 구조가 그대로여도 매 봉 변하므로 revision이 구조 변경 신호가 되지 못한다(§6.3).
+    /// 증거 개수·family·역할·경계·자격은 그대로 비교하므로 실제 변화는 계속 revision을 올린다.
+    /// </summary>
     static string ContentKey(PriceZone zone) =>
-        (zone with { SnapshotRevision = 0 }).Fingerprint();
+        (zone with
+        {
+            SnapshotRevision = 0,
+            Strength = zone.Strength is null ? null : zone.Strength with { Recency = null, Value = null }
+        }).Fingerprint();
 }

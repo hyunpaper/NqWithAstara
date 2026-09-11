@@ -69,7 +69,7 @@ public sealed class StructureZoneBuilderTests
     [Fact]
     public void AWideProfileZoneIsNeitherNarrowedNorAbsorbingOthers()
     {
-        var profile = ZoneCandidate.FromBounds(99.90m, 100.60m, Fx.ProfileSource("poc", 100.25m, 30), "EstimatedVolumeProfile");
+        var profile = ZoneCandidate.FromBounds(99.90m, 100.60m, Fx.ProfileSource("poc", 100.25m), "EstimatedVolumeProfile");
         var pivot = Line(100.70m, .03m, Fx.Pivot("a", 100.70m, 10, 12));
         var zones = ZoneBuilder.Assemble([profile, pivot], Request(30), .20, P).Zones;
 
@@ -115,7 +115,7 @@ public sealed class StructureZoneBuilderTests
     public void ProfileSourcesNeverBecomeTheDurableRepresentativeId()
     {
         var pivot = Fx.Pivot("a", 100.00m, 10, 12);
-        var profile = Fx.ProfileSource("node", 100.00m, 30);
+        var profile = Fx.ProfileSource("node", 100.00m);
         var zone = Assert.Single(ZoneBuilder.Assemble(
             [Line(100.00m, .03m, pivot), Line(100.01m, .01m, profile)], Request(30), .20, P).Zones);
         Assert.Equal(pivot.Id, zone.Id);
@@ -124,9 +124,66 @@ public sealed class StructureZoneBuilderTests
     }
 
     [Fact]
+    public void ProfileOnlyZoneIdDoesNotChangeBetweenConsecutiveCutoffs()
+    {
+        var profile = Fx.ProfileSource("node", 100.00m);
+        ZoneCandidate[] Candidates() => [ZoneCandidate.FromBounds(99.95m, 100.05m, profile, "EstimatedVolumeProfile")];
+
+        var early = Assert.Single(ZoneBuilder.Assemble(Candidates(), Request(30), .20, P).Zones);
+        var later = Assert.Single(ZoneBuilder.Assemble(Candidates(), Request(31), .20, P).Zones);
+        var muchLater = Assert.Single(ZoneBuilder.Assemble(Candidates(), Request(120), .20, P).Zones);
+
+        Assert.True(early.ProfileOnly);
+        Assert.Equal(early.Id, later.Id);
+        Assert.Equal(early.Id, muchLater.Id);
+        Assert.NotEqual(profile.Id, early.Id);
+        Assert.DoesNotContain(StructureMath.Price(early.Lower), early.Id);
+    }
+
+    [Fact]
+    public void SplitZoneIdIsStableAcrossConsecutiveCutoffs()
+    {
+        var shared = Fx.Pivot("shared", 100.00m, 10, 12);
+        ZoneCandidate[] Candidates() => [Line(100.00m, .03m, shared), Line(101.00m, .03m, shared)];
+
+        var early = ZoneBuilder.Assemble(Candidates(), Request(30), .20, P);
+        var later = ZoneBuilder.Assemble(Candidates(), Request(120), .20, P);
+
+        Assert.Equal(2, early.Zones.Length);
+        Assert.Contains("ZONE_LINEAGE_SPLIT", early.Warnings);
+        Assert.Equal(early.Zones.Select(x => x.Id).ToArray(), later.Zones.Select(x => x.Id).ToArray());
+        Assert.Equal(2, early.Zones.Select(x => x.Id).Distinct().Count());
+    }
+
+    [Fact]
+    public void MissingAtrAtCutoffLeavesTheMergeParameterSubstitutionVisible()
+    {
+        var a = Fx.Pivot("a", 100.00m, 10, 12);
+        var b = Fx.Pivot("b", 100.02m, 20, 22);
+        ZoneCandidate[] Candidates() => [Line(100.00m, .01m, a), Line(100.02m, .01m, b)];
+
+        var missing = ZoneBuilder.Assemble(Candidates(), Request(14), null, P);
+        Assert.Contains(ZoneBuilder.FlagMergeParamsFromTickOnly, missing.Warnings);
+        Assert.All(missing.Zones,
+            z => Assert.Contains(ZoneBuilder.FlagMergeParamsFromTickOnly, z.ApproximationFlags));
+
+        var present = ZoneBuilder.Assemble(Candidates(), Request(30), .20, P);
+        Assert.DoesNotContain(ZoneBuilder.FlagMergeParamsFromTickOnly, present.Warnings);
+        Assert.All(present.Zones,
+            z => Assert.DoesNotContain(ZoneBuilder.FlagMergeParamsFromTickOnly, z.ApproximationFlags));
+    }
+
+    [Fact]
+    public void ZeroAtrAtCutoffIsTreatedAsMissingForMergeParameters()
+    {
+        var assembly = ZoneBuilder.Assemble([Line(100.00m, .01m, Fx.Pivot("a", 100.00m, 10, 12))], Request(14), 0, P);
+        Assert.Contains(ZoneBuilder.FlagMergeParamsFromTickOnly, assembly.Warnings);
+    }
+
+    [Fact]
     public void ProfileOnlyZoneKeepsATemporaryIdAndIsNotEligible()
     {
-        var profile = Fx.ProfileSource("node", 100.00m, 30);
+        var profile = Fx.ProfileSource("node", 100.00m);
         var zone = Assert.Single(ZoneBuilder.Assemble(
             [ZoneCandidate.FromBounds(99.95m, 100.05m, profile, "EstimatedVolumeProfile")], Request(30), .20, P).Zones);
         Assert.True(zone.ProfileOnly);
@@ -137,6 +194,36 @@ public sealed class StructureZoneBuilderTests
             ZoneEvaluationRequest.Create(Fx.SessionStart, Fx.At(30), ImmutableArray<StructureBar>.Empty), P).Zones[0];
         Assert.False(evaluated.Eligible);
         Assert.Contains(ZoneEvaluator.ReasonProfileOnly, evaluated.RejectReasons);
+    }
+
+    [Fact]
+    public void ProfileSourceIdentityIsStableAcrossConsecutiveCutoffs()
+    {
+        var bars = Enumerable.Range(0, 20).Select(i => Fx.Bar(i, 100.00m, 100.10m, 99.90m, 100.00m)).ToImmutableArray();
+
+        ZoneSource[] ProfileSources(int cutoffMinute) => ZoneBuilder.Build(
+                ZoneBuildRequest.Create(Fx.Symbol, Fx.SessionStart, Fx.SessionEnd, Fx.At(cutoffMinute), bars,
+                    ImmutableArray<StructureBar>.Empty), P)
+            .Zones.SelectMany(x => x.Sources).Where(x => x.Family == ZoneSourceFamily.Profile)
+            .OrderBy(x => x.Id, StringComparer.Ordinal).ToArray();
+
+        var at20 = ProfileSources(20);
+        Assert.NotEmpty(at20);
+        Assert.All(at20, x => Assert.Equal(Fx.SessionStart, x.OccurredAt));
+        Assert.All(at20, x => Assert.Equal(Fx.SessionStart, x.ConfirmedAt));
+        Assert.Equal(at20.Select(x => x.Id).ToArray(), ProfileSources(21).Select(x => x.Id).ToArray());
+    }
+
+    [Fact]
+    public void TemporaryProfileSourcesDoNotSetTheZoneConfirmationLineage()
+    {
+        var pivot = Fx.Pivot("a", 100.00m, 10, 12);
+        var zone = Assert.Single(ZoneBuilder.Assemble(
+            [Line(100.00m, .03m, pivot), Line(100.01m, .01m, Fx.ProfileSource("node", 100.00m))],
+            Request(30), .20, P).Zones);
+
+        Assert.Equal(Fx.At(12), zone.FirstConfirmedAt);
+        Assert.Equal(Fx.At(12), zone.LastConfirmedAt);
     }
 
     [Fact]

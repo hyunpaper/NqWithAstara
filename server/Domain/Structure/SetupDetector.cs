@@ -102,6 +102,15 @@ public static class SetupDetector
     public const string NoteLiveBelowStop = "LIVE_PRICE_AT_OR_BELOW_STRUCTURAL_STOP";
     public const string NotePullbackTrendState = "PULLBACK_REQUIRES_UP_OR_TRANSITION";
 
+    /// <summary>
+    /// 이슈 #33(D7): 5m 구조 결측 상태에서 READY가 허용된 REBOUND 후보에 남기는 관측 note.
+    /// #27/#28 코호트 분석에서 구조 결측 진입을 분리 집계하기 위한 표식이다.
+    /// </summary>
+    public const string NoteReadyWithout5mStructure = "V5_READY_WITHOUT_5M_STRUCTURE";
+
+    /// <summary>PULLBACK/BREAKOUT이 signedTrend&lt;0에서 롱으로 승격되는 것을 막는 거절 사유(#42).</summary>
+    public const string CodeTrendDirectionOpposesLong = "TREND_DIRECTION_OPPOSES_LONG";
+
     public static SetupDetectionResult Detect(SetupDetectionRequest request, StructurePolicy policy)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -340,8 +349,26 @@ public static class SetupDetector
 
         var rejections = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var code in planning.ReasonCodes) rejections.Add(code);
-        foreach (var code in readyBlockers) rejections.Add(code);
+        foreach (var code in readyBlockers)
+        {
+            // 이슈 #33(D7): MISSING_5M_STRUCTURE의 READY 차단은 추세 정렬(alignmentQuality)이 필수인
+            // 유형(PULLBACK/BREAKOUT)으로 한정한다. REBOUND는 §8이 높은 추세 점수를 요구하지 않고
+            // (CounterTrend=true) §9.4가 alignmentQuality를 제외하므로 이 차단의 스코프 밖이다.
+            // trend 자체가 계산 불가한 TREND_UNAVAILABLE 등 나머지 차단은 전 유형에 그대로 적용되고,
+            // TrendAssessment.BlockersForReady 산출과 표시 경로(DataQuality)는 바꾸지 않는다 — 소비 지점 스코프다.
+            if (hypothesis.Kind == SetupKind.Rebound && code == TrendEvaluator.BlockerMissing5mStructure)
+            {
+                notes.Add(NoteReadyWithout5mStructure);   // 구조 결측 코호트 분리 집계용(#27/#28)
+                continue;
+            }
+            rejections.Add(code);
+        }
         foreach (var reason in quality.Reasons) rejections.Add(reason);
+
+        // null은 TREND_UNAVAILABLE이 이미 막으므로 중복 사유를 만들지 않는다(#42).
+        if (RequiresTrendAlignment(hypothesis.Kind) && request.Trend.SignedTrend is { } signedTrend
+            && double.IsFinite(signedTrend) && signedTrend < 0)
+            rejections.Add(CodeTrendDirectionOpposesLong);
 
         // 실시간 유지 조건 붕괴는 INVALIDATED이며 재상승했다고 같은 이벤트를 되살리지 않는다(§10, §16B).
         var invalidated = false;
@@ -377,6 +404,9 @@ public static class SetupDetector
             rejections.ToImmutableArray(), notes.ToImmutableArray(), hypothesis.CounterTrend,
             hypothesis.RetestConfirmed, hypothesis.EpisodeStartAt);
     }
+
+    /// <summary>추세 정렬을 전제로 하는 종류. REBOUND는 제외다(§8/§9.4).</summary>
+    static bool RequiresTrendAlignment(SetupKind kind) => kind is SetupKind.Pullback or SetupKind.Breakout;
 
     /// <summary>§8 stable EventId=(symbol,sessionStart,kind,zoneId,triggerBarStart).</summary>
     public static string EventId(string symbol, DateTimeOffset sessionStart, string kindName, string zoneId,

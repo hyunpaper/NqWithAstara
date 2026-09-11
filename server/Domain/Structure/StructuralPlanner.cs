@@ -107,6 +107,13 @@ public static class StructuralPlanner
     public const string RiskTooWide = "RISK_TOO_WIDE";
     public const string StopNotBelowEntry = "STOP_NOT_BELOW_ENTRY";
     public const string StopNotPositive = "STOP_NOT_POSITIVE";
+
+    /// <summary>#43 §9.1: 손절폭이 왕복 수수료보다 작다. netR은 사실상 비용/비용 비율이라 위험을 재지 못한다.</summary>
+    public const string StopInsideCost = "STOP_INSIDE_COST";
+
+    /// <summary>#43 §9.1: 손절폭이 1분 ATR의 MinStopAtrFactor배 안쪽이다. 구조 무효화가 아니라 체결 잡음에 걸리는 선이다.</summary>
+    public const string StopInsideNoise = "STOP_INSIDE_NOISE";
+
     public const string InvalidEntryReference = "INVALID_ENTRY_REFERENCE";
     public const string PriceBelowMinimumSupported = "PRICE_BELOW_MINIMUM_SUPPORTED";
     public const string UnsupportedPriceTick = "UNSUPPORTED_PRICE_TICK";
@@ -136,6 +143,10 @@ public static class StructuralPlanner
         else if (entry < policy.MinimumSupportedPrice) reasons.Add(PriceBelowMinimumSupported);
         if (reasons.Count > 0)
             return Rejected(reasons, warnings, request, null, null, null, null, spread, missingLiquidity);
+
+        // §9.3 feeCostPerShare=Entry*RoundTripFeePercent/100. 0.2%는 설정 기본값이며 계좌별 실제 수수료가 아니다.
+        // 진입가만으로 정해지므로 손절 하한 검사(#43)보다 먼저 구한다. 공식은 §9.3 그대로다.
+        var fee = entry * (decimal)policy.RoundTripFeePercent / 100m;
 
         // ── §9.1 손절: 구조 anchor 없으면 Stop=null, READY 금지 ──
         decimal? buffer = null, stop = null;
@@ -176,6 +187,20 @@ public static class StructuralPlanner
         {
             riskPercent = (double)((entry - stopValue) / entry) * 100;
             if (riskPercent > policy.MaxRiskPercent) reasons.Add(RiskTooWide);
+
+            // ── #43 최소 손절 거리 하한. §9.1 MaxRiskPercent 상한과 대칭인 하한이다 ──
+            // netR(§9.3)은 비율만 보므로 손절폭이 0에 가까우면 netRisk가 비용에 수렴해 오히려 커진다.
+            // 비용·노이즈보다 작은 손절폭은 구조 무효화 지점이 아니라 체결 잡음에 걸리는 선이므로 계획을 거절한다.
+            // 손절을 넓히거나 옮기지 않는다 — ATR로 손절 위치를 만들어내는 폴백은 v5 금지 사항이다(§19-5).
+            var stopDistance = entry - stopValue;
+            if (stopDistance < fee) reasons.Add(StopInsideCost);
+
+            // §16A: ATR 결측·비양수를 0으로 대체하지 않는다. 이 경우 노이즈 하한은 적용하지 않고 비용 하한만 남는다.
+            var noiseFloor = StructureMath.ToPriceDelta(
+                request.Atr1mAtPlan is { } atrForFloor && double.IsFinite(atrForFloor) && atrForFloor > 0
+                    ? atrForFloor * policy.MinStopAtrFactor
+                    : null);
+            if (noiseFloor is { } floor && stopDistance < floor) reasons.Add(StopInsideNoise);
         }
 
         // ── §9.2 목표: 가장 가까운 자격 있는 저항 앞 ──
@@ -194,8 +219,6 @@ public static class StructuralPlanner
 
         // ── §9.3 비용과 진입 자격 ──
         decimal? netReward = null, netRisk = null, netR = null;
-        // §9.3 feeCostPerShare=Entry*RoundTripFeePercent/100. 0.2%는 설정 기본값이며 계좌별 실제 수수료가 아니다.
-        var fee = entry * (decimal)policy.RoundTripFeePercent / 100m;
         if (stop is { } s2 && s2 > 0 && s2 < entry && target is { } t2 && t2 > entry)
         {
             netReward = t2 - entry - fee - extraCost;

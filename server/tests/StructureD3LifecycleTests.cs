@@ -58,7 +58,7 @@ public sealed class StructureD3LifecycleTests
 
         var ready = Detect().Candidates;
         Assert.Contains(ready, x => x.Disposition == CandidateDisposition.Ready);
-        var suppressed = StructuralLifecycle.ApplyLatch(Fresh(), ready, gate.AllowNewTrigger);
+        var suppressed = StructuralLifecycle.ApplyLatch(Fresh(), ready, gate.AllowNewTrigger, P);
         Assert.All(suppressed, x => Assert.Equal(CandidateDisposition.Wait, x.Disposition));
         Assert.All(suppressed, x => Assert.Null(x.Plan));
         Assert.All(suppressed, x => Assert.Contains(StructuralLifecycle.CodeNewTriggerSuppressed, x.Notes));
@@ -130,11 +130,52 @@ public sealed class StructureD3LifecycleTests
         var ready = computed.First(x => x.Disposition == CandidateDisposition.Ready);
         var latch = Fresh() with { Seeded = true, Tombstones = Fresh().Tombstones.SetItem(ready.EventId, terminal) };
 
-        var applied = StructuralLifecycle.ApplyLatch(latch, computed, allowNewTrigger: true);
+        var applied = StructuralLifecycle.ApplyLatch(latch, computed, allowNewTrigger: true, P);
         var same = applied.First(x => x.EventId == ready.EventId);
         Assert.Equal(terminal, same.Disposition);
         Assert.Null(same.Plan);
         Assert.Contains(StructuralLifecycle.NoteTombstoned, same.Notes);
+    }
+
+    [Theory]
+    [InlineData(CandidateDisposition.Rejected)]
+    [InlineData(CandidateDisposition.Invalidated)]
+    [InlineData(CandidateDisposition.Expired)]
+    [InlineData(CandidateDisposition.Entered)]
+    public void SuppressedNewTriggerKeepsAComputedTerminalDispositionInsteadOfWait(CandidateDisposition terminal)
+    {
+        var computed = Detect().Candidates;
+        var target = computed.First(x => x.Disposition == CandidateDisposition.Ready);
+        var withTerminal = computed
+            .Select(x => x.EventId == target.EventId ? x with { Disposition = terminal } : x)
+            .ToImmutableArray();
+
+        var applied = StructuralLifecycle.ApplyLatch(Fresh(), withTerminal, allowNewTrigger: false, P);
+        var same = applied.First(x => x.EventId == target.EventId);
+
+        Assert.Equal(terminal, same.Disposition);
+        Assert.Null(same.Plan);
+        Assert.DoesNotContain(StructuralLifecycle.CodeNewTriggerSuppressed, same.Notes);
+        Assert.All(applied.Where(x => x.EventId != target.EventId),
+            x => Assert.Equal(CandidateDisposition.Wait, x.Disposition));
+    }
+
+    [Fact]
+    public void SuppressedTerminalCandidateStillBecomesATombstoneOnCommit()
+    {
+        var computed = Detect().Candidates;
+        var target = computed.First(x => x.Disposition == CandidateDisposition.Ready);
+        var withTerminal = computed
+            .Select(x => x.EventId == target.EventId
+                ? x with { Disposition = CandidateDisposition.Invalidated }
+                : x)
+            .ToImmutableArray();
+
+        var applied = StructuralLifecycle.ApplyLatch(Fresh(), withTerminal, allowNewTrigger: false, P);
+        var latch = StructuralLifecycle.Commit(Fresh(), Fx.At(TriggerMinute), applied, [], null, null);
+
+        Assert.Equal(CandidateDisposition.Invalidated, latch.Tombstones[target.EventId]);
+        Assert.DoesNotContain(target.DuplicateGuardKey, latch.ConsumedGuardKeys);
     }
 
     /// <summary>같은 중복 방지 키에서 이미 이벤트를 소비했다면 새 READY를 만들지 않는다(§8).</summary>
@@ -145,7 +186,7 @@ public sealed class StructureD3LifecycleTests
         var ready = computed.First(x => x.Disposition == CandidateDisposition.Ready);
         var latch = Fresh() with { Seeded = true, ConsumedGuardKeys = Fresh().ConsumedGuardKeys.Add(ready.DuplicateGuardKey) };
 
-        var applied = StructuralLifecycle.ApplyLatch(latch, computed, allowNewTrigger: true);
+        var applied = StructuralLifecycle.ApplyLatch(latch, computed, allowNewTrigger: true, P);
         var guarded = applied.Where(x => x.DuplicateGuardKey == ready.DuplicateGuardKey).ToArray();
         Assert.NotEmpty(guarded);
         Assert.All(guarded, x => Assert.NotEqual(CandidateDisposition.Ready, x.Disposition));

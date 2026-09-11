@@ -101,4 +101,66 @@ public sealed class SimulationEngineV4Tests
         var result = SimulationEngine.Process([closed], "NVDA", [], 100, T, 50, 100, [entry]);
         Assert.Single(result);
     }
+
+    // --- Issue #45: gap-up target must not be overridden by a later intrabar stop touch ---
+
+    [Fact]
+    public void IssueReproductionFixtureEntry100Stop99Target104ResolvesToTarget()
+    {
+        // Exact repro from issue #45: Entry 100 / Stop 99 / Target 104. O105 H106 L98 C100.
+        // Previously reported STOP@99; expected TARGET@104 since the open already cleared target.
+        var trade = new SimTrade("id", "NVDA", "SETUP", T, 100, 104, 99, null, null, "OPEN", null, null, null, 100);
+        var result = SimulationEngine.Process([trade], "NVDA", [Bar(1, 105, 106, 98, 100)], 100, T.AddMinutes(2), 50, 100, []);
+        Assert.Equal("TARGET", result[0].Status);
+        Assert.Equal(104, result[0].ExitPrice);
+    }
+
+    [Fact]
+    public void GapAboveTargetFillsTargetEvenWhenTheSameBarLaterTouchesStop()
+    {
+        // Entry 100 / Stop 95 / Target 110. O111 H112 L94 C100 — open already clears target,
+        // so the target order is treated as filled before the bar's own low reaches stop.
+        var result = SimulationEngine.Process([Open()], "NVDA", [Bar(1, 111, 112, 94, 100)], 100, T.AddMinutes(2), 50, 100, []);
+        Assert.Equal("TARGET", result[0].Status);
+        Assert.Equal(110, result[0].ExitPrice); // conservative fill at Target, not the more favorable Open
+    }
+
+    [Fact]
+    public void GapBelowStopStillWinsOverAnyLaterTargetTouch()
+    {
+        // Existing gap-down behavior must be untouched by the new gap-up target check.
+        var result = SimulationEngine.Process([Open()], "NVDA", [Bar(1, 90, 111, 88, 91)], 91, T.AddMinutes(2), 50, 100, []);
+        Assert.Equal("STOP", result[0].Status);
+        Assert.Equal(90, result[0].ExitPrice);
+    }
+
+    [Fact]
+    public void MidRangeOpenTouchingBothLevelsStillPrefersStopFirst()
+    {
+        // Open is strictly between Stop and Target; order of intrabar touches is unknowable,
+        // so the pre-existing stop-first tie-break must be preserved (regression pin).
+        var result = SimulationEngine.Process([Open()], "NVDA", [Bar(1, 100, 111, 94, 100)], 100, T.AddMinutes(2), 50, 100, []);
+        Assert.Equal("STOP", result[0].Status);
+        Assert.Equal(95, result[0].ExitPrice);
+    }
+
+    [Fact]
+    public void GapAboveTargetFillsTargetWhenLowNeverReachesStop()
+    {
+        // Confirms the pre-existing gap-up-to-target behavior is unchanged when stop is never touched.
+        var result = SimulationEngine.Process([Open()], "NVDA", [Bar(1, 111, 112, 105, 108)], 108, T.AddMinutes(2), 50, 100, []);
+        Assert.Equal("TARGET", result[0].Status);
+        Assert.Equal(110, result[0].ExitPrice);
+    }
+
+    [Fact]
+    public void GapAboveTargetAlsoAppliesToFrozenV5StructuralTrades()
+    {
+        // Same gap-up-then-stop-touch fixture as above, but on a v5 structure-owned trade
+        // (Logic prefix "v5-structure.*"), confirming EvaluateBar's order applies uniformly.
+        var v5Trade = Open() with { Logic = "v5-structure.1", Kind = "BREAKOUT" };
+        var result = SimulationEngine.Process([v5Trade], "NVDA", [Bar(1, 111, 112, 94, 100)], 100, T.AddMinutes(2), 50, 100, []);
+        Assert.Equal("TARGET", result[0].Status);
+        Assert.Equal(110, result[0].ExitPrice);
+    }
 }

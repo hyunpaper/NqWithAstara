@@ -205,9 +205,32 @@ export type StructureSummaryRow = {
   candidateState?: string | null;
   preferredCandidateId?: string | null;
   entryQuality?: number | null;
+  /** 이슈 #26: 대표 후보의 종류(PULLBACK/BREAKOUT/REBOUND). 대표 후보가 없으면 null이다. */
+  preferredKind?: string | null;
   analysisAsOf?: string | null;
   quoteAt?: string | null;
   warnings?: string[] | null;
+};
+
+/**
+ * 이슈 #26: `/api/state`의 additive `structureEvents` 한 건. 서버(StructureAlertPublisher)가
+ * active gate 안 commit 지점에서 발행한 v5 알림 이벤트이며, FE는 표시·소리만 담당한다(발행 판단 없음).
+ * seq는 서버 재시작을 넘어 단조 증가한다.
+ */
+export type StructureEventRow = {
+  seq: number;
+  type?: string | null; // V5_READY | V5_ENTERED | V5_BLOCKED
+  symbol?: string | null;
+  eventId?: string | null;
+  kind?: string | null;
+  entryQuality?: number | null;
+  netR?: number | null;
+  quotePrice?: number | null;
+  at?: string | null;
+  planId?: string | null;
+  stop?: number | null;
+  target?: number | null;
+  reason?: string | null;
 };
 
 export type StructureSummary = {
@@ -353,6 +376,30 @@ export const setupKindLabel = (kind: string | null | undefined): string => {
   }
 };
 
+// ── 이슈 #26: 라이브 목록 v5 열 전용 표기 ────────────────────────────────────
+// SignedTrend/EntryQuality를 v4 scoreStyle 색상·`/100` 포맷·매수/매도 문구에 절대 연결하지 않는다(§2).
+// %·승률·확률·성공 단어를 쓰지 않으며, 결측을 0으로 위장하지 않는다(스냅샷 테스트로 고정).
+
+/** SignedTrend 전용 렌더 문자열: 부호 화살표 + 부호 있는 값(소수 1자리) + 추세 상태 라벨. null이면 "추세 미산정". */
+export const signedTrendText = (
+  state: string | null | undefined,
+  signedTrend: number | null | undefined,
+): string => {
+  if (signedTrend == null || !Number.isFinite(signedTrend)) return "추세 미산정";
+  const arrow = signedTrend > 0 ? "▲" : signedTrend < 0 ? "▼" : "—";
+  const sign = signedTrend > 0 ? "+" : signedTrend < 0 ? "−" : "";
+  return `${arrow} ${sign}${Math.abs(signedTrend).toFixed(1)} ${trendStateLabel(state)}`;
+};
+
+/** EntryQuality 표기: 대표 후보가 없거나 값이 결측이면 "미평가" 고정 — null을 0으로 만들지 않는다(§2-4). */
+export const entryQualityText = (
+  preferredCandidateId: string | null | undefined,
+  entryQuality: number | null | undefined,
+): string =>
+  !preferredCandidateId || entryQuality == null || !Number.isFinite(entryQuality)
+    ? "미평가"
+    : entryQuality.toFixed(1);
+
 /** D3 계약 문서는 `FLIPPED_*`, 실제 직렬화는 enum 이름 그대로인 `FLIPPEDSUPPORT`다. 둘 다 받는다. */
 const normalizeRole = (role: string | null | undefined): string =>
   (role ?? "").toUpperCase().replace(/_/g, "");
@@ -480,6 +527,10 @@ const CODE_TEXT: Record<string, string> = {
   RISK_TOO_WIDE: "손절 폭이 허용 위험을 넘습니다 (손절을 좁혀 통과시키지 않습니다)",
   STOP_NOT_BELOW_ENTRY: "계산된 손절이 진입가보다 낮지 않습니다",
   STOP_NOT_POSITIVE: "계산된 손절이 0 이하입니다",
+  // 이슈 #43: netR은 비용 대비 비율이라 손절폭이 비용보다 좁으면 위험을 재지 못한다.
+  STOP_INSIDE_COST: "손절 폭이 왕복 수수료보다 좁습니다",
+  // 이슈 #43: 구조 무효화 기준이 아니라 체결 잡음에 걸리는 선이라 거절한다.
+  STOP_INSIDE_NOISE: "손절 폭이 1분 ATR 절반보다 좁습니다 (체결 잡음 구간)",
   INVALID_ENTRY_REFERENCE: "진입 참고가가 유효하지 않습니다",
   ENTRY_REFERENCE_FROM_TRIGGER_CLOSE:
     "실시간 호가가 없어 트리거 봉 종가를 진입 참고가로 사용했습니다 (READY 아님)",
@@ -494,8 +545,14 @@ const CODE_TEXT: Record<string, string> = {
   // 추세·품질
   TREND_UNAVAILABLE: "추세를 판정할 근거가 부족합니다",
   MISSING_5M_STRUCTURE: "5분 확정 피벗이 부족합니다 — 피벗 확인 대기",
+  // 이슈 #29: SetupDetector가 반등(REBOUND) 후보에 남기는 관측 note. 사전 미등록이라
+  // 원문 fallback으로 노출되던 것을 등록한다 (서버 상수: NoteReadyWithout5mStructure).
+  V5_READY_WITHOUT_5M_STRUCTURE:
+    "5분 구조 확인 전 반등 진입 — 구조 결측 상태 표식",
   COUNTER_TREND_SETUP: "추세와 반대 방향의 후보입니다",
   PULLBACK_REQUIRES_UP_OR_TRANSITION: "눌림 후보는 상승·전환 추세에서만 성립합니다",
+  // 이슈 #42: signedTrend<0에서 PULLBACK/BREAKOUT이 롱으로 승격되는 것을 막는 거절 사유.
+  TREND_DIRECTION_OPPOSES_LONG: "추세 방향이 롱 진입과 반대입니다 (역방향 진입은 거절합니다)",
   NO_VOLUME_BASELINE: "거래량 기준선이 없어 트리거 거래량 품질을 계산할 수 없습니다",
   MISSING_REQUIRED_QUALITY_COMPONENT: "필수 품질 요소가 결측입니다 (품질 점수 없음)",
   ZERO_REQUIRED_QUALITY_COMPONENT: "필수 품질 요소가 0입니다",
@@ -544,7 +601,8 @@ const CODE_TEXT: Record<string, string> = {
   MISSING_QUOTE: "실시간 호가가 없습니다",
   STALE_QUOTE: "호가가 오래되었습니다 (30초 만료)",
   QUOTE_IN_FUTURE: "호가 시각이 미래입니다 (신뢰하지 않음)",
-  MISSING_LIQUIDITY_COST: "호가 스프레드를 확인할 수 없어 비용을 보수적으로 가정했습니다",
+  // 이슈 #29: spread=0 가정은 보수성 보장이 없으므로 "보수적 가정"으로 단정하지 않고 사실대로 적는다.
+  MISSING_LIQUIDITY_COST: "호가 스프레드를 확인할 수 없어 호가 비용이 반영되지 않았습니다",
   SPREAD_MISSING: "스프레드 정보 없음",
   SPREAD_STALE: "스프레드가 오래되었습니다",
   SPREAD_CROSSED: "매수·매도 호가가 역전되어 사용하지 않았습니다",
@@ -585,7 +643,58 @@ const CODE_TEXT: Record<string, string> = {
   AFTER_ENTRY_CUTOFF: "장 마감 전 신규 진입 차단 시간대입니다",
   ACTIVE_ENTRY_WIRING_PENDING:
     "active 모드라도 신규 진입 배선은 아직 연결되지 않았습니다 (D6 범위)",
+  // 이슈 #47: 같은 zone lineage에서 직전 돌파 발동으로부터 30분 이내면 새 트리거라도 승격하지 않는다.
+  BREAKOUT_ZONE_COOLDOWN: "같은 저항 구간의 돌파 재발동을 30분 동안 억제합니다",
+
+  // v5 진입 관측 (D6 active 배선)
+  V5_ENTRY_COMMITTED: "v5 구조 계획으로 진입을 생성했습니다",
+  V5_ENTRY_BLOCKED_BY_OPEN_TRADE: "이 종목에 OPEN 거래가 있어 신규 진입을 보류했습니다",
+  V5_ENTRY_PLAN_INVALID: "동결 계획의 가격 순서가 성립하지 않아 진입을 거절했습니다",
+  V5_ENTRY_PORT_UNAVAILABLE: "진입 포트가 배선되지 않아 진입을 보류했습니다 (설정 문제)",
+
+  // 관측 저장 한도 (이슈 #44) — 서버 상수는 PascalCase(ObservationStorageLimited)다. 다른 코드와
+  // 대소문자 형식이 다르지만 codeText()는 원문 그대로 대조하므로 그대로 키로 쓴다.
+  ObservationStorageLimited: "관측 저장 한도로 주기 요약 일부가 축약되었습니다",
+  ObservationCoreStorageLimited: "관측 저장 한도로 핵심 관측까지 누락되어 전체 검증이 불가합니다",
 };
+
+// ── 결측 컴포넌트 이름 → 한국어 설명 ────────────────────────────────────────
+// missingComponents는 경고/이벤트 "코드"(SCREAMING_SNAKE)가 아니라 계산 구성요소
+// "이름"(camelCase)이다. 의미는 "이 요소를 계산할 근거(확정 봉·피벗·유효 ATR 등)가
+// 아직 부족해 계산에서 생략했다"이며, 계산 오류나 0점이 아니다(§16A: 결측을 0으로
+// 대체하지 않는다. 값 0은 유효한 값이고 결측이 아니다).
+// 출처 전수 대조: server/Domain/Structure/TrendEvaluator.cs (추세 7종),
+// server/Domain/Structure/ZoneEvaluator.cs (구간 강도 4종).
+
+const MISSING_COMPONENT_TEXT: Record<string, string> = {
+  // 추세(TrendEvaluator) — trend.missingComponents
+  structureDirection:
+    "구조 방향 — 구조 방향을 계산할 확정 5분 피벗 구조가 아직 부족합니다 (피벗 확인 대기)",
+  atr1m: "1분 ATR — 유효한 ATR(>0)이 아직 없어 ATR로 정규화하는 요소를 계산하지 못했습니다",
+  vwap: "VWAP — 세션 거래량이 아직 없어 VWAP을 계산하지 못했습니다",
+  efficiency: "추세 효율 — 경로 효율을 계산할 완료 봉이 아직 부족합니다",
+  emaDirection: "EMA 정렬 방향 — EMA(9·21) 또는 유효 ATR이 아직 부족합니다",
+  slopeDirection: "EMA 기울기 방향 — 기울기 비교 구간의 완료 봉 또는 유효 ATR이 아직 부족합니다",
+  vwapDirection: "VWAP 대비 방향 — VWAP 또는 유효 ATR이 아직 없어 계산하지 못했습니다",
+  // 구간 강도(ZoneEvaluator) — zone.missingEvidence (기하평균에서 생략된 요소)
+  touchEvidence: "접촉 증거 — 완료된 접촉 반응이 아직 없어 계산하지 못했습니다",
+  reactionEvidence: "반응 증거 — 반응 크기를 정규화할 완료 반응·ATR이 아직 없습니다",
+  recency: "최근성 — 최근성을 계산할 확정 원천이 아직 없습니다",
+  confluence: "증거 중첩 — 이 구간을 지지하는 원천 계열이 아직 없습니다",
+};
+
+/**
+ * 결측 컴포넌트 이름 하나를 "계산 근거 부족" 설명으로. 코드 사전(codeText)과 분리된
+ * 별도 경로다(§19-9: 모르는 이름은 감추지 않고 원문 그대로 노출).
+ */
+export const missingComponentText = (name: string): string => {
+  const raw = (name ?? "").trim();
+  if (!raw) return "";
+  return MISSING_COMPONENT_TEXT[raw] ?? `${raw} — 설명이 등록되지 않은 결측 요소입니다 (원문 표시)`;
+};
+
+export const missingComponentTexts = (names: string[] | null | undefined): string[] =>
+  arr(names).map(missingComponentText).filter((x) => x.length > 0);
 
 /** 코드 하나를 문장으로. 접미 카운트(`...x3`)와 `CODE:detail` 형태를 함께 처리한다. */
 export const codeText = (code: string): string => {
@@ -605,3 +714,30 @@ export const codeText = (code: string): string => {
 
 export const codeTexts = (codes: string[] | null | undefined): string[] =>
   arr(codes).map(codeText).filter((x) => x.length > 0);
+
+// ── 기본 화면 / 진단 상세 분리 (이슈 #29) ──────────────────────────────────
+// §19-9("모르는 코드를 감추지 않는다")는 **데이터를 버리지 말라**는 규칙이지 원시 코드를
+// 기본 화면에 그대로 찍으라는 규칙이 아니다. 기본 화면은 사전에 등록된 문장만 보여주고,
+// 미등록 원시 코드(WidthFromTickOnly·EstimatedVolumeProfile·ProfileOnlyTemporaryId 등)는
+// 접힌 진단 상세에 원문 그대로 남긴다. codeText()의 fallback 자체는 그대로 유지한다.
+
+/** 코드가 사전에 등록되어 있는지. 접미 카운트(`...xN`)와 `CODE:detail` 형태도 등록으로 본다. */
+export const isKnownCode = (code: string): boolean => {
+  const raw = (code ?? "").trim();
+  if (!raw) return false;
+  if (CODE_TEXT[raw]) return true;
+  const repeated = /^(.*?)x(\d+)$/.exec(raw);
+  if (repeated && CODE_TEXT[repeated[1]]) return true;
+  const head = raw.split(":")[0];
+  return head !== raw && CODE_TEXT[head] != null;
+};
+
+/** 기본 화면용 — 등록된 코드만 한국어 문장으로. 미등록 코드는 여기서 나오지 않는다. */
+export const knownCodeTexts = (codes: string[] | null | undefined): string[] =>
+  arr(codes).filter(isKnownCode).map(codeText);
+
+/** 진단 상세용 — 사전에 없는 코드의 원문. 서버 데이터를 버리지 않기 위한 보존 경로다. */
+export const unknownCodes = (codes: string[] | null | undefined): string[] =>
+  arr(codes)
+    .map((c) => (c ?? "").trim())
+    .filter((c) => c.length > 0 && !isKnownCode(c));

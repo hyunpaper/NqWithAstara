@@ -576,6 +576,86 @@ h2 {
   font-weight: 600;
   white-space: nowrap;
 }
+/* 이슈 #26 — 라이브 목록 v5 평가 열. v4 점수색(scoreStyle)과 별도 팔레트만 쓴다. */
+.v5-cells {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 4px 0 9px 40px;
+}
+.v5-cell {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.v5-cell small {
+  font-size: 9px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.v5-cell b {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.v5-kind {
+  font-size: 9px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+.v5-warnings {
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px dashed var(--line);
+  border-radius: 4px;
+  padding: 1px 6px;
+  cursor: help;
+}
+.v5-off-note {
+  margin: 0;
+  padding: 10px 15px;
+  border-bottom: 1px solid var(--line);
+  font-size: 10px;
+  color: var(--muted);
+}
+.v5-detail-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px 12px;
+  margin-bottom: 12px;
+}
+.v5-detail-strip .v5-cells {
+  padding: 6px 0;
+}
+.v5-detail-strip > button {
+  border: 1px solid var(--line);
+  background: var(--soft);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 5px 9px;
+  font-size: 10px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.position-basis-note {
+  grid-column: 1 / -1;
+  margin: 0 0 4px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.live-sort {
+  flex-shrink: 0;
+}
 .tag.buy {
   background: rgba(42, 240, 170, 0.22);
   color: var(--accent-vivid);
@@ -1298,13 +1378,6 @@ footer {
 .sr-trend.unknown b {
   color: var(--muted);
 }
-.structure-list-note {
-  margin: 0;
-  padding: 12px 18px 14px;
-  font-size: 10px;
-  color: var(--muted);
-  line-height: 1.6;
-}
 .se-state {
   display: inline-block;
   border-radius: 4px;
@@ -1477,12 +1550,6 @@ footer {
 .structure-chart-legend .sc-line.quote {
   border-color: var(--v5-quote);
 }
-.structure-chart-note {
-  margin: 8px 0 0;
-  font-size: 10px;
-  color: var(--muted);
-  line-height: 1.7;
-}
 .structure-explain {
   padding: 6px 18px 18px;
   display: flex;
@@ -1510,8 +1577,7 @@ footer {
 .se-line.warn {
   color: var(--v5-resistance);
 }
-.se-dim,
-.se-note {
+.se-dim {
   color: var(--muted);
   font-size: 11px;
 }
@@ -1550,6 +1616,18 @@ footer {
 .se-components th {
   color: var(--muted);
   font-weight: 500;
+}
+.se-diagnostics {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.se-diagnostics summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+.se-diagnostics[open] summary {
+  margin-bottom: 10px;
 }
 @media (max-width: 1100px) {
   .structure-body {

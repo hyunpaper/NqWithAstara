@@ -25,7 +25,24 @@ import {
 import { useVisiblePolling } from "./useVisiblePolling";
 import LiquidityPanel from "./LiquidityPanel";
 import StructurePanel from "./StructurePanel";
-import type { StructureSummary } from "./structureTypes";
+import SimStructurePanel from "./SimStructurePanel";
+import LiveStructureCells from "./LiveStructureCells";
+import { planV5Notifications, v4PushEnabled } from "./alertPlanner";
+import type {
+  StructureEventRow,
+  StructureSummary,
+  StructureSummaryRow,
+} from "./structureTypes";
+import {
+  LiveSortKey,
+  compareByTrendStrength,
+  compareByV4Score,
+  compareByV5State,
+  resolveSortKey,
+  sortKeysForMode,
+} from "./structureSort";
+import type { StructureCohortReport, TradeStructure } from "./dashboardTypes";
+import { tradeEntryTooltip } from "./dashboardTypes";
 
 type Bar = { time: string; close: number; ema?: number; vwap?: number };
 type Indicators = {
@@ -84,6 +101,11 @@ type State = {
    * 구버전 서버(또는 구조 엔진 미구성)에서는 없을 수 있으므로 optional로 둔다.
    */
   structureSummary?: StructureSummary | null;
+  /**
+   * 이슈 #26: 서버가 발행한 v5 알림 이벤트(최근 50건, seq 단조 증가). active에서만 채워지며
+   * FE는 seq seed + Notification tag로 소비만 한다. 구버전 서버에는 없다.
+   */
+  structureEvents?: StructureEventRow[] | null;
 };
 type SearchResult = { symbol: string; name: string };
 type DailyMetrics = {
@@ -141,6 +163,8 @@ type SimTradeRow = {
   logic?: string | null;
   exitEstimated?: boolean | null;
   lastPriceAt?: string | null;
+  /** 이슈 #27: v5 거래의 진입 시점 동결 컨텍스트(§11). v4/legacy 거래에는 없다. */
+  structure?: TradeStructure | null;
 };
 type SimProfile = {
   count: number;
@@ -176,6 +200,8 @@ type SimData = {
     analysis: SimAnalysis | null;
     byKind?: { kind: string; stats: SimStats }[];
   }[];
+  /** 이슈 #27: v5 동결 근거 기준 코호트 집계(additive). 구버전 서버에는 없을 수 있다. */
+  structure?: StructureCohortReport | null;
 };
 type Metrics = {
   symbol: string;
@@ -376,9 +402,15 @@ export default function App() {
     [notice, setNotice] = useState(""),
     // v5 구조 분석은 기존 v4 화면과 섞지 않고 별도 뷰로 분리한다(설계 §13, §19-10).
     [view, setView] = useState<"live" | "dash" | "structure">("live"),
+    // 이슈 #26: 라이브 목록 정렬 선택(모드별 유효성은 resolveSortKey가 판정). localStorage에 저장.
+    [liveSortChoice, setLiveSortChoice] = useState(
+      () => localStorage.getItem("astra-live-sort") || "",
+    ),
     [form, setForm] = useState({ entryPrice: "", quantity: "" });
   const seenSetups = useRef<Record<string, string>>({});
   const seenBreakouts = useRef<Record<string, string>>({});
+  // 이슈 #26 PR-3: v5 이벤트 소비 기준 seq. null = 아직 seed 전(새로고침 직후 과거 이벤트를 울리지 않음).
+  const lastV5Seq = useRef<number | null>(null);
   const alertsSeeded = useRef(false);
   const connectionFailed = useRef(false);
   const suppressAlertSnapshot = useRef(false);
@@ -462,6 +494,30 @@ export default function App() {
         };
       }
     };
+    // ── 이슈 #26 PR-3: active에서는 서버가 발행한 v5 이벤트만 푸시·소리를 울린다(승인 설계안 §4).
+    // v4 SETUP/BREAKOUT 배지·점수 표시는 "참고" 라벨로 유지되고 푸시·소리만 중단된다(승인 단서 1).
+    // off/shadow는 기존 v4 알림 그대로다. 중복 방지: seq seed(새로고침 회귀) + Notification tag.
+    // 심볼당 5분 스로틀은 v5 이벤트에 적용하지 않는다 — READY 직후 ENTERED를 삼키면 안 된다.
+    const structureMode = state?.structureSummary?.mode ?? null;
+    const v4Push = v4PushEnabled(structureMode);
+    if (structureMode === "active") {
+      const plan = planV5Notifications(state?.structureEvents, lastV5Seq.current);
+      // 알림 꺼짐이어도 seq는 전진시켜, 나중에 켰을 때 백로그를 한꺼번에 쏟지 않는다.
+      lastV5Seq.current = plan.nextSeq;
+      if (alertsOn && plan.notifications.length > 0) {
+        beep();
+        for (const v5 of plan.notifications) {
+          if ("Notification" in window && Notification.permission === "granted") {
+            const n = new Notification(v5.title, { body: v5.body, tag: v5.tag });
+            n.onclick = () => {
+              window.focus();
+              setSelected(v5.symbol);
+              n.close();
+            };
+          }
+        }
+      }
+    }
     for (const s of state?.signals ?? []) {
       const setupIdentity = s.setup && s.setupAt ? `${s.setup}:${s.setupAt}` : "";
       const setupName =
@@ -471,6 +527,7 @@ export default function App() {
             ? "과매도 반등"
             : null;
       if (
+        v4Push &&
         !suppress &&
         alertsOn &&
         setupName &&
@@ -486,6 +543,7 @@ export default function App() {
       const breakoutIdentity =
         s.breakout && s.breakoutAt ? `${s.breakout}:${s.breakoutAt}` : "";
       if (
+        v4Push &&
         !suppress &&
         alertsOn &&
         s.breakout &&
@@ -625,9 +683,30 @@ export default function App() {
   };
   const signal = state?.signals.find((x) => x.symbol === selected);
   const selectedWatch = state?.watchlist.find((x) => x.symbol === selected);
+  // ── 이슈 #26: 모드별 정렬(승인 설계안 §3) ──
+  // active 기본 = v5 상태 → EntryQuality ↓ → |SignedTrend| ↓ → symbol. shadow/off·summary 부재 = 기존 v4 score ↓.
+  // v5 결측 행을 `?? 0`으로 0점 취급하지 않는다 — 비교 함수가 결측을 항상 마지막에 둔다.
+  const structureMode = state?.structureSummary?.mode ?? null;
+  const structureRows = new Map<string, StructureSummaryRow>();
+  for (const row of state?.structureSummary?.symbols ?? [])
+    if (row?.symbol) structureRows.set(row.symbol.toUpperCase(), row);
+  const rowOf = (symbol: string): StructureSummaryRow =>
+    structureRows.get(symbol.toUpperCase()) ?? { symbol };
+  const liveSort = resolveSortKey(structureMode, liveSortChoice);
+  const liveSortOptions = sortKeysForMode(structureMode);
+  const pickLiveSort = (key: LiveSortKey) => {
+    setLiveSortChoice(key);
+    localStorage.setItem("astra-live-sort", key);
+  };
   const ranked = [...(state?.signals || [])]
     .filter((item) => !item.stale)
-    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    .sort((a, b) =>
+      liveSort === "v4"
+        ? compareByV4Score(a, b)
+        : liveSort === "trend"
+          ? compareByTrendStrength(rowOf(a.symbol), rowOf(b.symbol))
+          : compareByV5State(rowOf(a.symbol), rowOf(b.symbol)),
+    );
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!selected) return;
@@ -710,7 +789,7 @@ export default function App() {
                       Math.round(s?.score ?? 0),
                       !!s && !s.stale && s.price != null,
                     )}
-                    title="시그널 점수 (100점 만점) · 70↑ 매수 관찰 · 30↓ 매도 관찰 · 워밍업/장외에는 0"
+                    title="참고 점수(v4) · 100점 만점 · 70↑ 매수 관찰 · 30↓ 매도 관찰 · 워밍업/장외에는 0 — v5 평가와 별개"
                   >
                     {s && !s.stale && s.price != null
                       ? Math.round(s.score ?? 0)
@@ -780,11 +859,12 @@ export default function App() {
                     ? "구조 분석 (v5)"
                     : "실시간 시그널"}
               </h1>
+              {/* 이슈 #29: 대시보드/구조 화면 부제에서 구현 설명·v4 비교 문구를 뺐다. */}
               <p>
                 {view === "dash"
-                  ? "신호 발동 시점 가상 진입 · 손절/목표 자동 청산 성적"
+                  ? "청산 실적 요약"
                   : view === "structure"
-                    ? "추세 · 진입 위치 품질 · 구조 계획 분리 표시 · v4 점수와 별개"
+                    ? "종목별 추세 · 후보 · 계획"
                     : "미국 정규장 · 조건 기반 모니터링"}
               </p>
             </div>
@@ -817,11 +897,7 @@ export default function App() {
             </button>
             <button
               className={`theme ${view === "structure" ? "structure-toggle on" : ""}`}
-              title={
-                view === "structure"
-                  ? "실시간 시그널로 돌아가기"
-                  : "구조 분석 (v5) — v4 점수와 분리된 실험 뷰"
-              }
+              title={view === "structure" ? "실시간 시그널로 돌아가기" : "구조 분석 (v5)"}
               onClick={() => setView(view === "structure" ? "live" : "structure")}
             >
               {view === "structure" ? <Activity size={18} /> : <Layers size={18} />}
@@ -843,8 +919,8 @@ export default function App() {
               className={`theme alert-toggle ${alertsOn ? "on" : ""}`}
               title={
                 alertsOn
-                  ? "진입 셋업 알림 켜짐 (브라우저 알림 + 소리)"
-                  : "진입 셋업 알림 꺼짐 — 누르면 켜집니다"
+                  ? "알림 켜짐 (브라우저 알림 + 소리) — active 모드: v5 이벤트 · off/shadow: v4 셋업"
+                  : "알림 꺼짐 — 누르면 켜집니다"
               }
               onClick={toggleAlerts}
             >
@@ -931,9 +1007,36 @@ export default function App() {
             <div className="panel-head">
               <div>
                 <h2>시그널 순위</h2>
-                <p>현재 충족한 기술 조건의 종합 점수</p>
+                <p>
+                  {liveSort === "v5"
+                    ? "v5 상태·진입 품질 순 정렬 · v4 점수는 참고 표시"
+                    : liveSort === "trend"
+                      ? "v5 추세 강도 순 정렬 · v4 점수는 참고 표시"
+                      : "참고 점수(v4) 순 정렬"}
+                </p>
               </div>
-              <BarChart3 size={18} />
+              {liveSortOptions.length > 1 ? (
+                <div className="structure-sort live-sort">
+                  {liveSortOptions.map((key) => (
+                    <button
+                      key={key}
+                      className={liveSort === key ? "on" : ""}
+                      onClick={() => pickLiveSort(key)}
+                      title={
+                        key === "v5"
+                          ? "v5 상태 우선 → 진입 품질 → 추세 강도 → 심볼"
+                          : key === "trend"
+                            ? "v5 추세 강도(절대값) 내림차순 → 심볼"
+                            : "v4 점수 내림차순 (기존 정렬)"
+                      }
+                    >
+                      {key === "v5" ? "v5 평가" : key === "trend" ? "추세 강도" : "참고 점수(v4)"}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <BarChart3 size={18} />
+              )}
             </div>
             {!state ? (
               <Loading />
@@ -958,6 +1061,9 @@ export default function App() {
               />
             ) : (
               <div className="rank-list">
+                {structureMode === "off" && (
+                  <p className="v5-off-note">구조 엔진 꺼짐 — v5 평가 없이 v4 참고 점수만 표시합니다.</p>
+                )}
                 {ranked.map((s, i) => (
                   <button
                     key={s.symbol}
@@ -1001,7 +1107,7 @@ export default function App() {
                         {percent(s.changePercent)}
                       </small>
                     </div>
-                    <div className="score">
+                    <div className="score" title="참고 점수(v4) · 100점 만점 — v5 평가와 별개">
                       <b
                         style={{
                           color: scoreStyle(Math.round(s.score ?? 0), true)
@@ -1010,16 +1116,20 @@ export default function App() {
                       >
                         {Math.round(s.score ?? 0)}
                       </b>
-                      <small>/ 100</small>
+                      <small>참고(v4)</small>
                     </div>
-                    <span className={`tag ${s.action.toLowerCase()}`}>
+                    <span
+                      className={`tag ${s.action.toLowerCase()}`}
+                      title="v4 점수 기준 관찰 태그 — v5 진입 판단과 별개"
+                    >
                       {s.action === "BUY"
-                        ? "매수 관찰"
+                        ? "v4 매수 관찰"
                         : s.action === "SELL"
-                          ? "매도 관찰"
-                          : "중립"}
+                          ? "v4 매도 관찰"
+                          : "v4 중립"}
                     </span>
                     <ChevronRight size={15} />
+                    <LiveStructureCells row={rowOf(s.symbol)} mode={structureMode} />
                   </button>
                 ))}
               </div>
@@ -1074,6 +1184,12 @@ export default function App() {
                   <div className="stale">
                     <AlertTriangle size={14} /> 현재 시세가 지연되고 있습니다 ·{" "}
                     {time(signal.updatedAt)} 기준
+                  </div>
+                )}
+                {(structureMode === "active" || structureMode === "shadow") && (
+                  <div className="v5-detail-strip">
+                    <LiveStructureCells row={rowOf(signal.symbol)} mode={structureMode} />
+                    <button onClick={() => setView("structure")}>구조 분석(v5) 상세</button>
                   </div>
                 )}
                 <div className="chart">
@@ -1148,7 +1264,7 @@ export default function App() {
                 </div>
                 <div className="reasons">
                   <h3>
-                    점수 산정 근거{" "}
+                    참고 점수(v4) 산정 근거{" "}
                     <span>{Math.round(signal.score ?? 0)}점</span>
                   </h3>
                   {signal.reasons?.length ? (
@@ -1176,6 +1292,9 @@ export default function App() {
                   </div>
                   {signal.position ? (
                     <div className="position-live">
+                      <p className="position-basis-note">
+                        목표·손절은 v4 ATR·레벨 기준 자동 산정입니다(참고).
+                      </p>
                       <div>
                         <small>진입가</small>
                         <b>{money(signal.position.entryPrice)}</b>
@@ -1296,7 +1415,9 @@ const kindLabel = (k: string) =>
       ? "과매도 반등"
       : k === "BREAKOUT"
         ? "돌파"
-        : k;
+        : k === "PULLBACK"
+          ? "눌림목"
+          : k;
 const simStatusLabel = (s: string) =>
   s === "OPEN"
     ? "진행 중"
@@ -1341,8 +1462,8 @@ function Dashboard() {
       <section className="panel metrics-panel">
         <div className="panel-head">
           <div>
+            {/* 이슈 #29: 반복 구현 설명 제거 — 비용 기준은 각 지표의 help에 남아 있다. */}
             <h2>{cohort ? `${cohort.label} 코호트` : "전체 성과 요약"}</h2>
-            <p>신호 발동가 진입 · 손절/목표 자동 청산 · 왕복 수수료 0.2% 차감</p>
           </div>
           <LayoutDashboard size={18} />
         </div>
@@ -1391,6 +1512,8 @@ function Dashboard() {
       )}
       {cohort && s.closed < 10 && !analysis?.sampleWarning && <div className="sample-warning">청산 {s.closed}건의 작은 표본입니다. 현재 수치는 잠정 관찰값이며 규칙 변경 근거로 확정하기 어렵습니다.</div>}
       {analysis?.sampleWarning && <div className="sample-warning">{analysis.sampleWarning}</div>}
+      {/* 이슈 #27: v5 동결 근거 코호트 — 집계는 전부 서버(Domain) 소유 */}
+      <SimStructurePanel report={data.structure} />
       {analysis && (
         <section className="panel metrics-panel">
           <div className="panel-head">
@@ -1471,7 +1594,8 @@ function Dashboard() {
         <div className="panel-head">
           <div>
             <h2>{cohort ? `${cohort.label} · 신호별 성과` : "전체 버전 · 신호별 성과"}</h2>
-            <p>{cohort ? "선택한 로직 버전 안에서 신호별 비교" : "버전이 섞인 참고치 · 어떤 신호가 실제로 돈이 되는지 비교"}</p>
+            {/* 이슈 #29: 편집성 설명 대신 어느 범위의 값인지만 남긴다. */}
+            <p>{cohort ? "선택한 로직 버전 기준" : "전체 버전 혼합"}</p>
           </div>
         </div>
         <div className="table-wrap">
@@ -1559,14 +1683,9 @@ function Dashboard() {
                   <td>
                     <b>{t.symbol}</b>
                   </td>
-                  <td
-                    className="has-tip"
-                    title={[
-                      `점수 ${t.score ?? "—"} · σ ${t.extSigma ?? "—"} · 거래량 ${t.relVolume ?? "—"}× · 매수비중 ${t.buyShare ?? "—"}% · RSI ${t.rsi ?? "—"}`,
-                      ...(t.reasons ?? []),
-                    ].join("\n")}
-                  >
+                  <td className="has-tip" title={tradeEntryTooltip(t)}>
                     {kindLabel(t.kind)}
+                    {t.structure && <small className="estimated-exit">v5 동결</small>}
                   </td>
                   <td>{money(t.entryPrice)}</td>
                   <td title={t.stopBasis || undefined}>{money(t.stop)}</td>

@@ -42,6 +42,15 @@ public sealed record ZoneAssembly(ImmutableArray<PriceZone> Zones, ImmutableArra
 /// </summary>
 public static class ZoneBuilder
 {
+    /// <summary>§6.2 "bin 합 = 입력 거래량 합(허용 오차 내)" 위반. 배분에서 빠진 거래량이 있다는 뜻이다.</summary>
+    public const string WarningProfileVolumeMismatch = "PROFILE_VOLUME_MISMATCH";
+
+    /// <summary>ATR 결측으로 bin 폭이 tick 하한으로 대체됐다(§6.2).</summary>
+    public const string FlagBinWidthFromTickOnly = "BinWidthFromTickOnly";
+
+    /// <summary>ATR 결측으로 병합 간격·최대 폭이 tick 하한으로 대체됐다(§6.3).</summary>
+    public const string FlagMergeParamsFromTickOnly = "MergeParamsFromTickOnly";
+
     sealed class RawZone
     {
         public decimal Lower;
@@ -90,10 +99,11 @@ public static class ZoneBuilder
 
         foreach (var node in profile.Nodes)
         {
-            var id = StructureMath.SourceId("profile", request.Symbol, StructureMath.Iso(request.Cutoff),
+            // 프로파일은 세션 누적 보조 근거다. cutoff로 재스탬프하면 ID와 recency가 매 봉 흔들린다(§6.2).
+            var id = StructureMath.SourceId("profile", request.Symbol, sessionDate.ToString("yyyy-MM-dd"),
                 StructureMath.Price(profile.BinWidth), node.StartIndex.ToString(CultureInfo.InvariantCulture));
             var source = new ZoneSource(id, ZoneSourceFamily.Profile, node.IsPoc ? "profile-poc" : "profile-node",
-                node.Lower + (node.Upper - node.Lower) / 2m, request.Cutoff, request.Cutoff, true);
+                node.Lower + (node.Upper - node.Lower) / 2m, request.SessionStart, request.SessionStart, true);
             candidates.Add(profile.Coarsened
                 ? ZoneCandidate.FromBounds(node.Lower, node.Upper, source, "EstimatedVolumeProfile", "CoarsenedProfile")
                 : ZoneCandidate.FromBounds(node.Lower, node.Upper, source, "EstimatedVolumeProfile"));
@@ -122,9 +132,18 @@ public static class ZoneBuilder
             foreach (var flag in candidate.Flags) zone.Flags.Add(flag);
             if (zone.Sources.Count > 0) raw.Add(zone);
         }
+        // 병합 파라미터가 ATR 없이 tick 하한으로 대체된 사실은 값을 추정하지 않고 플래그로만 남긴다(§6.3).
+        if (!Usable(atrAtCutoff))
+        {
+            warnings.Add(FlagMergeParamsFromTickOnly);
+            foreach (var zone in raw) zone.Flags.Add(FlagMergeParamsFromTickOnly);
+        }
         var zones = AssignIdentity(Merge(raw, atrAtCutoff, policy), request, warnings);
         return new ZoneAssembly(zones, warnings.ToImmutableArray());
     }
+
+    /// <summary>폭·간격 계산에 실제로 쓸 수 있는 ATR인지(§16A: 결측·0·비유한은 쓰지 않는다).</summary>
+    static bool Usable(double? atr) => StructureMath.ToPriceDelta(atr) is not null && atr is > 0;
 
     /// <summary>§6.3 반폭. 생성 시점 ATR이 없으면 tick만 쓴다.</summary>
     public static decimal HalfWidth(double? atrAtConfirmation, StructurePolicy policy) =>
@@ -177,9 +196,9 @@ public static class ZoneBuilder
     {
         var atr = SessionAtr.At(bars1m, atrSeries, source.ConfirmedAt);
         var half = HalfWidth(atr, policy);
-        return StructureMath.ToPriceDelta(atr) is null || atr is <= 0
-            ? ZoneCandidate.FromLevel(price, half, source, "WidthFromTickOnly")
-            : ZoneCandidate.FromLevel(price, half, source);
+        return Usable(atr)
+            ? ZoneCandidate.FromLevel(price, half, source)
+            : ZoneCandidate.FromLevel(price, half, source, "WidthFromTickOnly");
     }
 
     // ── 병합 ──
@@ -231,6 +250,7 @@ public static class ZoneBuilder
             }
 
         var retiredIds = request.RetiredZoneIds.ToHashSet(StringComparer.Ordinal);
+        var sessionKey = MarketRules.TradingDate(request.SessionStart).ToString("yyyy-MM-dd");
         var result = ImmutableArray.CreateBuilder<PriceZone>();
 
         // 조각별 원천을 먼저 확정한다. lineage 소유자 결정과 ID 발급이 같은 결정적 순서를 쓴다.
@@ -265,8 +285,10 @@ public static class ZoneBuilder
         {
             var (group, sources) = pieces[index];
             var profileOnly = sources.All(x => x.Family == ZoneSourceFamily.Profile);
-            var firstConfirmed = sources.Min(x => x.ConfirmedAt);
-            var lastConfirmed = sources.Max(x => x.ConfirmedAt);
+            // 임시 프로파일 원천은 Zone의 확정 lineage를 정하지 않는다(§16B). 영구 원천이 없을 때만 cutoff를 쓴다.
+            var durable = sources.Where(x => !x.Temporary).ToArray();
+            var firstConfirmed = durable.Length > 0 ? durable.Min(x => x.ConfirmedAt) : request.Cutoff;
+            var lastConfirmed = durable.Length > 0 ? durable.Max(x => x.ConfirmedAt) : request.Cutoff;
 
             var matched = inherited[index].Where(x => owner[x.Id] == index).ToArray();
 
@@ -287,25 +309,29 @@ public static class ZoneBuilder
             else
             {
                 // profile 임시 ID는 Zone의 영구 대표 원천이 될 수 없다(§16B).
+                // 대체 ID에도 cutoff를 넣지 않는다 — 평가마다 새 ID가 나오면 돌파 쿨다운이 매번 초기화된다(§6.3).
                 var representativeSource = sources.FirstOrDefault(x => !x.Temporary);
                 id = representativeSource is not null
                     ? representativeSource.Id
-                    : StructureMath.SourceId("profile-zone", request.Symbol, StructureMath.Iso(request.Cutoff),
-                        StructureMath.Price(group.Lower), StructureMath.Price(group.Upper));
+                    : StructureMath.SourceId("profile-zone", request.Symbol, sessionKey, SourceKey(sources));
                 boundsRevision = 1;
                 snapshotRevision = 1;
             }
 
             // 한 스냅샷 안에서 ZoneId는 유일해야 한다. 남은 충돌은 원천 기반 새 ID로 분리한다(§16A).
-            if (!used.Add(id))
+            // 조각의 원천 집합은 서로 겹치지 않으므로 가격 문자열 없이도 결정적으로 유일하다(§6.3).
+            if (used.Contains(id))
             {
                 warnings.Add("ZONE_LINEAGE_SPLIT");
-                id = StructureMath.SourceId("zone-split", request.Symbol, StructureMath.Iso(request.Cutoff),
-                    StructureMath.Price(group.Lower), StructureMath.Price(group.Upper));
-                used.Add(id);
+                var key = SourceKey(sources);
+                id = StructureMath.SourceId("zone-split", request.Symbol, sessionKey, key);
+                for (var suffix = 2; used.Contains(id); suffix++)
+                    id = StructureMath.SourceId("zone-split", request.Symbol, sessionKey, key,
+                        suffix.ToString(CultureInfo.InvariantCulture));
                 boundsRevision = 1;
                 snapshotRevision = 1;
             }
+            used.Add(id);
             aliases.Remove(id);
 
             var flags = new SortedSet<string>(group.Flags, StringComparer.Ordinal);
@@ -323,6 +349,10 @@ public static class ZoneBuilder
             .OrderBy(x => x.Lower).ThenBy(x => x.Upper).ThenBy(x => x.Id, StringComparer.Ordinal)
             .ToImmutableArray();
     }
+
+    /// <summary>조각의 원천 ID 집합. 대체 ZoneId의 유일성·안정성 근거이며 시각·가격 문자열을 쓰지 않는다(§6.3).</summary>
+    static string SourceKey(ImmutableArray<ZoneSource> sources) =>
+        string.Join(',', sources.Select(x => x.Id).OrderBy(x => x, StringComparer.Ordinal));
 
     /// <summary>이 조각이 이전 Zone의 대표 원천(ZoneId와 같은 원천 ID)을 그대로 갖고 있는지(§16A 분리 규칙).</summary>
     static bool HoldsRepresentative(ImmutableArray<ZoneSource> sources, string previousZoneId) =>
@@ -390,7 +420,8 @@ public static class ZoneBuilder
         ArgumentNullException.ThrowIfNull(policy);
         var baseWidth = StructureMath.ScaledFloor(policy.PriceTick, policy.ProfileBinAtrFactor, atr1m);
         if (baseWidth <= 0) baseWidth = policy.PriceTick;
-        if (bars.Count == 0) return VolumeProfile.Empty(baseWidth, "PROFILE_NO_BARS");
+        var tickOnlyWidth = !Usable(atr1m);
+        if (bars.Count == 0) return EmptyProfile(baseWidth, tickOnlyWidth, "PROFILE_NO_BARS");
 
         var inputVolume = bars.Sum(x => x.Volume);
         var minLow = bars.Min(x => x.Low);
@@ -410,12 +441,12 @@ public static class ZoneBuilder
         }
         var coarsened = multiple > 1;
         if (Span(minLow, maxHigh, width) > policy.ProfileMaxBins)
-            return VolumeProfile.Empty(width, "PROFILE_BIN_LIMIT_UNRESOLVED");
+            return EmptyProfile(width, tickOnlyWidth, "PROFILE_BIN_LIMIT_UNRESOLVED");
 
         if (inputVolume <= 0)
             return coarsened
-                ? VolumeProfile.Empty(width, "ZERO_VOLUME_PROFILE", "CoarsenedProfile")
-                : VolumeProfile.Empty(width, "ZERO_VOLUME_PROFILE");
+                ? EmptyProfile(width, tickOnlyWidth, "ZERO_VOLUME_PROFILE", "CoarsenedProfile")
+                : EmptyProfile(width, tickOnlyWidth, "ZERO_VOLUME_PROFILE");
 
         var minIndex = Index(minLow, width);
         var maxIndex = Index(maxHigh, width);
@@ -448,6 +479,12 @@ public static class ZoneBuilder
         var pocVolume = volumes[poc];
         var warnings = new SortedSet<string>(StringComparer.Ordinal) { "EstimatedVolumeProfile" };
         if (coarsened) warnings.Add("CoarsenedProfile");
+        if (tickOnlyWidth) warnings.Add(FlagBinWidthFromTickOnly);
+
+        // §6.2 bin 합 = 입력 거래량 합(허용 오차 내). 배분 로직은 그대로 두고 불일치만 노출한다.
+        var allocated = volumes.Sum();
+        if (Math.Abs(allocated - inputVolume) > policy.ProfileVolumeTolerance * Math.Max(1, Math.Abs(inputVolume)))
+            warnings.Add(WarningProfileVolumeMismatch);
 
         var nodes = ImmutableArray<ProfileNode>.Empty;
         if (pocVolume > 0)
@@ -483,8 +520,11 @@ public static class ZoneBuilder
         }
 
         return new VolumeProfile(width, multiple, bins.ToImmutable(), nodes, minIndex + poc, inputVolume,
-            volumes.Sum(), coarsened, warnings.ToImmutableArray());
+            allocated, coarsened, warnings.ToImmutableArray());
     }
+
+    static VolumeProfile EmptyProfile(decimal width, bool tickOnlyWidth, params string[] warnings) =>
+        VolumeProfile.Empty(width, tickOnlyWidth ? [.. warnings, FlagBinWidthFromTickOnly] : warnings);
 
     static int Index(decimal price, decimal width) => (int)decimal.Floor(price / width);
 

@@ -97,7 +97,8 @@ public sealed class StructureAnalysisService(
     IMonitorDiagnostics diagnostics,
     StructureEngineOptions? options = null,
     StructurePolicy? policy = null,
-    IStructuralTradeEntries? tradeEntries = null)
+    IStructuralTradeEntries? tradeEntries = null,
+    StructureAlertPublisher? alerts = null)
 {
     public const string LatchFile = "structure-lifecycle.json";
     public const string EntryOwnerV4 = "v4";
@@ -106,6 +107,18 @@ public sealed class StructureAnalysisService(
     public const string NoteEntryBlockedByOpenTrade = "V5_ENTRY_BLOCKED_BY_OPEN_TRADE";
     public const string NoteEntryPlanInvalid = "V5_ENTRY_PLAN_INVALID";
     public const string NoteEntryUnavailable = "V5_ENTRY_PORT_UNAVAILABLE";
+
+    /// <summary>§16B 가격 단위: 관측된 가격이 정책 tick의 배수가 아니다(신규 READY 금지).</summary>
+    public const string NotePriceTickUnsupported = "V5_PRICE_TICK_UNSUPPORTED";
+
+    /// <summary>§16B 가격 단위: tick을 판정할 가격 근거가 없다. 모르면 허용이 아니라 차단이다.</summary>
+    public const string NotePriceTickUnknown = "V5_PRICE_TICK_UNKNOWN";
+
+    /// <summary>§12.5 gate 재확인에서 신규 진입이 막혔다. 뒤의 코드가 구체 사유다.</summary>
+    public const string NoteEntryGateRecheck = "V5_ENTRY_BLOCKED_BY_GATE_RECHECK";
+
+    /// <summary>tick 판정에 쓰는 최근 완료 봉 수. 과거 한 건의 이상 호가가 하루 전체를 막지 않게 한다.</summary>
+    public const int PriceTickSampleBars = 30;
 
     readonly StructureEngineOptions _options = options ?? StructureEngineOptions.Off;
     readonly StructurePolicy _policy = policy ?? StructurePolicy.Default;
@@ -205,13 +218,18 @@ public sealed class StructureAnalysisService(
         var blockers = build.Quality.BlockersForCandidate.Concat(gate.Blockers)
             .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToImmutableArray();
 
+        // #61 §16B: tick 지원 여부는 Application이 판정해서 넘긴다. Domain 기본값(허용)에 의존하지 않는다.
+        var tickNote = PriceTickNote(build.Bars.Bars, snapshot.QuotePrice, _policy);
+
         var detection = SetupDetector.Detect(SetupDetectionRequest.Create(snapshot.Symbol, snapshot.SessionStart,
             snapshot.SessionEnd, snapshot.AnalysisAsOf, now, build.Bars.Bars, candidateLayer.Zones,
             candidateLayer.Episodes, trend, candidateLayer.Atr1m, snapshot.QuotePrice, snapshot.QuoteAt,
-            snapshot.OptionalLiquidity, blockers), _policy);
+            snapshot.OptionalLiquidity, blockers, tickNote is null), _policy);
 
         var candidates = StructuralLifecycle.ApplyLive(
-            StructuralLifecycle.ApplyLatch(latch, detection.Candidates, gate.AllowNewTrigger),
+            // zones는 §10 돌파 쿨다운의 zone lineage(Aliases) 확인용이며 후보 계층(structureCutoff) 스냅샷이다.
+            StructuralLifecycle.ApplyLatch(latch, detection.Candidates, gate.AllowNewTrigger, _policy,
+                candidateLayer.Zones),
             snapshot.QuotePrice, now);
         var preferred = CandidateSelection.SelectPreferred(candidates)?.EventId;
 
@@ -224,6 +242,7 @@ public sealed class StructureAnalysisService(
 
         var warnings = new SortedSet<string>(build.Warnings, StringComparer.Ordinal);
         foreach (var blocker in detection.ReadyBlockers) warnings.Add(blocker);
+        if (tickNote is not null) { notes.Add(tickNote); warnings.Add(tickNote); }
 
         var observationId = StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash);
         var signature = StructuralLifecycle.EventSignature(candidates, preferred);
@@ -246,12 +265,16 @@ public sealed class StructureAnalysisService(
         // ── gate 안 짧은 commit: generation/session 재검증 후 저장, 저장 성공 뒤에만 래치·공개 snapshot 갱신 ──
         using (await runtime.EnterControlAsync(ct))
         {
-            if (!Current(request, snapshot, clock.GetLocalNow())) return;
+            // #62 §12.5: 계산·파일 I/O·gate 경합 뒤의 실제 commit 시각이다. 진입 재확인은 이 시각으로 한다.
+            var gateNow = clock.GetLocalNow();
+            if (!Current(request, snapshot, gateNow)) return;
 
             // ── D6 active 진입(§18): READY 대표 후보 1개만 실제 시뮬 거래로 커밋한다. 거래 저장이 성공한 뒤에만
             // 후보를 ENTERED로 바꾸고 래치에 tombstone을 남기며, 실패하면 관측·래치도 갱신하지 않아 다음 poll이
             // 같은 이벤트를 멱등하게 재시도한다(§12.6). off/shadow에서는 이 경로 자체가 없다.
-            var activeEntry = await TryEnterPreferredAsync(candidates, preferred, snapshot, trend, now, ct);
+            // 이슈 #26: 이 commit에서 READY로 커밋되는 후보를 알림 초안으로 잡아 둔다(진입 성공 시 ENTERED로 바뀌기 전).
+            var readyForAlerts = candidates.Where(x => x.Disposition == CandidateDisposition.Ready).ToArray();
+            var activeEntry = await TryEnterPreferredAsync(request, candidates, preferred, snapshot, trend, gateNow, ct);
             if (activeEntry is not null)
             {
                 candidates = activeEntry.Candidates;
@@ -275,9 +298,20 @@ public sealed class StructureAnalysisService(
             var write = await observations.AppendAsync(record, ct);
             if (!Current(request, snapshot, clock.GetLocalNow())) return;
 
-            var storageWarnings = write.Limited
-                ? ImmutableArray.Create(StructureObservationWriter.LimitWarning)
-                : ImmutableArray<string>.Empty;
+            // ── 이슈 #26 v5 알림 이벤트(승인 설계안 §4): 커밋 순서는 [진입 커밋 → 관측 append → 알림 키 append →
+            // 래치 commit]. 알림 영속이 실패하면 예외로 래치 commit이 막히고 다음 poll이 멱등 재시도한다.
+            // active에서만 발행한다 — off/shadow는 v5 이벤트를 만들지 않는다(§16B).
+            if (_options.Mode == StructureEngineMode.Active && alerts is not null)
+            {
+                var drafts = AlertDrafts(readyForAlerts, activeEntry, candidates, preferred);
+                if (drafts.Count > 0)
+                    await alerts.PublishAsync(snapshot.Symbol, snapshot.SessionStart, PolicyHash, drafts,
+                        snapshot.QuotePrice, now, ct);
+            }
+
+            // 이슈 #44: 한도 압박은 조용히 넘어가지 않는다. 주기 요약 희생은 ObservationStorageLimited로,
+            // 핵심 관측까지 누락된 전체 검증 불가 상태는 ObservationCoreStorageLimited로 API에 드러난다.
+            var storageWarnings = StructureObservationWriter.StorageWarnings(write);
             var view = View(request, build, snapshot, lastBarStart, trend, displayLayer.Zones, candidates, quality,
                 notes.ToImmutableArray(), warnings.ToImmutableArray(), preferred, now, storageWarnings,
                 zoneDtos, candidateDtos, trendDto, qualityDto, summary);
@@ -301,13 +335,19 @@ public sealed class StructureAnalysisService(
     /// 반환 null = 이 poll에 진입 시도 자체가 없음(off/shadow, READY 없음). 오류·거절은 v4 fallback 없이
     /// 진입 보류로 남긴다(§16B).
     /// </summary>
-    async Task<ActiveEntryResult?> TryEnterPreferredAsync(ImmutableArray<EntryCandidate> candidates,
-        string? preferredId, StructureSnapshot snapshot, TrendAssessment? trend, DateTimeOffset now,
-        CancellationToken ct)
+    async Task<ActiveEntryResult?> TryEnterPreferredAsync(StructureObservationRequest request,
+        ImmutableArray<EntryCandidate> candidates, string? preferredId, StructureSnapshot snapshot,
+        TrendAssessment? trend, DateTimeOffset now, CancellationToken ct)
     {
         if (_options.Mode != StructureEngineMode.Active || preferredId is null) return null;
         var chosen = candidates.FirstOrDefault(x => x.EventId == preferredId);
         if (chosen is null || chosen.Disposition != CandidateDisposition.Ready || chosen.Plan is null) return null;
+
+        // #62 §12.5: 후보 판정 이후 흘러간 시간을 gate 안에서 다시 본다. 후보는 READY로 남고 다음 poll이 재시도한다.
+        if (!Current(request, snapshot, now, newEntry: true))
+            return new ActiveEntryResult(candidates, false,
+                $"{NoteEntryGateRecheck}:{NewEntryBlocker(snapshot, now) ?? "GENERATION_OR_SESSION"}");
+
         if (tradeEntries is null) return new ActiveEntryResult(candidates, false, NoteEntryUnavailable);
 
         // §10: 체결 시 FrozenPlan을 저장한다. 진입 이후 이 스냅샷은 다시 만들지 않는다.
@@ -343,17 +383,106 @@ public sealed class StructureAnalysisService(
 
     sealed record ActiveEntryResult(ImmutableArray<EntryCandidate> Candidates, bool Entered, string? Note);
 
+    /// <summary>
+    /// 이슈 #26: commit 지점의 후보·진입 결과에서 알림 초안을 파생한다. 새 가격·점수를 만들지 않고
+    /// 후보 계획의 값(EntryQuality/NetR/Stop/Target)만 옮긴다. INVALIDATED/EXPIRED는 상태 칩으로만
+    /// 보이고 푸시 이벤트를 만들지 않는다(소음 방지, 승인 설계안 §4). 중복 제거는 publisher의 영속 키가 맡는다.
+    /// </summary>
+    static List<StructureAlertDraft> AlertDrafts(IReadOnlyList<EntryCandidate> readyAtCommit,
+        ActiveEntryResult? activeEntry, ImmutableArray<EntryCandidate> candidates, string? preferred)
+    {
+        var drafts = new List<StructureAlertDraft>();
+        // 이 commit에서 READY로 성립한 모든 후보. 같은 EventId의 재커밋은 publisher 키가 걸러낸다.
+        foreach (var ready in readyAtCommit)
+            drafts.Add(new StructureAlertDraft(StructureAlertPublisher.TypeReady, ready.EventId, ready.KindName,
+                StructureViewMapper.Finite(ready.EntryQuality), ready.Plan?.NetR));
+        if (activeEntry is null) return drafts;
+
+        if (activeEntry.Entered)
+        {
+            // 진입 커밋(멱등 회복 포함): READY였다가 이 commit에서 ENTERED가 된 후보 하나다.
+            // AlreadyEntered 회복의 재발행은 publisher 키가 막는다(첫 발행이 성공했다면 재발행 없음).
+            var entered = candidates.FirstOrDefault(x => x.Disposition == CandidateDisposition.Entered &&
+                readyAtCommit.Any(r => r.EventId == x.EventId));
+            if (entered?.Plan is { } plan)
+                drafts.Add(new StructureAlertDraft(StructureAlertPublisher.TypeEntered, entered.EventId,
+                    entered.KindName, StructureViewMapper.Finite(entered.EntryQuality), plan.NetR,
+                    plan.PlanId, plan.Stop, plan.Target));
+            return drafts;
+        }
+
+        // 차단 3종(OPEN 제한/계획 무효/포트 부재). 진입이 없었으므로 preferred는 시도한 후보 그대로다.
+        if (activeEntry.Note is NoteEntryBlockedByOpenTrade or NoteEntryPlanInvalid or NoteEntryUnavailable &&
+            preferred is not null &&
+            candidates.FirstOrDefault(x => x.EventId == preferred) is { } attempted)
+            drafts.Add(new StructureAlertDraft(StructureAlertPublisher.TypeBlocked, attempted.EventId,
+                attempted.KindName, StructureViewMapper.Finite(attempted.EntryQuality), attempted.Plan?.NetR,
+                Reason: activeEntry.Note));
+        return drafts;
+    }
+
     string RecordVersion =>
         // §11/§16B: `v5-structure.1-shadow`는 shadow 관측 레코드 버전이며 SimTrade.Logic에 쓰지 않는다.
         // D6부터 active는 v5가 신규 진입을 소유하므로 관측 레코드도 본 버전으로 기록한다(§11 "별도 저장").
         _options.Mode == StructureEngineMode.Active ? _policy.Version : _policy.Version + "-shadow";
 
-    bool Current(StructureObservationRequest request, StructureSnapshot snapshot, DateTimeOffset now)
+    /// <summary>
+    /// §12.5 공유 gate 재확인. generation/session/장 종료는 모든 commit이 확인하고, <paramref name="newEntry"/>가
+    /// true인 신규 진입 경로만 시세 신선도·진입 마감까지 gate 시각으로 다시 본다. 표시·관측 commit까지
+    /// 같이 막으면 마감 40분 구간의 관측이 통째로 사라지므로 진입 경로에만 적용한다.
+    /// </summary>
+    bool Current(StructureObservationRequest request, StructureSnapshot snapshot, DateTimeOffset now,
+        bool newEntry = false)
     {
         if (!runtime.IsCurrent(request.Generation)) return false;
         var state = runtime.Snapshot();
         if (state.Market.Start != snapshot.SessionStart || state.Market.End != snapshot.SessionEnd) return false;
-        return now < snapshot.SessionEnd;
+        if (now >= snapshot.SessionEnd) return false;
+        return !newEntry || NewEntryBlocker(snapshot, now) is null;
+    }
+
+    /// <summary>
+    /// #62 §12.5: gate 시각 기준 신규 진입 재확인. 임계값은 후보 판정과 같은 정책값을 쓰고 새로 만들지 않는다
+    /// (<see cref="StructurePolicy.NewEntryQuoteMaxAgeSeconds"/>, <see cref="StructurePolicy.EntryCutoffBeforeCloseMinutes"/>).
+    /// </summary>
+    string? NewEntryBlocker(StructureSnapshot snapshot, DateTimeOffset now)
+    {
+        if (now > snapshot.SessionEnd - TimeSpan.FromMinutes(_policy.EntryCutoffBeforeCloseMinutes))
+            return SetupDetector.BlockerAfterEntryCutoff;
+        if (snapshot.QuoteAt is not { } quoteAt) return SetupDetector.BlockerMissingQuote;
+        if ((now - quoteAt).TotalSeconds > _policy.NewEntryQuoteMaxAgeSeconds) return SetupDetector.BlockerStaleQuote;
+        if ((quoteAt - now).TotalSeconds > _policy.QuoteFutureToleranceSeconds) return SetupDetector.BlockerQuoteInFuture;
+        return null;
+    }
+
+    /// <summary>
+    /// #61 §16B: 첫 버전은 tick USD 0.01 종목만 신규 READY 대상이다. 앱에 tick metadata가 없으므로 관측된
+    /// 가격(최근 완료 봉 OHLC + 현재 시세)이 전부 정책 tick의 배수인지로 판정하고, 근거가 없으면 차단한다.
+    /// 반환 null이 지원이며 그 외는 관측에 남길 사유다.
+    /// </summary>
+    public static string? PriceTickNote(IEnumerable<StructureBar> bars, decimal? quotePrice, StructurePolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(bars);
+        ArgumentNullException.ThrowIfNull(policy);
+        var tick = policy.PriceTick;
+        if (tick <= 0) return NotePriceTickUnknown;
+
+        var observed = 0;
+        foreach (var bar in bars.TakeLast(PriceTickSampleBars))
+            foreach (var price in new[] { bar.Open, bar.High, bar.Low, bar.Close })
+            {
+                if (price <= 0) continue;
+                observed++;
+                if (decimal.Remainder(price, tick) != 0m) return NotePriceTickUnsupported;
+            }
+
+        if (quotePrice is { } quote && quote > 0)
+        {
+            observed++;
+            if (decimal.Remainder(quote, tick) != 0m) return NotePriceTickUnsupported;
+        }
+
+        return observed == 0 ? NotePriceTickUnknown : null;
     }
 
     StructureLayer BuildLayer(StructureSnapshot snapshot, DateTimeOffset cutoff, StructureSnapshotBuild build,
@@ -498,6 +627,10 @@ public sealed class StructureAnalysisService(
                     entryQuality = view?.Candidates
                         .Where(x => x.EventId == view.PreferredCandidateId)
                         .Select(x => x.EntryQuality).FirstOrDefault(),
+                    // 이슈 #26: 대표 후보의 종류(PULLBACK/BREAKOUT/REBOUND). 새 계산 없이 후보 값을 옮긴다.
+                    preferredKind = view?.Candidates
+                        .Where(x => x.EventId == view.PreferredCandidateId)
+                        .Select(x => x.Kind).FirstOrDefault(),
                     analysisAsOf = view?.AnalysisAsOf,
                     quoteAt = view?.QuoteAt,
                     warnings = view?.Warnings ?? []

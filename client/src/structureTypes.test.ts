@@ -9,6 +9,8 @@ import {
   clock,
   codeText,
   codeTexts,
+  missingComponentText,
+  missingComponentTexts,
   num1,
   num2,
   num3,
@@ -237,6 +239,46 @@ describe("codeText — 코드를 한국어 문장으로", () => {
   it("CODE:detail 형태", () => {
     expect(codeText("STALE_QUOTE:41s")).toBe("호가가 오래되었습니다 (30초 만료) (상세: 41s)");
   });
+  it("V5_ENTRY_* 관측 note 4종 (이슈 #21 — D6 active 배선)", () => {
+    expect(codeText("V5_ENTRY_COMMITTED")).toBe("v5 구조 계획으로 진입을 생성했습니다");
+    expect(codeText("V5_ENTRY_BLOCKED_BY_OPEN_TRADE")).toBe(
+      "이 종목에 OPEN 거래가 있어 신규 진입을 보류했습니다",
+    );
+    expect(codeText("V5_ENTRY_PLAN_INVALID")).toBe(
+      "동결 계획의 가격 순서가 성립하지 않아 진입을 거절했습니다",
+    );
+    expect(codeText("V5_ENTRY_PORT_UNAVAILABLE")).toBe(
+      "진입 포트가 배선되지 않아 진입을 보류했습니다 (설정 문제)",
+    );
+  });
+  it("2026-09-11 라운드 신설 거절·경고 코드 (이슈 #53)", () => {
+    expect(codeText("TREND_DIRECTION_OPPOSES_LONG")).toBe(
+      "추세 방향이 롱 진입과 반대입니다 (역방향 진입은 거절합니다)",
+    );
+    expect(codeText("STOP_INSIDE_COST")).toBe("손절 폭이 왕복 수수료보다 좁습니다");
+    expect(codeText("STOP_INSIDE_NOISE")).toBe(
+      "손절 폭이 1분 ATR 절반보다 좁습니다 (체결 잡음 구간)",
+    );
+    expect(codeText("BREAKOUT_ZONE_COOLDOWN")).toBe(
+      "같은 저항 구간의 돌파 재발동을 30분 동안 억제합니다",
+    );
+    expect(codeText("ObservationStorageLimited")).toBe(
+      "관측 저장 한도로 주기 요약 일부가 축약되었습니다",
+    );
+    expect(codeText("ObservationCoreStorageLimited")).toBe(
+      "관측 저장 한도로 핵심 관측까지 누락되어 전체 검증이 불가합니다",
+    );
+  });
+  it("V5_READY_WITHOUT_5M_STRUCTURE는 이미 등록되어 있다 (이슈 #29)", () => {
+    expect(codeText("V5_READY_WITHOUT_5M_STRUCTURE")).toBe(
+      "5분 구조 확인 전 반등 진입 — 구조 결측 상태 표식",
+    );
+  });
+  it("V5_ENTRY 계열이라도 등록되지 않은 코드는 fallback으로 원문을 노출한다", () => {
+    expect(codeText("V5_ENTRY_SOMETHING_NEW")).toBe(
+      "V5_ENTRY_SOMETHING_NEW — 설명이 등록되지 않은 코드입니다 (원문 표시)",
+    );
+  });
   it("모르는 코드는 감추지 않고 원문을 노출한다(§19-9)", () => {
     expect(codeText("TOTALLY_UNKNOWN")).toBe(
       "TOTALLY_UNKNOWN — 설명이 등록되지 않은 코드입니다 (원문 표시)",
@@ -252,5 +294,69 @@ describe("codeTexts", () => {
   it("null은 빈 배열, 빈 코드는 걸러낸다", () => {
     expect(codeTexts(null)).toEqual([]);
     expect(codeTexts(["MISSING_QUOTE", ""])).toEqual(["실시간 호가가 없습니다"]);
+  });
+});
+
+// 이슈 #25 — missingComponents 표시 계약.
+// missingComponents는 경고/이벤트 코드가 아니라 계산 구성요소 이름이며,
+// "계산에 필요한 근거 부족"으로 설명한다. 코드 사전(codeText)과 분리된 경로다.
+describe("missingComponentText — 결측 컴포넌트 전용 사전 (이슈 #25)", () => {
+  // 서버 전수 대조: TrendEvaluator.cs가 trend.missingComponents에 넣는 7종.
+  const TREND_KEYS = [
+    "structureDirection",
+    "atr1m",
+    "vwap",
+    "efficiency",
+    "emaDirection",
+    "slopeDirection",
+    "vwapDirection",
+  ];
+  // ZoneEvaluator.cs가 구간 강도 missingComponents(DTO: missingEvidence)에 넣는 4종.
+  const ZONE_KEYS = ["touchEvidence", "reactionEvidence", "recency", "confluence"];
+
+  it("서버가 내보내는 알려진 결측 키 전부가 사전에 등록되어 fallback을 타지 않는다", () => {
+    for (const key of [...TREND_KEYS, ...ZONE_KEYS]) {
+      const text = missingComponentText(key);
+      expect(text, key).not.toContain("설명이 등록되지 않은");
+      expect(text, key).not.toContain("원문 표시");
+      // 한국어 설명이어야 한다 (키 이름만 되돌려주지 않는다).
+      expect(text, key).toMatch(/[가-힣]/);
+    }
+  });
+
+  it("structureDirection은 확정 5분 피벗 구조 부족으로 설명한다", () => {
+    const text = missingComponentText("structureDirection");
+    expect(text).toContain("확정 5분 피벗");
+    expect(text).toContain("부족");
+    // 코드 fallback 문구("설명이 등록되지 않은 코드")로 새지 않는다.
+    expect(text).not.toContain("코드");
+  });
+
+  it("결측은 근거 부족이지 계산 오류가 아니다 — 오류/실패 단어를 쓰지 않는다", () => {
+    for (const key of [...TREND_KEYS, ...ZONE_KEYS]) {
+      const text = missingComponentText(key);
+      expect(text, key).not.toContain("오류");
+      expect(text, key).not.toContain("실패");
+    }
+  });
+
+  it("모르는 새 키는 감추지 않고 원문을 보존한다(§19-9)", () => {
+    expect(missingComponentText("brandNewComponent")).toBe(
+      "brandNewComponent — 설명이 등록되지 않은 결측 요소입니다 (원문 표시)",
+    );
+  });
+
+  it("빈 문자열·공백은 빈 문자열", () => {
+    expect(missingComponentText("")).toBe("");
+    expect(missingComponentText("   ")).toBe("");
+  });
+});
+
+describe("missingComponentTexts", () => {
+  it("null은 빈 배열, 빈 이름은 걸러낸다", () => {
+    expect(missingComponentTexts(null)).toEqual([]);
+    expect(missingComponentTexts(["vwap", ""])).toEqual([
+      "VWAP — 세션 거래량이 아직 없어 VWAP을 계산하지 못했습니다",
+    ]);
   });
 });

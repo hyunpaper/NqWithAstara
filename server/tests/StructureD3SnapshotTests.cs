@@ -162,6 +162,7 @@ public sealed class StructureD3SnapshotTests
         var withGap = D3.Candles(46).Where(x => x.Timestamp != D3.At(20)).ToArray();
         var gapped = StructureSnapshotFactory.Create(D3.Symbol, D3.Session, withGap, D3.Daily(), 100.0,
             D3.At(45), D3.At(45), 1, P);
+        Assert.Contains(StructureSnapshotFactory.BlockerBarGap, gapped.Quality.BlockersForTrend);
         Assert.Contains(StructureSnapshotFactory.BlockerBarGap, gapped.Quality.BlockersForZone);
         Assert.Contains(StructureSnapshotFactory.BlockerBarGap, gapped.Quality.BlockersForCandidate);
         Assert.Contains(StructureSnapshotFactory.BlockerBarGap, gapped.Quality.BlockersForReady);
@@ -170,16 +171,19 @@ public sealed class StructureD3SnapshotTests
         var conflicting = D3.Candles(46).Append(new Candle(D3.At(10), 1, 2, .5, 1.5, 10)).ToArray();
         var conflicted = StructureSnapshotFactory.Create(D3.Symbol, D3.Session, conflicting, D3.Daily(), 100.0,
             D3.At(45), D3.At(45), 1, P);
+        Assert.Contains(StructureSnapshotFactory.BlockerBarConflict, conflicted.Quality.BlockersForTrend);
         Assert.Contains(StructureSnapshotFactory.BlockerBarConflict, conflicted.Quality.BlockersForCandidate);
 
         var invalid = D3.Candles(46).Append(new Candle(D3.At(46), -1, 2, .5, 1.5, 10)).ToArray();
         var dropped = StructureSnapshotFactory.Create(D3.Symbol, D3.Session, invalid, D3.Daily(), 100.0,
             D3.At(47), D3.At(47), 1, P);
+        Assert.Contains(StructureSnapshotFactory.BlockerInvalidBars, dropped.Quality.BlockersForTrend);
         Assert.Contains(StructureSnapshotFactory.BlockerInvalidBars, dropped.Quality.BlockersForCandidate);
 
         var noDaily = StructureSnapshotFactory.Create(D3.Symbol, D3.Session, D3.Candles(46), [], 100.0,
             D3.At(45), D3.At(45), 1, P);
         Assert.Contains(StructureSnapshotFactory.WarningMissingDaily, noDaily.Warnings);
+        Assert.Empty(noDaily.Quality.BlockersForTrend);
         Assert.Empty(noDaily.Quality.BlockersForZone);
         Assert.Empty(noDaily.Quality.BlockersForReady);
     }

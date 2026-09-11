@@ -79,6 +79,8 @@ sealed class MemoryObservationStore : IStructureObservationStore
     public long? ForcedSize { get; set; }
     public Action? BeforeAppend { get; set; }
     public Exception? AppendFailure { get; set; }
+    /// <summary>파일별 텍스트 쓰기 실패 주입(이슈 #26 알림 영속 원자성 테스트). null 반환은 성공이다.</summary>
+    public Func<string, Exception?>? TextWriteFailure { get; set; }
 
     public List<string> Lines(string file) => Files.TryGetValue(file, out var lines) ? lines : [];
     public IEnumerable<string> AllLines => Files.Values.SelectMany(x => x);
@@ -116,6 +118,7 @@ sealed class MemoryObservationStore : IStructureObservationStore
     public Task WriteTextAsync(string file, string content, CancellationToken ct)
     {
         Interactions++;
+        if (TextWriteFailure?.Invoke(file) is { } failure) throw failure;
         Texts[file] = content;
         TextWrites++;
         return Task.CompletedTask;
@@ -134,13 +137,16 @@ sealed class RecordingStore : ILocalStore
     public List<string> Writes { get; } = [];
     public bool RejectWrites { get; set; }
 
+    /// <summary>읽기 호출을 파일별로 기록한다 — 전역 파일 세마포어를 잡는 횟수를 단언하는 데 쓴다(이슈 #67).</summary>
+    public List<string> Reads { get; } = [];
+
     /// <summary>테스트 시작 상태를 심는다(예: active 전환 시점에 이미 열려 있던 v4 거래).</summary>
     public void Seed(params SimTrade[] trades) => Trades = trades.ToList();
 
     public async Task<T> Read<T>(string file, T fallback)
     {
         await _gate.WaitAsync();
-        try { return Clone(file, fallback); }
+        try { Reads.Add(file); return Clone(file, fallback); }
         finally { _gate.Release(); }
     }
 
