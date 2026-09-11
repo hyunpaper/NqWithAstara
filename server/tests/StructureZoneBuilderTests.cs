@@ -124,6 +124,38 @@ public sealed class StructureZoneBuilderTests
     }
 
     [Fact]
+    public void ProfileOnlyZoneIdDoesNotChangeBetweenConsecutiveCutoffs()
+    {
+        var profile = Fx.ProfileSource("node", 100.00m);
+        ZoneCandidate[] Candidates() => [ZoneCandidate.FromBounds(99.95m, 100.05m, profile, "EstimatedVolumeProfile")];
+
+        var early = Assert.Single(ZoneBuilder.Assemble(Candidates(), Request(30), .20, P).Zones);
+        var later = Assert.Single(ZoneBuilder.Assemble(Candidates(), Request(31), .20, P).Zones);
+        var muchLater = Assert.Single(ZoneBuilder.Assemble(Candidates(), Request(120), .20, P).Zones);
+
+        Assert.True(early.ProfileOnly);
+        Assert.Equal(early.Id, later.Id);
+        Assert.Equal(early.Id, muchLater.Id);
+        Assert.NotEqual(profile.Id, early.Id);
+        Assert.DoesNotContain(StructureMath.Price(early.Lower), early.Id);
+    }
+
+    [Fact]
+    public void SplitZoneIdIsStableAcrossConsecutiveCutoffs()
+    {
+        var shared = Fx.Pivot("shared", 100.00m, 10, 12);
+        ZoneCandidate[] Candidates() => [Line(100.00m, .03m, shared), Line(101.00m, .03m, shared)];
+
+        var early = ZoneBuilder.Assemble(Candidates(), Request(30), .20, P);
+        var later = ZoneBuilder.Assemble(Candidates(), Request(120), .20, P);
+
+        Assert.Equal(2, early.Zones.Length);
+        Assert.Contains("ZONE_LINEAGE_SPLIT", early.Warnings);
+        Assert.Equal(early.Zones.Select(x => x.Id).ToArray(), later.Zones.Select(x => x.Id).ToArray());
+        Assert.Equal(2, early.Zones.Select(x => x.Id).Distinct().Count());
+    }
+
+    [Fact]
     public void ProfileOnlyZoneKeepsATemporaryIdAndIsNotEligible()
     {
         var profile = Fx.ProfileSource("node", 100.00m);

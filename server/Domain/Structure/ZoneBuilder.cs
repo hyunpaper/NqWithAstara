@@ -232,6 +232,7 @@ public static class ZoneBuilder
             }
 
         var retiredIds = request.RetiredZoneIds.ToHashSet(StringComparer.Ordinal);
+        var sessionKey = MarketRules.TradingDate(request.SessionStart).ToString("yyyy-MM-dd");
         var result = ImmutableArray.CreateBuilder<PriceZone>();
 
         // 조각별 원천을 먼저 확정한다. lineage 소유자 결정과 ID 발급이 같은 결정적 순서를 쓴다.
@@ -290,25 +291,29 @@ public static class ZoneBuilder
             else
             {
                 // profile 임시 ID는 Zone의 영구 대표 원천이 될 수 없다(§16B).
+                // 대체 ID에도 cutoff를 넣지 않는다 — 평가마다 새 ID가 나오면 돌파 쿨다운이 매번 초기화된다(§6.3).
                 var representativeSource = sources.FirstOrDefault(x => !x.Temporary);
                 id = representativeSource is not null
                     ? representativeSource.Id
-                    : StructureMath.SourceId("profile-zone", request.Symbol, StructureMath.Iso(request.Cutoff),
-                        StructureMath.Price(group.Lower), StructureMath.Price(group.Upper));
+                    : StructureMath.SourceId("profile-zone", request.Symbol, sessionKey, SourceKey(sources));
                 boundsRevision = 1;
                 snapshotRevision = 1;
             }
 
             // 한 스냅샷 안에서 ZoneId는 유일해야 한다. 남은 충돌은 원천 기반 새 ID로 분리한다(§16A).
-            if (!used.Add(id))
+            // 조각의 원천 집합은 서로 겹치지 않으므로 가격 문자열 없이도 결정적으로 유일하다(§6.3).
+            if (used.Contains(id))
             {
                 warnings.Add("ZONE_LINEAGE_SPLIT");
-                id = StructureMath.SourceId("zone-split", request.Symbol, StructureMath.Iso(request.Cutoff),
-                    StructureMath.Price(group.Lower), StructureMath.Price(group.Upper));
-                used.Add(id);
+                var key = SourceKey(sources);
+                id = StructureMath.SourceId("zone-split", request.Symbol, sessionKey, key);
+                for (var suffix = 2; used.Contains(id); suffix++)
+                    id = StructureMath.SourceId("zone-split", request.Symbol, sessionKey, key,
+                        suffix.ToString(CultureInfo.InvariantCulture));
                 boundsRevision = 1;
                 snapshotRevision = 1;
             }
+            used.Add(id);
             aliases.Remove(id);
 
             var flags = new SortedSet<string>(group.Flags, StringComparer.Ordinal);
@@ -326,6 +331,10 @@ public static class ZoneBuilder
             .OrderBy(x => x.Lower).ThenBy(x => x.Upper).ThenBy(x => x.Id, StringComparer.Ordinal)
             .ToImmutableArray();
     }
+
+    /// <summary>조각의 원천 ID 집합. 대체 ZoneId의 유일성·안정성 근거이며 시각·가격 문자열을 쓰지 않는다(§6.3).</summary>
+    static string SourceKey(ImmutableArray<ZoneSource> sources) =>
+        string.Join(',', sources.Select(x => x.Id).OrderBy(x => x, StringComparer.Ordinal));
 
     /// <summary>이 조각이 이전 Zone의 대표 원천(ZoneId와 같은 원천 ID)을 그대로 갖고 있는지(§16A 분리 규칙).</summary>
     static bool HoldsRepresentative(ImmutableArray<ZoneSource> sources, string previousZoneId) =>
