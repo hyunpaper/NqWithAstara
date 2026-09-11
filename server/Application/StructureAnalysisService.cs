@@ -117,9 +117,6 @@ public sealed class StructureAnalysisService(
     /// <summary>§12.5 gate 재확인에서 신규 진입이 막혔다. 뒤의 코드가 구체 사유다.</summary>
     public const string NoteEntryGateRecheck = "V5_ENTRY_BLOCKED_BY_GATE_RECHECK";
 
-    /// <summary>tick 판정에 쓰는 최근 완료 봉 수. 과거 한 건의 이상 호가가 하루 전체를 막지 않게 한다.</summary>
-    public const int PriceTickSampleBars = 30;
-
     /// <summary>#64 §16: 같은 봉 안의 상태 전이 관측. 봉의 full 관측이 이미 가진 zones/quality를 반복하지 않는다.</summary>
     public const string DetailTransition = "transition";
 
@@ -285,7 +282,7 @@ public sealed class StructureAnalysisService(
             .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToImmutableArray();
 
         // #61 §16B: tick 지원 여부는 Application이 판정해서 넘긴다. Domain 기본값(허용)에 의존하지 않는다.
-        var tickNote = PriceTickNote(build.Bars.Bars, snapshot.QuotePrice, _policy);
+        var tickNote = PriceTickNote(snapshot.QuotePrice, snapshot.OptionalLiquidity, _policy);
 
         var detection = SetupDetector.Detect(SetupDetectionRequest.Create(snapshot.Symbol, snapshot.SessionStart,
             snapshot.SessionEnd, snapshot.AnalysisAsOf, now, build.Bars.Bars, candidateLayer.Zones,
@@ -523,30 +520,23 @@ public sealed class StructureAnalysisService(
     }
 
     /// <summary>
-    /// #61 §16B: 첫 버전은 tick USD 0.01 종목만 신규 READY 대상이다. 앱에 tick metadata가 없으므로 관측된
-    /// 가격(최근 완료 봉 OHLC + 현재 시세)이 전부 정책 tick의 배수인지로 판정하고, 근거가 없으면 차단한다.
+    /// #86 §16B: tick USD 0.01 종목만 신규 READY 대상이다. 앱에 tick metadata가 없으므로 관측 가격으로 판정하되,
+    /// 근거는 체결가 원천(현재 시세)과 호가 원천(최우선 매수·매도)으로만 한정한다. 1분봉·일봉 OHLC는 Toss가
+    /// 가공한 값이라 tick 격자를 벗어나므로(#86 실측: 211.475, 213.0326) 근거에서 뺀다.
     /// 반환 null이 지원이며 그 외는 관측에 남길 사유다.
     /// </summary>
-    public static string? PriceTickNote(IEnumerable<StructureBar> bars, decimal? quotePrice, StructurePolicy policy)
+    public static string? PriceTickNote(decimal? quotePrice, StructureLiquidity? liquidity, StructurePolicy policy)
     {
-        ArgumentNullException.ThrowIfNull(bars);
         ArgumentNullException.ThrowIfNull(policy);
         var tick = policy.PriceTick;
         if (tick <= 0) return NotePriceTickUnknown;
 
         var observed = 0;
-        foreach (var bar in bars.TakeLast(PriceTickSampleBars))
-            foreach (var price in new[] { bar.Open, bar.High, bar.Low, bar.Close })
-            {
-                if (price <= 0) continue;
-                observed++;
-                if (decimal.Remainder(price, tick) != 0m) return NotePriceTickUnsupported;
-            }
-
-        if (quotePrice is { } quote && quote > 0)
+        foreach (var candidate in new[] { quotePrice, liquidity?.BestBid, liquidity?.BestAsk })
         {
+            if (candidate is not { } price || price <= 0) continue;
             observed++;
-            if (decimal.Remainder(quote, tick) != 0m) return NotePriceTickUnsupported;
+            if (decimal.Remainder(price, tick) != 0m) return NotePriceTickUnsupported;
         }
 
         return observed == 0 ? NotePriceTickUnknown : null;
