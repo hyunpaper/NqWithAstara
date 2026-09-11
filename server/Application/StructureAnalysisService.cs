@@ -108,6 +108,15 @@ public sealed class StructureAnalysisService(
     public const string NoteEntryPlanInvalid = "V5_ENTRY_PLAN_INVALID";
     public const string NoteEntryUnavailable = "V5_ENTRY_PORT_UNAVAILABLE";
 
+    /// <summary>§16B 가격 단위: 관측된 가격이 정책 tick의 배수가 아니다(신규 READY 금지).</summary>
+    public const string NotePriceTickUnsupported = "V5_PRICE_TICK_UNSUPPORTED";
+
+    /// <summary>§16B 가격 단위: tick을 판정할 가격 근거가 없다. 모르면 허용이 아니라 차단이다.</summary>
+    public const string NotePriceTickUnknown = "V5_PRICE_TICK_UNKNOWN";
+
+    /// <summary>tick 판정에 쓰는 최근 완료 봉 수. 과거 한 건의 이상 호가가 하루 전체를 막지 않게 한다.</summary>
+    public const int PriceTickSampleBars = 30;
+
     readonly StructureEngineOptions _options = options ?? StructureEngineOptions.Off;
     readonly StructurePolicy _policy = policy ?? StructurePolicy.Default;
     readonly ConcurrentDictionary<string, CacheEntry> _cache = new(StringComparer.OrdinalIgnoreCase);
@@ -206,10 +215,13 @@ public sealed class StructureAnalysisService(
         var blockers = build.Quality.BlockersForCandidate.Concat(gate.Blockers)
             .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToImmutableArray();
 
+        // #61 §16B: tick 지원 여부는 Application이 판정해서 넘긴다. Domain 기본값(허용)에 의존하지 않는다.
+        var tickNote = PriceTickNote(build.Bars.Bars, snapshot.QuotePrice, _policy);
+
         var detection = SetupDetector.Detect(SetupDetectionRequest.Create(snapshot.Symbol, snapshot.SessionStart,
             snapshot.SessionEnd, snapshot.AnalysisAsOf, now, build.Bars.Bars, candidateLayer.Zones,
             candidateLayer.Episodes, trend, candidateLayer.Atr1m, snapshot.QuotePrice, snapshot.QuoteAt,
-            snapshot.OptionalLiquidity, blockers), _policy);
+            snapshot.OptionalLiquidity, blockers, tickNote is null), _policy);
 
         var candidates = StructuralLifecycle.ApplyLive(
             // zones는 §10 돌파 쿨다운의 zone lineage(Aliases) 확인용이며 후보 계층(structureCutoff) 스냅샷이다.
@@ -227,6 +239,7 @@ public sealed class StructureAnalysisService(
 
         var warnings = new SortedSet<string>(build.Warnings, StringComparer.Ordinal);
         foreach (var blocker in detection.ReadyBlockers) warnings.Add(blocker);
+        if (tickNote is not null) { notes.Add(tickNote); warnings.Add(tickNote); }
 
         var observationId = StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash);
         var signature = StructuralLifecycle.EventSignature(candidates, preferred);
@@ -324,6 +337,7 @@ public sealed class StructureAnalysisService(
         if (_options.Mode != StructureEngineMode.Active || preferredId is null) return null;
         var chosen = candidates.FirstOrDefault(x => x.EventId == preferredId);
         if (chosen is null || chosen.Disposition != CandidateDisposition.Ready || chosen.Plan is null) return null;
+
         if (tradeEntries is null) return new ActiveEntryResult(candidates, false, NoteEntryUnavailable);
 
         // §10: 체결 시 FrozenPlan을 저장한다. 진입 이후 이 스냅샷은 다시 만들지 않는다.
@@ -408,6 +422,36 @@ public sealed class StructureAnalysisService(
         var state = runtime.Snapshot();
         if (state.Market.Start != snapshot.SessionStart || state.Market.End != snapshot.SessionEnd) return false;
         return now < snapshot.SessionEnd;
+    }
+
+    /// <summary>
+    /// #61 §16B: 첫 버전은 tick USD 0.01 종목만 신규 READY 대상이다. 앱에 tick metadata가 없으므로 관측된
+    /// 가격(최근 완료 봉 OHLC + 현재 시세)이 전부 정책 tick의 배수인지로 판정하고, 근거가 없으면 차단한다.
+    /// 반환 null이 지원이며 그 외는 관측에 남길 사유다.
+    /// </summary>
+    public static string? PriceTickNote(IEnumerable<StructureBar> bars, decimal? quotePrice, StructurePolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(bars);
+        ArgumentNullException.ThrowIfNull(policy);
+        var tick = policy.PriceTick;
+        if (tick <= 0) return NotePriceTickUnknown;
+
+        var observed = 0;
+        foreach (var bar in bars.TakeLast(PriceTickSampleBars))
+            foreach (var price in new[] { bar.Open, bar.High, bar.Low, bar.Close })
+            {
+                if (price <= 0) continue;
+                observed++;
+                if (decimal.Remainder(price, tick) != 0m) return NotePriceTickUnsupported;
+            }
+
+        if (quotePrice is { } quote && quote > 0)
+        {
+            observed++;
+            if (decimal.Remainder(quote, tick) != 0m) return NotePriceTickUnsupported;
+        }
+
+        return observed == 0 ? NotePriceTickUnknown : null;
     }
 
     StructureLayer BuildLayer(StructureSnapshot snapshot, DateTimeOffset cutoff, StructureSnapshotBuild build,
