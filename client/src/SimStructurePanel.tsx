@@ -81,13 +81,10 @@ export default function SimStructurePanel({ report }: { report: StructureCohortR
   return (
     <section className="panel metrics-panel">
       <div className="panel-head">
+        {/* 이슈 #29: 원시 클래스명(FrozenStructureContext)과 반복 설명 대신 각 지표의
+            help(분모·비용 기준)로 값을 설명한다. 동결 계획값 vs 실현 손익 구분은 유지한다. */}
         <div>
           <h2>v5 구조 거래 · 동결 근거 코호트</h2>
-          <p>
-            진입 시점 FrozenStructureContext 기준 · 현재 재계산 값으로 채우지 않음 · 승률 분모 =
-            손익 유효 청산 건 · 평균 손익은 왕복 수수료 0.2% 차감 실현값, 계획 netR은 동결 비용 모델의
-            계획값(EOD 등 추정 청산 포함 여부는 각 행에 표기)
-          </p>
         </div>
         <Layers size={18} />
       </div>

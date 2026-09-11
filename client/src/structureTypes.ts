@@ -541,6 +541,10 @@ const CODE_TEXT: Record<string, string> = {
   // 추세·품질
   TREND_UNAVAILABLE: "추세를 판정할 근거가 부족합니다",
   MISSING_5M_STRUCTURE: "5분 확정 피벗이 부족합니다 — 피벗 확인 대기",
+  // 이슈 #29: SetupDetector가 반등(REBOUND) 후보에 남기는 관측 note. 사전 미등록이라
+  // 원문 fallback으로 노출되던 것을 등록한다 (서버 상수: NoteReadyWithout5mStructure).
+  V5_READY_WITHOUT_5M_STRUCTURE:
+    "5분 구조 확인 전 반등 진입 — 구조 결측 상태 표식",
   COUNTER_TREND_SETUP: "추세와 반대 방향의 후보입니다",
   PULLBACK_REQUIRES_UP_OR_TRANSITION: "눌림 후보는 상승·전환 추세에서만 성립합니다",
   NO_VOLUME_BASELINE: "거래량 기준선이 없어 트리거 거래량 품질을 계산할 수 없습니다",
@@ -591,7 +595,8 @@ const CODE_TEXT: Record<string, string> = {
   MISSING_QUOTE: "실시간 호가가 없습니다",
   STALE_QUOTE: "호가가 오래되었습니다 (30초 만료)",
   QUOTE_IN_FUTURE: "호가 시각이 미래입니다 (신뢰하지 않음)",
-  MISSING_LIQUIDITY_COST: "호가 스프레드를 확인할 수 없어 비용을 보수적으로 가정했습니다",
+  // 이슈 #29: spread=0 가정은 보수성 보장이 없으므로 "보수적 가정"으로 단정하지 않고 사실대로 적는다.
+  MISSING_LIQUIDITY_COST: "호가 스프레드를 확인할 수 없어 호가 비용이 반영되지 않았습니다",
   SPREAD_MISSING: "스프레드 정보 없음",
   SPREAD_STALE: "스프레드가 오래되었습니다",
   SPREAD_CROSSED: "매수·매도 호가가 역전되어 사용하지 않았습니다",
@@ -696,3 +701,30 @@ export const codeText = (code: string): string => {
 
 export const codeTexts = (codes: string[] | null | undefined): string[] =>
   arr(codes).map(codeText).filter((x) => x.length > 0);
+
+// ── 기본 화면 / 진단 상세 분리 (이슈 #29) ──────────────────────────────────
+// §19-9("모르는 코드를 감추지 않는다")는 **데이터를 버리지 말라**는 규칙이지 원시 코드를
+// 기본 화면에 그대로 찍으라는 규칙이 아니다. 기본 화면은 사전에 등록된 문장만 보여주고,
+// 미등록 원시 코드(WidthFromTickOnly·EstimatedVolumeProfile·ProfileOnlyTemporaryId 등)는
+// 접힌 진단 상세에 원문 그대로 남긴다. codeText()의 fallback 자체는 그대로 유지한다.
+
+/** 코드가 사전에 등록되어 있는지. 접미 카운트(`...xN`)와 `CODE:detail` 형태도 등록으로 본다. */
+export const isKnownCode = (code: string): boolean => {
+  const raw = (code ?? "").trim();
+  if (!raw) return false;
+  if (CODE_TEXT[raw]) return true;
+  const repeated = /^(.*?)x(\d+)$/.exec(raw);
+  if (repeated && CODE_TEXT[repeated[1]]) return true;
+  const head = raw.split(":")[0];
+  return head !== raw && CODE_TEXT[head] != null;
+};
+
+/** 기본 화면용 — 등록된 코드만 한국어 문장으로. 미등록 코드는 여기서 나오지 않는다. */
+export const knownCodeTexts = (codes: string[] | null | undefined): string[] =>
+  arr(codes).filter(isKnownCode).map(codeText);
+
+/** 진단 상세용 — 사전에 없는 코드의 원문. 서버 데이터를 버리지 않기 위한 보존 경로다. */
+export const unknownCodes = (codes: string[] | null | undefined): string[] =>
+  arr(codes)
+    .map((c) => (c ?? "").trim())
+    .filter((c) => c.length > 0 && !isKnownCode(c));
