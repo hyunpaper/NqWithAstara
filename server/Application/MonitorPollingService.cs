@@ -4,7 +4,8 @@ namespace Astra.Server.Application;
 
 public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway toss, IRealtimeMarketStream stream,
     MonitorRuntimeState runtime, TimeProvider clock, IMonitorDiagnostics diagnostics,
-    StructureAnalysisService? structure = null, StructureLiquidityFeed? liquidity = null) : IMonitorSignals
+    StructureAnalysisService? structure = null, StructureLiquidityFeed? liquidity = null,
+    StructureAlertPublisher? alerts = null) : IMonitorSignals
 {
     public bool Running => runtime.Snapshot().Running; public long Generation => runtime.Snapshot().Generation;
     public string ConnectionStatus => runtime.Snapshot().ConnectionStatus; public string ConnectionMessage => runtime.Snapshot().ConnectionMessage;
@@ -14,8 +15,9 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
     readonly ConcurrentDictionary<string, SetupLatch> _setups = new(StringComparer.OrdinalIgnoreCase);
     readonly ConcurrentDictionary<string, BreakoutLatch> _breakouts = new(StringComparer.OrdinalIgnoreCase);
     public bool TryGet(string symbol, out SignalView signal) => Signals.TryGetValue(symbol, out signal!);
-    public void Remove(string symbol) { Signals.TryRemove(symbol, out _); _setups.TryRemove(symbol, out _); _breakouts.TryRemove(symbol, out _); structure?.Remove(symbol); }
-    public void Clear() { Signals.Clear(); _setups.Clear(); _breakouts.Clear(); structure?.Clear(); }
+    // 이슈 #67: 일봉 캐시도 다른 종목 캐시와 같은 규칙으로 정리한다 — 삭제된 종목·세션 경계를 넘겨 재사용하지 않는다.
+    public void Remove(string symbol) { Signals.TryRemove(symbol, out _); _setups.TryRemove(symbol, out _); _breakouts.TryRemove(symbol, out _); _daily.TryRemove(symbol, out _); structure?.Remove(symbol); }
+    public void Clear() { Signals.Clear(); _setups.Clear(); _breakouts.Clear(); _daily.Clear(); structure?.Clear(); alerts?.Clear(); }
 
     public async Task PollAsync(CancellationToken ct)
     {
@@ -26,7 +28,7 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
             if (!market.IsOpen || market.End is { } end && clock.GetLocalNow() >= end)
             {
                 await ReconcileExpiredTrades(gen, ct);
-                runtime.TryCommit(gen, () => { Signals.Clear(); _setups.Clear(); _breakouts.Clear(); structure?.Clear(); });
+                runtime.TryCommit(gen, () => { Signals.Clear(); _setups.Clear(); _breakouts.Clear(); _daily.Clear(); structure?.Clear(); alerts?.Clear(); });
                 runtime.TryCommit(gen, s => s with { ConnectionStatus = "connected", ConnectionMessage = "미국 정규장 외에는 신호를 생성하지 않습니다.", UpdatedAt = clock.GetUtcNow() }); return;
             }
             var watch = await store.Read("watchlist.json", new List<WatchItem>()); var oldTrades = await store.Read("simtrades.json", new List<SimTrade>()); if (!runtime.IsCurrent(gen)) return;
