@@ -137,13 +137,16 @@ sealed class RecordingStore : ILocalStore
     public List<string> Writes { get; } = [];
     public bool RejectWrites { get; set; }
 
+    /// <summary>읽기 호출을 파일별로 기록한다 — 전역 파일 세마포어를 잡는 횟수를 단언하는 데 쓴다(이슈 #67).</summary>
+    public List<string> Reads { get; } = [];
+
     /// <summary>테스트 시작 상태를 심는다(예: active 전환 시점에 이미 열려 있던 v4 거래).</summary>
     public void Seed(params SimTrade[] trades) => Trades = trades.ToList();
 
     public async Task<T> Read<T>(string file, T fallback)
     {
         await _gate.WaitAsync();
-        try { return Clone(file, fallback); }
+        try { Reads.Add(file); return Clone(file, fallback); }
         finally { _gate.Release(); }
     }
 
