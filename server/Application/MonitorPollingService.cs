@@ -4,7 +4,7 @@ namespace Astra.Server.Application;
 
 public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway toss, IRealtimeMarketStream stream,
     MonitorRuntimeState runtime, TimeProvider clock, IMonitorDiagnostics diagnostics,
-    StructureAnalysisService? structure = null) : IMonitorSignals
+    StructureAnalysisService? structure = null, StructureLiquidityFeed? liquidity = null) : IMonitorSignals
 {
     public bool Running => runtime.Snapshot().Running; public long Generation => runtime.Snapshot().Generation;
     public string ConnectionStatus => runtime.Snapshot().ConnectionStatus; public string ConnectionMessage => runtime.Snapshot().ConnectionMessage;
@@ -114,17 +114,22 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
     }
 
     /// <summary>
-    /// v4/v5 파이프라인의 유일한 접점(설계 §2, §12.2). 같은 원본 응답을 재사용하고 추가 조회를 하지 않으며,
-    /// v5 계산·저장 실패가 v4 신호·거래·알림에 영향을 주지 않도록 종목 단위로 격리한다.
+    /// v4/v5 파이프라인의 유일한 접점(설계 §2, §12.2). 봉·시세는 v4가 이미 쓴 원본 응답을 그대로 재사용하고,
+    /// 호가만 <see cref="StructureLiquidityFeed"/>(= LiquidityQueryService 캐시·in-flight 중복 제거)를 통해
+    /// 받아 넘긴다(이슈 #41). 호가가 없으면 null로 넘겨 기존 결측 경로를 그대로 태운다.
+    /// v5 계산·저장·호가 조회 실패는 v4 신호·거래·알림에 영향을 주지 않도록 종목 단위로 격리한다.
     /// </summary>
     async Task ObserveStructureAsync(string symbol, IReadOnlyList<Candle> bars, IReadOnlyList<Candle>? daily,
         (double Price, DateTimeOffset At) quote, MarketSession market, long gen, CancellationToken ct)
     {
+        // off는 계산도 조회도 유발하지 않는다(§16B 모드 게이트) — 호가 조회는 이 줄 아래에서만 일어난다.
         if (structure is null || structure.Mode == StructureEngineMode.Off) return;
         try
         {
+            // 미배선 시절과 동일하게 동작하도록 feed가 없으면 결측(null)이다. 추정 spread를 만들지 않는다.
+            var book = liquidity is null ? null : await liquidity.TryGetAsync(symbol, ct);
             await structure.ObserveAsync(new StructureObservationRequest(symbol, gen, market, bars, daily,
-                quote.Price, quote.At), ct);
+                quote.Price, quote.At, book), ct);
         }
         catch (Exception ex) { diagnostics.MarketDataFailed(symbol, "structure-v5", ex); }
     }
