@@ -40,6 +40,42 @@ public sealed class SimulationEngineV4Tests
     }
 
     [Fact]
+    public void EntryMinuteStartsUnobservedAndApostEntryQuoteMarksOnlyPartialCoverage()
+    {
+        var entered = T.AddSeconds(3);
+        var created = SimulationEngine.Process([], "NVDA", [], 100, entered, 50, 100,
+            [new SimulationEntry("SETUP", 100, 110, 95, null, null, 70, 0, 2, 60, 55, [], entered, T.AddHours(3), T)]);
+        Assert.Equal("UNOBSERVED", Assert.IsType<ExecutionProvenance>(created[0].Execution).EntryMinuteCoverage);
+
+        var observed = SimulationEngine.Process(created, "NVDA", [], 101, T.AddSeconds(17), 50, 100, []);
+        var execution = Assert.IsType<ExecutionProvenance>(observed[0].Execution);
+        Assert.Equal("PARTIALLY_OBSERVED_QUOTE", execution.EntryMinuteCoverage);
+        Assert.Equal(T.AddSeconds(17), execution.EntryMinuteEvidenceAt);
+    }
+
+    [Fact]
+    public void CompletedBarKeepsCursorAtStartButRecordsCloseKnownTime()
+    {
+        var trade = Open() with { Execution = new ExecutionProvenance(T, T.AddMinutes(1), "UNOBSERVED", null) };
+        var result = SimulationEngine.Process([trade], "NVDA", [Bar(1, 100, 101, 99, 101)], 101, T.AddMinutes(2), 50, 100, []);
+        Assert.Equal(T.AddMinutes(1), result[0].LastEvaluatedBarAt);
+        Assert.Equal(T.AddMinutes(2), result[0].LastPriceAt);
+        var execution = Assert.IsType<ExecutionProvenance>(result[0].Execution);
+        Assert.Equal(T.AddMinutes(1), execution.EvaluatedBarStart);
+        Assert.Equal(T.AddMinutes(2), execution.EvaluatedBarCloseAt);
+    }
+
+    [Fact]
+    public void ReorderedAndRepeatedBarsRemainIdempotentWithReplayEvidence()
+    {
+        var trade = Open() with { Execution = new ExecutionProvenance(T, T.AddMinutes(1), "UNOBSERVED", null) };
+        var first = SimulationEngine.ReplayBars([trade], "NVDA", [Bar(2, 100, 101, 99, 101), Bar(1, 100, 101, 99, 101)]);
+        var restarted = SimulationEngine.ReplayBars(first, "NVDA", [Bar(1, 100, 101, 99, 101), Bar(2, 100, 101, 99, 101)]);
+        Assert.Equal(T.AddMinutes(2), restarted[0].LastEvaluatedBarAt);
+        Assert.Equal(T.AddMinutes(3), Assert.IsType<ExecutionProvenance>(restarted[0].Execution).EvaluatedBarCloseAt);
+    }
+
+    [Fact]
     public void GapBelowStopUsesWorseOpeningPrice()
     {
         var result = SimulationEngine.Process([Open()], "NVDA", [Bar(1, 90, 92, 88, 91)], 91, T.AddMinutes(2), 50, 100, []);
@@ -67,11 +103,22 @@ public sealed class SimulationEngineV4Tests
     public void RestartClosesTradeAtPersistedSessionEndWithEstimatedProvenance()
     {
         var end = T.AddHours(2);
-        var result = SimulationEngine.CloseExpiredSessions([Open(end: end) with { LastPrice = 103 }], end.AddMinutes(1));
+        var result = SimulationEngine.CloseExpiredSessions([Open(end: end) with { LastPrice = 103, Execution = new ExecutionProvenance(T, T.AddMinutes(1), "UNOBSERVED", null) }], end.AddMinutes(1));
         Assert.Equal("EOD", result[0].Status);
         Assert.Equal(end, result[0].ExitAt);
         Assert.True(result[0].ExitEstimated);
         Assert.Equal(T, result[0].LastPriceAt); // session end is not fabricated as a market observation
+        var execution = Assert.IsType<ExecutionProvenance>(result[0].Execution);
+        Assert.Equal("EOD_LAST_PRICE_FALLBACK", execution.ExitSource);
+        Assert.Equal(T, execution.ExitEvidenceAt);
+    }
+
+    [Fact]
+    public void LegacyRowsWithoutExecutionRemainCompatible()
+    {
+        var result = SimulationEngine.Process([Open()], "NVDA", [Bar(1, 100, 101, 99, 101)], 101, T.AddMinutes(2), 50, 100, []);
+        Assert.Null(result[0].Execution);
+        Assert.Equal(T.AddMinutes(2), result[0].LastPriceAt);
     }
 
     [Fact]
