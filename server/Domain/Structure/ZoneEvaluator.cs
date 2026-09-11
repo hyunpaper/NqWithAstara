@@ -338,7 +338,15 @@ public static class ZoneEvaluator
         return reasons.ToImmutableArray();
     }
 
-    /// <summary>SnapshotRevision 판단용. 자기 자신의 revision 번호는 비교에서 제외한다.</summary>
+    /// <summary>
+    /// SnapshotRevision 판단용. 자기 자신의 revision 번호와 시간 연속 성분(recency, 그에 의존하는 strength value)을
+    /// 비교에서 제외한다. 이 둘은 구조가 그대로여도 매 봉 변하므로 revision이 구조 변경 신호가 되지 못한다(§6.3).
+    /// 증거 개수·family·역할·경계·자격은 그대로 비교하므로 실제 변화는 계속 revision을 올린다.
+    /// </summary>
     static string ContentKey(PriceZone zone) =>
-        (zone with { SnapshotRevision = 0 }).Fingerprint();
+        (zone with
+        {
+            SnapshotRevision = 0,
+            Strength = zone.Strength is null ? null : zone.Strength with { Recency = null, Value = null }
+        }).Fingerprint();
 }

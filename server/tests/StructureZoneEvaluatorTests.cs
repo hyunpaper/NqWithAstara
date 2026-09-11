@@ -546,4 +546,62 @@ public sealed class StructureZoneEvaluatorTests
         Assert.Equal(first[0].SnapshotRevision + 1, changed[0].SnapshotRevision);
         Assert.Equal(first[0].BoundsRevision, changed[0].BoundsRevision);
     }
+
+    [Fact]
+    public void SnapshotRevisionDoesNotIncrementWhileOnlyRecencyDecays()
+    {
+        var bars = Enumerable.Range(0, 60).Select(i => Fx.Steady(i, 99.45m, 99.65m, 99.55m)).ToImmutableArray();
+        var zone = Fx.Zone(99.20m, 99.40m, Fx.Pivot("intraday", 99.30m, 3, 5));
+
+        var current = Fx.Evaluate(zone, bars, 20).Zones;
+        var baselineRevision = current[0].SnapshotRevision;
+        var firstRecency = current[0].Strength!.Recency;
+        var firstValue = current[0].Strength!.Value;
+
+        for (var minute = 21; minute <= 60; minute++)
+            current = ZoneEvaluator.Evaluate(current,
+                ZoneEvaluationRequest.Create(Fx.SessionStart, Fx.At(minute), bars, current), P).Zones;
+
+        Assert.Equal(baselineRevision, current[0].SnapshotRevision);
+        Assert.True(current[0].Strength!.Recency < firstRecency);
+        Assert.True(current[0].Strength!.Value < firstValue);
+        Assert.Equal(0, current[0].Strength!.CompletedEpisodes);
+    }
+
+    [Fact]
+    public void SnapshotRevisionStillIncrementsWhenEvidenceChangesAtALaterCutoff()
+    {
+        var bars = Warmup();
+        for (var i = 14; i < 20; i++) bars.Add(Fx.Steady(i, 99.45m, 99.65m, 99.55m));
+
+        var first = Fx.Evaluate(Support(), bars.ToImmutableArray(), 20).Zones;
+        var quiet = ZoneEvaluator.Evaluate(first,
+            ZoneEvaluationRequest.Create(Fx.SessionStart, Fx.At(25), bars.ToImmutableArray(), first), P).Zones;
+        Assert.Equal(first[0].SnapshotRevision, quiet[0].SnapshotRevision);
+
+        var touched = bars.ToList();
+        touched.Add(Fx.Steady(20, 99.35m, 99.55m, 99.45m));
+        for (var i = 21; i < 26; i++) touched.Add(Fx.Steady(i, 99.60m, 99.80m, 99.75m));
+
+        var evolved = ZoneEvaluator.Evaluate(quiet,
+            ZoneEvaluationRequest.Create(Fx.SessionStart, Fx.At(26), touched.ToImmutableArray(), quiet), P).Zones;
+        Assert.True(evolved[0].Strength!.CompletedEpisodes > quiet[0].Strength!.CompletedEpisodes);
+        Assert.Equal(quiet[0].SnapshotRevision + 1, evolved[0].SnapshotRevision);
+    }
+
+    [Fact]
+    public void SnapshotRevisionIncrementsWhenBoundsOrSourcesChange()
+    {
+        var bars = Enumerable.Range(0, 30).Select(i => Fx.Steady(i, 99.45m, 99.65m, 99.55m)).ToImmutableArray();
+        var zone = Fx.Zone(99.20m, 99.40m, Fx.Pivot("intraday", 99.30m, 3, 5));
+        var first = Fx.Evaluate(zone, bars, 20).Zones;
+
+        var afterBounds = ZoneEvaluator.Evaluate([first[0] with { Upper = 99.42m }],
+            ZoneEvaluationRequest.Create(Fx.SessionStart, Fx.At(20), bars, first), P).Zones;
+        Assert.Equal(first[0].SnapshotRevision + 1, afterBounds[0].SnapshotRevision);
+
+        var afterSource = ZoneEvaluator.Evaluate([first[0] with { Sources = first[0].Sources.Add(Fx.Daily("prev-L", 99.30m)) }],
+            ZoneEvaluationRequest.Create(Fx.SessionStart, Fx.At(20), bars, first), P).Zones;
+        Assert.Equal(first[0].SnapshotRevision + 1, afterSource[0].SnapshotRevision);
+    }
 }
