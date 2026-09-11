@@ -306,6 +306,7 @@ public sealed class StructureZoneBuilderTests
         Assert.Equal(.01m, ZoneBuilder.HalfWidth(null, P));
         Assert.Equal(.01m, ZoneBuilder.HalfWidth(0, P));
         Assert.Equal(.03m, ZoneBuilder.HalfWidth(.20, P));
+        Assert.Equal(.03m, ZoneBuilder.HalfWidth(.2000000000000113, P));
 
         var bars = Fx.Bars(
             Fx.Bar(0, 100.00m, 100.10m, 99.90m, 100.00m),
