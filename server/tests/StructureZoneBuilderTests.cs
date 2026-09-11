@@ -156,6 +156,31 @@ public sealed class StructureZoneBuilderTests
     }
 
     [Fact]
+    public void MissingAtrAtCutoffLeavesTheMergeParameterSubstitutionVisible()
+    {
+        var a = Fx.Pivot("a", 100.00m, 10, 12);
+        var b = Fx.Pivot("b", 100.02m, 20, 22);
+        ZoneCandidate[] Candidates() => [Line(100.00m, .01m, a), Line(100.02m, .01m, b)];
+
+        var missing = ZoneBuilder.Assemble(Candidates(), Request(14), null, P);
+        Assert.Contains(ZoneBuilder.FlagMergeParamsFromTickOnly, missing.Warnings);
+        Assert.All(missing.Zones,
+            z => Assert.Contains(ZoneBuilder.FlagMergeParamsFromTickOnly, z.ApproximationFlags));
+
+        var present = ZoneBuilder.Assemble(Candidates(), Request(30), .20, P);
+        Assert.DoesNotContain(ZoneBuilder.FlagMergeParamsFromTickOnly, present.Warnings);
+        Assert.All(present.Zones,
+            z => Assert.DoesNotContain(ZoneBuilder.FlagMergeParamsFromTickOnly, z.ApproximationFlags));
+    }
+
+    [Fact]
+    public void ZeroAtrAtCutoffIsTreatedAsMissingForMergeParameters()
+    {
+        var assembly = ZoneBuilder.Assemble([Line(100.00m, .01m, Fx.Pivot("a", 100.00m, 10, 12))], Request(14), 0, P);
+        Assert.Contains(ZoneBuilder.FlagMergeParamsFromTickOnly, assembly.Warnings);
+    }
+
+    [Fact]
     public void ProfileOnlyZoneKeepsATemporaryIdAndIsNotEligible()
     {
         var profile = Fx.ProfileSource("node", 100.00m);

@@ -42,6 +42,15 @@ public sealed record ZoneAssembly(ImmutableArray<PriceZone> Zones, ImmutableArra
 /// </summary>
 public static class ZoneBuilder
 {
+    /// <summary>§6.2 "bin 합 = 입력 거래량 합(허용 오차 내)" 위반. 배분에서 빠진 거래량이 있다는 뜻이다.</summary>
+    public const string WarningProfileVolumeMismatch = "PROFILE_VOLUME_MISMATCH";
+
+    /// <summary>ATR 결측으로 bin 폭이 tick 하한으로 대체됐다(§6.2).</summary>
+    public const string FlagBinWidthFromTickOnly = "BinWidthFromTickOnly";
+
+    /// <summary>ATR 결측으로 병합 간격·최대 폭이 tick 하한으로 대체됐다(§6.3).</summary>
+    public const string FlagMergeParamsFromTickOnly = "MergeParamsFromTickOnly";
+
     sealed class RawZone
     {
         public decimal Lower;
@@ -123,9 +132,18 @@ public static class ZoneBuilder
             foreach (var flag in candidate.Flags) zone.Flags.Add(flag);
             if (zone.Sources.Count > 0) raw.Add(zone);
         }
+        // 병합 파라미터가 ATR 없이 tick 하한으로 대체된 사실은 값을 추정하지 않고 플래그로만 남긴다(§6.3).
+        if (!Usable(atrAtCutoff))
+        {
+            warnings.Add(FlagMergeParamsFromTickOnly);
+            foreach (var zone in raw) zone.Flags.Add(FlagMergeParamsFromTickOnly);
+        }
         var zones = AssignIdentity(Merge(raw, atrAtCutoff, policy), request, warnings);
         return new ZoneAssembly(zones, warnings.ToImmutableArray());
     }
+
+    /// <summary>폭·간격 계산에 실제로 쓸 수 있는 ATR인지(§16A: 결측·0·비유한은 쓰지 않는다).</summary>
+    static bool Usable(double? atr) => StructureMath.ToPriceDelta(atr) is not null && atr is > 0;
 
     /// <summary>§6.3 반폭. 생성 시점 ATR이 없으면 tick만 쓴다.</summary>
     public static decimal HalfWidth(double? atrAtConfirmation, StructurePolicy policy) =>
@@ -178,9 +196,9 @@ public static class ZoneBuilder
     {
         var atr = SessionAtr.At(bars1m, atrSeries, source.ConfirmedAt);
         var half = HalfWidth(atr, policy);
-        return StructureMath.ToPriceDelta(atr) is null || atr is <= 0
-            ? ZoneCandidate.FromLevel(price, half, source, "WidthFromTickOnly")
-            : ZoneCandidate.FromLevel(price, half, source);
+        return Usable(atr)
+            ? ZoneCandidate.FromLevel(price, half, source)
+            : ZoneCandidate.FromLevel(price, half, source, "WidthFromTickOnly");
     }
 
     // ── 병합 ──
@@ -402,7 +420,8 @@ public static class ZoneBuilder
         ArgumentNullException.ThrowIfNull(policy);
         var baseWidth = StructureMath.ScaledFloor(policy.PriceTick, policy.ProfileBinAtrFactor, atr1m);
         if (baseWidth <= 0) baseWidth = policy.PriceTick;
-        if (bars.Count == 0) return VolumeProfile.Empty(baseWidth, "PROFILE_NO_BARS");
+        var tickOnlyWidth = !Usable(atr1m);
+        if (bars.Count == 0) return EmptyProfile(baseWidth, tickOnlyWidth, "PROFILE_NO_BARS");
 
         var inputVolume = bars.Sum(x => x.Volume);
         var minLow = bars.Min(x => x.Low);
@@ -422,12 +441,12 @@ public static class ZoneBuilder
         }
         var coarsened = multiple > 1;
         if (Span(minLow, maxHigh, width) > policy.ProfileMaxBins)
-            return VolumeProfile.Empty(width, "PROFILE_BIN_LIMIT_UNRESOLVED");
+            return EmptyProfile(width, tickOnlyWidth, "PROFILE_BIN_LIMIT_UNRESOLVED");
 
         if (inputVolume <= 0)
             return coarsened
-                ? VolumeProfile.Empty(width, "ZERO_VOLUME_PROFILE", "CoarsenedProfile")
-                : VolumeProfile.Empty(width, "ZERO_VOLUME_PROFILE");
+                ? EmptyProfile(width, tickOnlyWidth, "ZERO_VOLUME_PROFILE", "CoarsenedProfile")
+                : EmptyProfile(width, tickOnlyWidth, "ZERO_VOLUME_PROFILE");
 
         var minIndex = Index(minLow, width);
         var maxIndex = Index(maxHigh, width);
@@ -460,6 +479,12 @@ public static class ZoneBuilder
         var pocVolume = volumes[poc];
         var warnings = new SortedSet<string>(StringComparer.Ordinal) { "EstimatedVolumeProfile" };
         if (coarsened) warnings.Add("CoarsenedProfile");
+        if (tickOnlyWidth) warnings.Add(FlagBinWidthFromTickOnly);
+
+        // §6.2 bin 합 = 입력 거래량 합(허용 오차 내). 배분 로직은 그대로 두고 불일치만 노출한다.
+        var allocated = volumes.Sum();
+        if (Math.Abs(allocated - inputVolume) > policy.ProfileVolumeTolerance * Math.Max(1, Math.Abs(inputVolume)))
+            warnings.Add(WarningProfileVolumeMismatch);
 
         var nodes = ImmutableArray<ProfileNode>.Empty;
         if (pocVolume > 0)
@@ -495,8 +520,11 @@ public static class ZoneBuilder
         }
 
         return new VolumeProfile(width, multiple, bins.ToImmutable(), nodes, minIndex + poc, inputVolume,
-            volumes.Sum(), coarsened, warnings.ToImmutableArray());
+            allocated, coarsened, warnings.ToImmutableArray());
     }
+
+    static VolumeProfile EmptyProfile(decimal width, bool tickOnlyWidth, params string[] warnings) =>
+        VolumeProfile.Empty(width, tickOnlyWidth ? [.. warnings, FlagBinWidthFromTickOnly] : warnings);
 
     static int Index(decimal price, decimal width) => (int)decimal.Floor(price / width);
 

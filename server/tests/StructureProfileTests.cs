@@ -38,6 +38,45 @@ public sealed class StructureProfileTests
     }
 
     [Fact]
+    public void MatchingBinSumStaysSilentWhileALostAllocationIsWarned()
+    {
+        var balanced = ZoneBuilder.BuildVolumeProfile(Ladder(40, .03m, 777.5), .30, P);
+        Assert.DoesNotContain(ZoneBuilder.WarningProfileVolumeMismatch, balanced.Warnings);
+        Assert.True(Math.Abs(balanced.AllocatedVolume - balanced.InputVolume)
+            <= P.ProfileVolumeTolerance * Math.Max(1, balanced.InputVolume));
+
+        var withLoss = Ladder(5, .05m).Add(new StructureBar(Fx.At(9), Fx.At(10), 100m, 100.2m, 99.8m, 100m, -400));
+        var profile = ZoneBuilder.BuildVolumeProfile(withLoss, .30, P);
+        Assert.Contains(ZoneBuilder.WarningProfileVolumeMismatch, profile.Warnings);
+        Assert.NotEqual(profile.InputVolume, profile.AllocatedVolume);
+    }
+
+    [Fact]
+    public void ProfileVolumeToleranceIsActuallyConsumedByTheMismatchCheck()
+    {
+        var withLoss = Ladder(5, .05m).Add(new StructureBar(Fx.At(9), Fx.At(10), 100m, 100.2m, 99.8m, 100m, -400));
+        var permissive = P with { ProfileVolumeTolerance = 1 };
+
+        Assert.Contains(ZoneBuilder.WarningProfileVolumeMismatch,
+            ZoneBuilder.BuildVolumeProfile(withLoss, .30, P).Warnings);
+        Assert.DoesNotContain(ZoneBuilder.WarningProfileVolumeMismatch,
+            ZoneBuilder.BuildVolumeProfile(withLoss, .30, permissive).Warnings);
+    }
+
+    [Fact]
+    public void MissingAtrLeavesTheBinWidthSubstitutionVisible()
+    {
+        Assert.Contains(ZoneBuilder.FlagBinWidthFromTickOnly,
+            ZoneBuilder.BuildVolumeProfile(Ladder(5, .05m), null, P).Warnings);
+        Assert.Contains(ZoneBuilder.FlagBinWidthFromTickOnly,
+            ZoneBuilder.BuildVolumeProfile(Ladder(5, .05m), 0, P).Warnings);
+        Assert.Contains(ZoneBuilder.FlagBinWidthFromTickOnly,
+            ZoneBuilder.BuildVolumeProfile(ImmutableArray<StructureBar>.Empty, null, P).Warnings);
+        Assert.DoesNotContain(ZoneBuilder.FlagBinWidthFromTickOnly,
+            ZoneBuilder.BuildVolumeProfile(Ladder(5, .05m), .30, P).Warnings);
+    }
+
+    [Fact]
     public void ZeroRangeBarPutsAllVolumeInOneBin()
     {
         var bars = Fx.Bars(new StructureBar(Fx.At(0), Fx.At(1), 100m, 100m, 100m, 100m, 5000));
