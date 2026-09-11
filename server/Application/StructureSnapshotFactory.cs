@@ -201,15 +201,15 @@ public static class StructureSnapshotFactory
             ImmutableArray<string>.Empty, ImmutableArray<string>.Empty, null,
             liquidity is null ? [WarningMissingLiquidity] : ImmutableArray<string>.Empty));
 
-        // §16B: 잘못된 OHLCV·분봉 공백/충돌은 신규 분석 차단, 일봉 결측은 경고만.
-        var zoneBlockers = new SortedSet<string>(StringComparer.Ordinal);
-        if (bars.DroppedInvalid > 0) zoneBlockers.Add(BlockerInvalidBars);
-        if (bars.Gaps.Length > 0) zoneBlockers.Add(BlockerBarGap);
-        if (bars.Conflicts.Length > 0) zoneBlockers.Add(BlockerBarConflict);
+        // §16B: 잘못된 OHLCV·분봉 공백/충돌은 신규 분석 차단이므로 추세에도 동일하게 적용한다.
+        var barBlockers = new SortedSet<string>(StringComparer.Ordinal);
+        if (bars.DroppedInvalid > 0) barBlockers.Add(BlockerInvalidBars);
+        if (bars.Gaps.Length > 0) barBlockers.Add(BlockerBarGap);
+        if (bars.Conflicts.Length > 0) barBlockers.Add(BlockerBarConflict);
+        var blockers = barBlockers.ToImmutableArray();
 
         return new DataQuality(sources.ToImmutable(), warnings.ToImmutableArray(),
-            ImmutableArray<string>.Empty, zoneBlockers.ToImmutableArray(), zoneBlockers.ToImmutableArray(),
-            zoneBlockers.ToImmutableArray());
+            blockers, blockers, blockers, blockers);
     }
 
     /// <summary>
