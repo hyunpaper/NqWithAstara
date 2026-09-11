@@ -1378,13 +1378,6 @@ footer {
 .sr-trend.unknown b {
   color: var(--muted);
 }
-.structure-list-note {
-  margin: 0;
-  padding: 12px 18px 14px;
-  font-size: 10px;
-  color: var(--muted);
-  line-height: 1.6;
-}
 .se-state {
   display: inline-block;
   border-radius: 4px;
