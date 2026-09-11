@@ -859,11 +859,12 @@ export default function App() {
                     ? "구조 분석 (v5)"
                     : "실시간 시그널"}
               </h1>
+              {/* 이슈 #29: 대시보드/구조 화면 부제에서 구현 설명·v4 비교 문구를 뺐다. */}
               <p>
                 {view === "dash"
-                  ? "신호 발동 시점 가상 진입 · 손절/목표 자동 청산 성적"
+                  ? "청산 실적 요약"
                   : view === "structure"
-                    ? "추세 · 진입 위치 품질 · 구조 계획 분리 표시 · v4 점수와 별개"
+                    ? "종목별 추세 · 후보 · 계획"
                     : "미국 정규장 · 조건 기반 모니터링"}
               </p>
             </div>
@@ -896,11 +897,7 @@ export default function App() {
             </button>
             <button
               className={`theme ${view === "structure" ? "structure-toggle on" : ""}`}
-              title={
-                view === "structure"
-                  ? "실시간 시그널로 돌아가기"
-                  : "구조 분석 (v5) — v4 점수와 분리된 실험 뷰"
-              }
+              title={view === "structure" ? "실시간 시그널로 돌아가기" : "구조 분석 (v5)"}
               onClick={() => setView(view === "structure" ? "live" : "structure")}
             >
               {view === "structure" ? <Activity size={18} /> : <Layers size={18} />}
@@ -1465,8 +1462,8 @@ function Dashboard() {
       <section className="panel metrics-panel">
         <div className="panel-head">
           <div>
+            {/* 이슈 #29: 반복 구현 설명 제거 — 비용 기준은 각 지표의 help에 남아 있다. */}
             <h2>{cohort ? `${cohort.label} 코호트` : "전체 성과 요약"}</h2>
-            <p>신호 발동가 진입 · 손절/목표 자동 청산 · 왕복 수수료 0.2% 차감</p>
           </div>
           <LayoutDashboard size={18} />
         </div>
@@ -1597,7 +1594,8 @@ function Dashboard() {
         <div className="panel-head">
           <div>
             <h2>{cohort ? `${cohort.label} · 신호별 성과` : "전체 버전 · 신호별 성과"}</h2>
-            <p>{cohort ? "선택한 로직 버전 안에서 신호별 비교" : "버전이 섞인 참고치 · 어떤 신호가 실제로 돈이 되는지 비교"}</p>
+            {/* 이슈 #29: 편집성 설명 대신 어느 범위의 값인지만 남긴다. */}
+            <p>{cohort ? "선택한 로직 버전 기준" : "전체 버전 혼합"}</p>
           </div>
         </div>
         <div className="table-wrap">
