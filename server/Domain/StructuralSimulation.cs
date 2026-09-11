@@ -103,7 +103,13 @@ public static class StructuralSimulation
             Score: null, ExtSigma: null, RelVolume: null, BuyShare: null, Rsi: null,
             Reasons: [plan.Explanation], Logic: plan.EngineVersion, LastEvaluatedBarAt: null,
             SessionEnd: request.SessionEnd, ExitEstimated: null, LastPriceAt: request.EnteredAt,
-            TriggerBarAt: request.TriggerBarStart, Structure: request.Context);
+            TriggerBarAt: request.TriggerBarStart, Structure: request.Context,
+            Execution: new ExecutionProvenance(
+                new DateTimeOffset(request.EnteredAt.Year, request.EnteredAt.Month, request.EnteredAt.Day,
+                    request.EnteredAt.Hour, request.EnteredAt.Minute, 0, request.EnteredAt.Offset),
+                new DateTimeOffset(request.EnteredAt.Year, request.EnteredAt.Month, request.EnteredAt.Day,
+                    request.EnteredAt.Hour, request.EnteredAt.Minute, 0, request.EnteredAt.Offset).AddMinutes(1),
+                "UNOBSERVED", null));
         trades.Add(trade);
         return new StructuralEntryResult(trades, StructuralEntryOutcome.Entered, trade);
     }
