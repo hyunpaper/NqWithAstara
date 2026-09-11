@@ -114,6 +114,9 @@ public sealed class StructureAnalysisService(
     /// <summary>§16B 가격 단위: tick을 판정할 가격 근거가 없다. 모르면 허용이 아니라 차단이다.</summary>
     public const string NotePriceTickUnknown = "V5_PRICE_TICK_UNKNOWN";
 
+    /// <summary>§12.5 gate 재확인에서 신규 진입이 막혔다. 뒤의 코드가 구체 사유다.</summary>
+    public const string NoteEntryGateRecheck = "V5_ENTRY_BLOCKED_BY_GATE_RECHECK";
+
     /// <summary>tick 판정에 쓰는 최근 완료 봉 수. 과거 한 건의 이상 호가가 하루 전체를 막지 않게 한다.</summary>
     public const int PriceTickSampleBars = 30;
 
@@ -262,14 +265,16 @@ public sealed class StructureAnalysisService(
         // ── gate 안 짧은 commit: generation/session 재검증 후 저장, 저장 성공 뒤에만 래치·공개 snapshot 갱신 ──
         using (await runtime.EnterControlAsync(ct))
         {
-            if (!Current(request, snapshot, clock.GetLocalNow())) return;
+            // #62 §12.5: 계산·파일 I/O·gate 경합 뒤의 실제 commit 시각이다. 진입 재확인은 이 시각으로 한다.
+            var gateNow = clock.GetLocalNow();
+            if (!Current(request, snapshot, gateNow)) return;
 
             // ── D6 active 진입(§18): READY 대표 후보 1개만 실제 시뮬 거래로 커밋한다. 거래 저장이 성공한 뒤에만
             // 후보를 ENTERED로 바꾸고 래치에 tombstone을 남기며, 실패하면 관측·래치도 갱신하지 않아 다음 poll이
             // 같은 이벤트를 멱등하게 재시도한다(§12.6). off/shadow에서는 이 경로 자체가 없다.
             // 이슈 #26: 이 commit에서 READY로 커밋되는 후보를 알림 초안으로 잡아 둔다(진입 성공 시 ENTERED로 바뀌기 전).
             var readyForAlerts = candidates.Where(x => x.Disposition == CandidateDisposition.Ready).ToArray();
-            var activeEntry = await TryEnterPreferredAsync(candidates, preferred, snapshot, trend, now, ct);
+            var activeEntry = await TryEnterPreferredAsync(request, candidates, preferred, snapshot, trend, gateNow, ct);
             if (activeEntry is not null)
             {
                 candidates = activeEntry.Candidates;
@@ -330,13 +335,18 @@ public sealed class StructureAnalysisService(
     /// 반환 null = 이 poll에 진입 시도 자체가 없음(off/shadow, READY 없음). 오류·거절은 v4 fallback 없이
     /// 진입 보류로 남긴다(§16B).
     /// </summary>
-    async Task<ActiveEntryResult?> TryEnterPreferredAsync(ImmutableArray<EntryCandidate> candidates,
-        string? preferredId, StructureSnapshot snapshot, TrendAssessment? trend, DateTimeOffset now,
-        CancellationToken ct)
+    async Task<ActiveEntryResult?> TryEnterPreferredAsync(StructureObservationRequest request,
+        ImmutableArray<EntryCandidate> candidates, string? preferredId, StructureSnapshot snapshot,
+        TrendAssessment? trend, DateTimeOffset now, CancellationToken ct)
     {
         if (_options.Mode != StructureEngineMode.Active || preferredId is null) return null;
         var chosen = candidates.FirstOrDefault(x => x.EventId == preferredId);
         if (chosen is null || chosen.Disposition != CandidateDisposition.Ready || chosen.Plan is null) return null;
+
+        // #62 §12.5: 후보 판정 이후 흘러간 시간을 gate 안에서 다시 본다. 후보는 READY로 남고 다음 poll이 재시도한다.
+        if (!Current(request, snapshot, now, newEntry: true))
+            return new ActiveEntryResult(candidates, false,
+                $"{NoteEntryGateRecheck}:{NewEntryBlocker(snapshot, now) ?? "GENERATION_OR_SESSION"}");
 
         if (tradeEntries is null) return new ActiveEntryResult(candidates, false, NoteEntryUnavailable);
 
@@ -416,12 +426,33 @@ public sealed class StructureAnalysisService(
         // D6부터 active는 v5가 신규 진입을 소유하므로 관측 레코드도 본 버전으로 기록한다(§11 "별도 저장").
         _options.Mode == StructureEngineMode.Active ? _policy.Version : _policy.Version + "-shadow";
 
-    bool Current(StructureObservationRequest request, StructureSnapshot snapshot, DateTimeOffset now)
+    /// <summary>
+    /// §12.5 공유 gate 재확인. generation/session/장 종료는 모든 commit이 확인하고, <paramref name="newEntry"/>가
+    /// true인 신규 진입 경로만 시세 신선도·진입 마감까지 gate 시각으로 다시 본다. 표시·관측 commit까지
+    /// 같이 막으면 마감 40분 구간의 관측이 통째로 사라지므로 진입 경로에만 적용한다.
+    /// </summary>
+    bool Current(StructureObservationRequest request, StructureSnapshot snapshot, DateTimeOffset now,
+        bool newEntry = false)
     {
         if (!runtime.IsCurrent(request.Generation)) return false;
         var state = runtime.Snapshot();
         if (state.Market.Start != snapshot.SessionStart || state.Market.End != snapshot.SessionEnd) return false;
-        return now < snapshot.SessionEnd;
+        if (now >= snapshot.SessionEnd) return false;
+        return !newEntry || NewEntryBlocker(snapshot, now) is null;
+    }
+
+    /// <summary>
+    /// #62 §12.5: gate 시각 기준 신규 진입 재확인. 임계값은 후보 판정과 같은 정책값을 쓰고 새로 만들지 않는다
+    /// (<see cref="StructurePolicy.NewEntryQuoteMaxAgeSeconds"/>, <see cref="StructurePolicy.EntryCutoffBeforeCloseMinutes"/>).
+    /// </summary>
+    string? NewEntryBlocker(StructureSnapshot snapshot, DateTimeOffset now)
+    {
+        if (now > snapshot.SessionEnd - TimeSpan.FromMinutes(_policy.EntryCutoffBeforeCloseMinutes))
+            return SetupDetector.BlockerAfterEntryCutoff;
+        if (snapshot.QuoteAt is not { } quoteAt) return SetupDetector.BlockerMissingQuote;
+        if ((now - quoteAt).TotalSeconds > _policy.NewEntryQuoteMaxAgeSeconds) return SetupDetector.BlockerStaleQuote;
+        if ((quoteAt - now).TotalSeconds > _policy.QuoteFutureToleranceSeconds) return SetupDetector.BlockerQuoteInFuture;
+        return null;
     }
 
     /// <summary>
