@@ -348,6 +348,18 @@ public static class StructuralLifecycle
     public static string ObservationId(string symbol, DateTimeOffset lastCompletedBarStart, string policyHash) =>
         StructureMath.SourceId("observation", symbol, StructureMath.Iso(lastCompletedBarStart), policyHash);
 
+    /// <summary>
+    /// §16 + 이슈 #64: 같은 봉 안에서도 이벤트 서명이 달라지면 다른 관측이다. 서명이 같으면 ID도 같아
+    /// 주기 반복은 그대로 중복 폐기되고, 상태 전이만 새 ID를 얻는다. 서명은 후보 상태의 canonical 문자열이라
+    /// 재시작 후에도 같은 값이 나온다.
+    /// </summary>
+    public static string ObservationId(string symbol, DateTimeOffset lastCompletedBarStart, string policyHash,
+        string? eventSignature) =>
+        string.IsNullOrEmpty(eventSignature)
+            ? ObservationId(symbol, lastCompletedBarStart, policyHash)
+            : StructureMath.SourceId("observation", symbol, StructureMath.Iso(lastCompletedBarStart), policyHash,
+                eventSignature);
+
     static ImmutableArray<string> Add(ImmutableArray<string> values, string value) =>
         values.Contains(value, StringComparer.Ordinal)
             ? values
