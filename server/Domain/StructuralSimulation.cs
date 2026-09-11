@@ -66,7 +66,7 @@ public static class StructuralSimulation
             plan.NetRisk, plan.NetR, plan.RiskPercent, plan.Costs.FeePerShare, plan.Costs.ExtraCostPerShare,
             plan.Costs.ValidSpread, plan.Costs.MissingLiquidity, plan.Costs.EligibilityCostModelVersion,
             plan.Costs.RealizedFillCostModelVersion, plan.CreatedAt, plan.ExpiresAt, plan.EngineVersion,
-            plan.PolicyHash, plan.ReasonCodes.ToArray(), plan.HumanExplanation);
+            plan.PolicyHash, plan.ReasonCodes.ToArray(), plan.HumanExplanation, plan.Atr1mAtPlan);
         return new FrozenStructureContext(entryEventId, snapshot, trendAtEntry, signedTrendAtEntry,
             entryQualityAtEntry, analysisAsOf, quoteAt, ExitPolicyVersion);
     }
