@@ -13,6 +13,7 @@ public static class ApiEndpoints
         app.MapPost("/api/start", async (MonitorControlService c, CancellationToken ct) => { await c.StartAsync(ct); return Results.Ok(); });
         app.MapPost("/api/stop", async (MonitorControlService c, CancellationToken ct) => { await c.StopAsync(ct); return Results.Ok(); });
         app.MapGet("/api/sim", async (SimulationReportQueryService q) => Results.Ok(await q.GetAsync()));
+        app.MapGet("/api/validation", ValidationAsync);
         app.MapGet("/api/metrics/{symbol}", MetricsAsync);
         app.MapGet("/api/liquidity/{symbol}", LiquidityAsync);
         app.MapGet("/api/structure/{symbol}", StructureAsync);
@@ -26,5 +27,7 @@ public static class ApiEndpoints
     static async Task<IResult> LiquidityAsync(string symbol, LiquidityQueryService query, CancellationToken ct) { try { var result = await query.GetAsync(symbol, ct); return result.HttpStatus switch { 400 => Results.BadRequest(), 404 => Results.NotFound(), _ => Results.Ok(result.Response) }; } catch (HttpRequestException) { return Results.Problem("Toss 호가 조회에 실패했습니다.", statusCode: 502); } }
     /// <summary>설계 §12: 마지막 공개 분석 snapshot만 반환한다. 요청이 전체 분석이나 새 거래를 실행하지 않는다.</summary>
     static async Task<IResult> StructureAsync(string symbol, StructureAnalysisService query, CancellationToken ct) { var result = await query.GetAsync(symbol, ct); return result.HttpStatus switch { 400 => Results.BadRequest(), 404 => Results.NotFound(), _ => Results.Ok(result.Response) }; }
+    /// <summary>이슈 #28: additive 검증 보고서 조회. 읽기 전용이며 운영 진입/청산·점수·비용 정책을 바꾸지 않는다.</summary>
+    static async Task<IResult> ValidationAsync(int? days, ValidationQueryService query, CancellationToken ct) { var result = await query.GetAsync(days, ct); return result.HttpStatus == 400 ? Results.BadRequest(new { message = $"days는 1~{ValidationQueryService.MaxWindowDays} 범위여야 합니다." }) : Results.Ok(result.Report); }
     static async Task<IResult> PutPositionAsync(string symbol, PositionInput input, PositionService service, CancellationToken ct) { var r = await service.PutAsync(symbol, input, ct); return r.Status switch { PositionChangeStatus.Invalid => Results.BadRequest(), PositionChangeStatus.NotFound => Results.NotFound(), _ => Results.Ok(r.Position) }; }
 }
