@@ -412,7 +412,7 @@ public sealed class StructureD6ActiveWiringTests
 /// <summary>
 /// D6 통합 fixture. §14 예시와 같은 구조 문법(전일 저가+확정 피벗 지지, 실패한 하향 이탈, 전일 고가 저항)을
 /// 1분봉 65+개로 결정적으로 재현한다. 임의 값이며 실제 종목 추천이 아니다.
-/// - 지지: 전일 저가 99.50 + 1m 확정 피벗 저점(99.48) → 병합 Zone, 반응 성공 2회.
+/// - 지지: 전일 저가 99.48 + 1m 확정 피벗 저점(99.48) → 병합 Zone, 반응 성공 2회.
 /// - 저항(목표): 전일 고가/20일 고가/ORB 고가 101.60 + 1m 확정 피벗 고점 → 반응 성공 1회.
 /// - m46: 실패한 하향 이탈(저가 99.36 &lt; Lower, 종가는 위) → m64 트리거가 REBOUND로 성립.
 /// - m66: 동결 손절 아래 저가(rollback 청산 검증용).
@@ -483,13 +483,13 @@ static class D6
         return Table[minutes - 1].C;
     }
 
-    /// <summary>전일: 고가 101.60(=20일 고가)·저가 99.50(=20일 저가)·종가 100.40. 진행 중 일봉은 factory가 제거한다.</summary>
+    /// <summary>전일: 고가 101.60(=20일 고가)·저가 99.48(=20일 저가)·종가 100.40. 진행 중 일봉은 factory가 제거한다.</summary>
     public static Candle[] Daily()
     {
         var days = new List<Candle>();
         for (var i = 5; i >= 2; i--)
             days.Add(new Candle(Fx.SessionStart.AddDays(-i), 100.00, 101.20, 99.80, 100.00, 1_000_000));
-        days.Add(new Candle(Fx.SessionStart.AddDays(-1), 100.20, 101.60, 99.50, 100.40, 1_200_000));
+        days.Add(new Candle(Fx.SessionStart.AddDays(-1), 100.20, 101.60, 99.48, 100.40, 1_200_000));
         days.Add(new Candle(Fx.SessionStart.AddMinutes(1), 100.30, 101.70, 99.30, 99.60, 400_000));
         return [.. days];
     }

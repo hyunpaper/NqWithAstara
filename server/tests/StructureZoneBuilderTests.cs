@@ -55,6 +55,18 @@ public sealed class StructureZoneBuilderTests
     }
 
     [Fact]
+    public void OverlappingLineCandidatesDoNotMergeBeyondTheWidthCap()
+    {
+        var a = Line(100.00m, .10m, Fx.Pivot("a", 100.00m, 10, 12));
+        var b = Line(100.05m, .10m, Fx.Pivot("b", 100.05m, 20, 22));
+
+        var zones = ZoneBuilder.Assemble([a, b], Request(30), .20, P).Zones;
+
+        Assert.Equal(2, zones.Length);
+        Assert.All(zones, z => Assert.True(z.Width > .15m));
+    }
+
+    [Fact]
     public void DistantCandidatesStayApart()
     {
         var zones = ZoneBuilder.Assemble(
@@ -306,6 +318,7 @@ public sealed class StructureZoneBuilderTests
         Assert.Equal(.01m, ZoneBuilder.HalfWidth(null, P));
         Assert.Equal(.01m, ZoneBuilder.HalfWidth(0, P));
         Assert.Equal(.03m, ZoneBuilder.HalfWidth(.20, P));
+        Assert.Equal(.03m, ZoneBuilder.HalfWidth(.2000000000000113, P));
 
         var bars = Fx.Bars(
             Fx.Bar(0, 100.00m, 100.10m, 99.90m, 100.00m),
@@ -322,5 +335,30 @@ public sealed class StructureZoneBuilderTests
         Assert.All(lineZones, z => Assert.Contains("WidthFromTickOnly", z.ApproximationFlags));
         Assert.Equal(100.39m, lineZones[0].Lower);
         Assert.Equal(100.41m, lineZones[0].Upper);
+    }
+
+    [Fact]
+    public void DailyContextLevelsUseTheFirstAvailableSessionAtrForTheirWidth()
+    {
+        var daily = ImmutableArray.Create(
+            new StructureDailyBar(new DateOnly(2026, 9, 8), 100.00m, 101.00m, 98.00m, 100.50m, 1_000_000));
+        var bars = Enumerable.Range(0, 20)
+            .Select(i => Fx.Bar(i, 100.00m, 100.10m, 99.90m, 100.00m))
+            .ToImmutableArray();
+
+        var early = ZoneBuilder.Build(ZoneBuildRequest.Create(Fx.Symbol, Fx.SessionStart, Fx.SessionEnd,
+            Fx.At(10), bars, ImmutableArray<StructureBar>.Empty, daily), P);
+        var earlyDailyHigh = early.Zones.Single(x => x.Sources.Any(s => s.Kind == "daily-H"));
+        Assert.Contains("WidthFromTickOnly", earlyDailyHigh.ApproximationFlags);
+        Assert.Equal(100.99m, earlyDailyHigh.Lower);
+        Assert.Equal(101.01m, earlyDailyHigh.Upper);
+
+        var afterAtrSeed = ZoneBuilder.Build(ZoneBuildRequest.Create(Fx.Symbol, Fx.SessionStart, Fx.SessionEnd,
+            Fx.At(20), bars, ImmutableArray<StructureBar>.Empty, daily), P);
+        var dailyHigh = afterAtrSeed.Zones.Single(x => x.Sources.Any(s => s.Kind == "daily-H"));
+        Assert.DoesNotContain("WidthFromTickOnly", dailyHigh.ApproximationFlags);
+        Assert.Equal(100.97m, dailyHigh.Lower);
+        Assert.Equal(101.03m, dailyHigh.Upper);
+        Assert.Equal(Fx.SessionStart, dailyHigh.Sources.Single(s => s.Kind == "daily-H").ConfirmedAt);
     }
 }
