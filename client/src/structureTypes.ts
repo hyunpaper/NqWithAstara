@@ -377,7 +377,7 @@ export const setupKindLabel = (kind: string | null | undefined): string => {
 };
 
 // ── 이슈 #26: 라이브 목록 v5 열 전용 표기 ────────────────────────────────────
-// SignedTrend/EntryQuality를 v4 scoreStyle 색상·`/100` 포맷·매수/매도 문구에 절대 연결하지 않는다(§2).
+// SignedTrend/EntryQuality를 참고 점수 색상 스타일·`/100` 포맷·매수/매도 문구에 절대 연결하지 않는다(§2).
 // %·승률·확률·성공 단어를 쓰지 않으며, 결측을 0으로 위장하지 않는다(스냅샷 테스트로 고정).
 
 /** SignedTrend 전용 렌더 문자열: 부호 화살표 + 부호 있는 값(소수 1자리) + 추세 상태 라벨. null이면 "추세 미산정". */

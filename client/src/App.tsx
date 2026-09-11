@@ -37,8 +37,10 @@ import type {
 } from "./structureTypes";
 import {
   LiveSortKey,
+  compareByEntryQuality,
+  compareBySymbol,
+  compareByTrendDirection,
   compareByTrendStrength,
-  compareByV4Score,
   compareByV5State,
   resolveSortKey,
   sortKeysForMode,
@@ -262,33 +264,36 @@ const beep = () => {
     /* 오디오가 차단된 환경 */
   }
 };
-const setupLabel = (
-  setup: string | null | undefined,
-  setupAt: string | null | undefined,
-) => {
-  const base =
-    setup === "SETUP_WEAK"
-      ? "셋업 약화"
-      : setup === "REBOUND"
-        ? "과매도 반등"
-        : "진입 셋업";
-  if (!setupAt) return base;
-  const mins = Math.floor((Date.now() - new Date(setupAt).getTime()) / 60000);
-  return mins <= 0 ? `${base} · 방금` : `${base} · ${mins}분 전`;
-};
-const scoreStyle = (score: number, live: boolean) => {
-  if (!live) return undefined;
-  const t = Math.min(1, Math.abs(score - 50) / 50);
-  const h = score >= 50 ? 158 : 352;
-  const sat = Math.round(15 + 85 * t);
-  const lig = Math.round(score >= 50 ? 60 - 14 * t : 66 - 12 * t);
-  const c = `hsl(${h} ${sat}% ${lig}%)`;
-  return {
-    color: c,
-    borderColor: c,
-    background: `hsl(${h} ${sat}% ${lig}% / ${0.08 + 0.16 * t})`,
-  };
-};
+const liveSortLabel = (key: LiveSortKey): string =>
+  key === "v5"
+    ? "v5 평가"
+    : key === "trend"
+      ? "추세 강도"
+      : key === "direction"
+        ? "추세 방향"
+        : key === "quality"
+          ? "진입 품질"
+          : "종목명";
+const liveSortTitle = (key: LiveSortKey): string =>
+  key === "v5"
+    ? "v5 상태 우선 → 진입 품질 → 추세 강도 → 심볼"
+    : key === "trend"
+      ? "v5 추세 강도(절대값) 내림차순 → 심볼"
+      : key === "direction"
+        ? "추세 방향(부호 있는 값) 내림차순 → 심볼 — 상승이 위, 하락이 아래"
+        : key === "quality"
+          ? "진입 품질 내림차순 → 심볼. 결측(후보 없음)은 항상 마지막"
+          : "종목명 오름차순";
+const liveSortDescription = (key: LiveSortKey): string =>
+  key === "v5"
+    ? "v5 상태·진입 품질 순 정렬"
+    : key === "trend"
+      ? "v5 추세 강도 순 정렬"
+      : key === "direction"
+        ? "추세 방향(부호) 순 정렬"
+        : key === "quality"
+          ? "진입 품질 순 정렬"
+          : "종목명 알파벳순 정렬";
 const transportLabel = (state: State | null) => {
   if (!state || state.connection.status !== "connected") return "대기";
   if (state.transport?.mode === "websocket") return "웹소켓";
@@ -402,7 +407,7 @@ export default function App() {
       () => localStorage.getItem("astra-alerts") === "on",
     ),
     [notice, setNotice] = useState(""),
-    // v5 구조 분석은 기존 v4 화면과 섞지 않고 별도 뷰로 분리한다(설계 §13, §19-10).
+    // v5 구조 분석은 실시간 시그널 화면과 섞지 않고 별도 뷰로 분리한다(설계 §13, §19-10).
     [view, setView] = useState<"live" | "dash" | "structure">("live"),
     // 이슈 #26: 라이브 목록 정렬 선택(모드별 유효성은 resolveSortKey가 판정). localStorage에 저장.
     [liveSortChoice, setLiveSortChoice] = useState(
@@ -497,8 +502,9 @@ export default function App() {
       }
     };
     // ── 이슈 #26 PR-3: active에서는 서버가 발행한 v5 이벤트만 푸시·소리를 울린다(승인 설계안 §4).
-    // v4 SETUP/BREAKOUT 배지·점수 표시는 "참고" 라벨로 유지되고 푸시·소리만 중단된다(승인 단서 1).
-    // off/shadow는 기존 v4 알림 그대로다. 중복 방지: seq seed(새로고침 회귀) + Notification tag.
+    // 이슈 #88: 화면에서는 v4 표시를 전면 제거했지만, off/shadow의 셋업·돌파 푸시·소리는
+    // 승인된 §4 설계 그대로 유지한다(화면 표시 제거와 알림 동작은 별개 결정).
+    // 중복 방지: seq seed(새로고침 회귀) + Notification tag.
     // 심볼당 5분 스로틀은 v5 이벤트에 적용하지 않는다 — READY 직후 ENTERED를 삼키면 안 된다.
     const structureMode = state?.structureSummary?.mode ?? null;
     const v4Push = v4PushEnabled(structureMode);
@@ -685,8 +691,9 @@ export default function App() {
   };
   const signal = state?.signals.find((x) => x.symbol === selected);
   const selectedWatch = state?.watchlist.find((x) => x.symbol === selected);
-  // ── 이슈 #26: 모드별 정렬(승인 설계안 §3) ──
-  // active 기본 = v5 상태 → EntryQuality ↓ → |SignedTrend| ↓ → symbol. shadow/off·summary 부재 = 기존 v4 score ↓.
+  // ── 이슈 #26/#88: 모드별 정렬 ──
+  // active/shadow = v5 계열 정렬(v5 상태/추세 강도/추세 방향/진입 품질/종목명) 중 선택.
+  // off·summary 부재는 v5 분석이 없으므로 선택지 없이 종목 알파벳순으로 고정한다.
   // v5 결측 행을 `?? 0`으로 0점 취급하지 않는다 — 비교 함수가 결측을 항상 마지막에 둔다.
   const structureMode = state?.structureSummary?.mode ?? null;
   const structureRows = new Map<string, StructureSummaryRow>();
@@ -702,13 +709,21 @@ export default function App() {
   };
   const ranked = [...(state?.signals || [])]
     .filter((item) => !item.stale)
-    .sort((a, b) =>
-      liveSort === "v4"
-        ? compareByV4Score(a, b)
-        : liveSort === "trend"
-          ? compareByTrendStrength(rowOf(a.symbol), rowOf(b.symbol))
-          : compareByV5State(rowOf(a.symbol), rowOf(b.symbol)),
-    );
+    .sort((a, b) => {
+      if (liveSortOptions.length === 0) return compareBySymbol(a, b);
+      switch (liveSort) {
+        case "trend":
+          return compareByTrendStrength(rowOf(a.symbol), rowOf(b.symbol));
+        case "direction":
+          return compareByTrendDirection(rowOf(a.symbol), rowOf(b.symbol));
+        case "quality":
+          return compareByEntryQuality(rowOf(a.symbol), rowOf(b.symbol));
+        case "symbol":
+          return compareBySymbol(a, b);
+        default:
+          return compareByV5State(rowOf(a.symbol), rowOf(b.symbol));
+      }
+    });
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!selected) return;
@@ -785,18 +800,6 @@ export default function App() {
                     <b>{w.symbol}</b>
                     <small>{w.name}</small>
                   </div>
-                  <span
-                    className="mini-score"
-                    style={scoreStyle(
-                      Math.round(s?.score ?? 0),
-                      !!s && !s.stale && s.price != null,
-                    )}
-                    title="참고 점수(v4) · 100점 만점 · 70↑ 매수 관찰 · 30↓ 매도 관찰 · 워밍업/장외에는 0 — v5 평가와 별개"
-                  >
-                    {s && !s.stale && s.price != null
-                      ? Math.round(s.score ?? 0)
-                      : 0}
-                  </span>
                   {s && (
                     <span
                       className={(s.changePercent ?? 0) >= 0 ? "up" : "down"}
@@ -921,7 +924,7 @@ export default function App() {
               className={`theme alert-toggle ${alertsOn ? "on" : ""}`}
               title={
                 alertsOn
-                  ? "알림 켜짐 (브라우저 알림 + 소리) — active 모드: v5 이벤트 · off/shadow: v4 셋업"
+                  ? "알림 켜짐 (브라우저 알림 + 소리) — active 모드: v5 이벤트 · off/shadow: 참고 셋업·돌파"
                   : "알림 꺼짐 — 누르면 켜집니다"
               }
               onClick={toggleAlerts}
@@ -1010,11 +1013,9 @@ export default function App() {
               <div>
                 <h2>시그널 순위</h2>
                 <p>
-                  {liveSort === "v5"
-                    ? "v5 상태·진입 품질 순 정렬 · v4 점수는 참고 표시"
-                    : liveSort === "trend"
-                      ? "v5 추세 강도 순 정렬 · v4 점수는 참고 표시"
-                      : "참고 점수(v4) 순 정렬"}
+                  {liveSortOptions.length === 0
+                    ? "종목명 알파벳순 고정 — v5 분석 없음"
+                    : liveSortDescription(liveSort)}
                 </p>
               </div>
               {liveSortOptions.length > 1 ? (
@@ -1024,15 +1025,9 @@ export default function App() {
                       key={key}
                       className={liveSort === key ? "on" : ""}
                       onClick={() => pickLiveSort(key)}
-                      title={
-                        key === "v5"
-                          ? "v5 상태 우선 → 진입 품질 → 추세 강도 → 심볼"
-                          : key === "trend"
-                            ? "v5 추세 강도(절대값) 내림차순 → 심볼"
-                            : "v4 점수 내림차순 (기존 정렬)"
-                      }
+                      title={liveSortTitle(key)}
                     >
-                      {key === "v5" ? "v5 평가" : key === "trend" ? "추세 강도" : "참고 점수(v4)"}
+                      {liveSortLabel(key)}
                     </button>
                   ))}
                 </div>
@@ -1064,7 +1059,7 @@ export default function App() {
             ) : (
               <div className="rank-list">
                 {structureMode === "off" && (
-                  <p className="v5-off-note">구조 엔진 꺼짐 — v5 평가 없이 v4 참고 점수만 표시합니다.</p>
+                  <p className="v5-off-note">구조 엔진 꺼짐 — v5 분석이 없어 종목명 알파벳순으로 표시합니다.</p>
                 )}
                 {ranked.map((s, i) => (
                   <button
@@ -1077,29 +1072,6 @@ export default function App() {
                     </span>
                     <div className="ticker">
                       <b>{s.symbol}</b>
-                      {(s.setup === "SETUP" ||
-                        s.setup === "SETUP_WEAK" ||
-                        s.setup === "REBOUND") && (
-                        <span
-                          className={
-                            s.setup === "SETUP"
-                              ? "setup-badge"
-                              : s.setup === "REBOUND"
-                                ? "rebound-badge"
-                                : "weak-badge"
-                          }
-                        >
-                          {setupLabel(s.setup, s.setupAt)}
-                        </span>
-                      )}
-                      {s.setup === "CHASE" && (
-                        <span className="chase-badge">추격 주의</span>
-                      )}
-                      {s.breakout && (
-                        <span className="breakout-badge">
-                          {s.breakout} 돌파
-                        </span>
-                      )}
                     </div>
                     <div className="quote">
                       <b>{money(s.price)}</b>
@@ -1122,32 +1094,7 @@ export default function App() {
                 <div className="stock-head">
                   <div>
                     <div className="eyebrow">미국 주식</div>
-                    <h2>
-                      {signal.symbol}
-                      {(signal.setup === "SETUP" ||
-                        signal.setup === "SETUP_WEAK" ||
-                        signal.setup === "REBOUND") && (
-                        <span
-                          className={
-                            signal.setup === "SETUP"
-                              ? "setup-badge"
-                              : signal.setup === "REBOUND"
-                                ? "rebound-badge"
-                                : "weak-badge"
-                          }
-                        >
-                          {setupLabel(signal.setup, signal.setupAt)}
-                        </span>
-                      )}
-                      {signal.setup === "CHASE" && (
-                        <span className="chase-badge">추격 주의</span>
-                      )}
-                      {signal.breakout && (
-                        <span className="breakout-badge">
-                          {signal.breakout} 돌파
-                        </span>
-                      )}
-                    </h2>
+                    <h2>{signal.symbol}</h2>
                   </div>
                   <div className="big-price">
                     <b>{money(signal.price)}</b>
@@ -1243,22 +1190,6 @@ export default function App() {
                     help="1.3× 이상이면 유의미 · 방향은 등락 기준"
                   />
                 </div>
-                <div className="reasons">
-                  <h3>
-                    참고 점수(v4) 산정 근거{" "}
-                    <span>{Math.round(signal.score ?? 0)}점</span>
-                  </h3>
-                  {signal.reasons?.length ? (
-                    signal.reasons.map((r, i) => (
-                      <div key={i}>
-                        <span>{i + 1}</span>
-                        {r}
-                      </div>
-                    ))
-                  ) : (
-                    <p className="muted">충족한 조건이 아직 없습니다.</p>
-                  )}
-                </div>
                 <div className="position">
                   <div>
                     <h3>포지션 추적</h3>
@@ -1274,7 +1205,7 @@ export default function App() {
                   {signal.position ? (
                     <div className="position-live">
                       <p className="position-basis-note">
-                        목표·손절은 v4 ATR·레벨 기준 자동 산정입니다(참고).
+                        목표·손절은 ATR·레벨 기준 자동 산정입니다(참고).
                       </p>
                       <div>
                         <small>진입가</small>
@@ -1534,7 +1465,6 @@ function Dashboard() {
                 <thead>
                   <tr>
                     <th>진입 조건 평균</th>
-                    <th>점수</th>
                     <th>VWAP 이격 σ</th>
                     <th>상대 거래량</th>
                     <th>매수 비중</th>
@@ -1544,7 +1474,6 @@ function Dashboard() {
                 <tbody>
                   <tr>
                     <td className="up">수익 ({analysis.winnerProfile.count}건)</td>
-                    <td>{analysis.winnerProfile.score ?? "—"}</td>
                     <td>{analysis.winnerProfile.extSigma ?? "—"}</td>
                     <td>{analysis.winnerProfile.relVolume ?? "—"}</td>
                     <td>{analysis.winnerProfile.buyShare ?? "—"}</td>
@@ -1552,7 +1481,6 @@ function Dashboard() {
                   </tr>
                   <tr>
                     <td className="down">손실 ({analysis.loserProfile.count}건)</td>
-                    <td>{analysis.loserProfile.score ?? "—"}</td>
                     <td>{analysis.loserProfile.extSigma ?? "—"}</td>
                     <td>{analysis.loserProfile.relVolume ?? "—"}</td>
                     <td>{analysis.loserProfile.buyShare ?? "—"}</td>
