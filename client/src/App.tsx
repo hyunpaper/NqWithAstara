@@ -30,6 +30,7 @@ import StructurePanel from "./StructurePanel";
 // data.structure/서버 집계(SimulationCohorts.cs)는 유지되며, 아래 import와
 // <SimStructurePanel report={data.structure} /> 한 줄을 되돌리면 복원된다.
 import LiveStructureCells from "./LiveStructureCells";
+import RealVsV5Panel from "./RealVsV5Panel";
 import { planV5Notifications, v4PushEnabled } from "./alertPlanner";
 import { formatViewHash, parseViewHash } from "./viewRoute";
 import type {
@@ -1366,9 +1367,23 @@ const simStatusLabel = (s: string) =>
           : s === "EOD"
             ? "장마감 청산"
             : s;
+/** 이슈 #131: 대시보드 탭 전환. 시뮬 성과와 실매매 대조는 표본이 다르므로 한 화면에 섞지 않는다. */
+function DashTabs({ tab, onChange }: { tab: "sim" | "real"; onChange: (next: "sim" | "real") => void }) {
+  return (
+    <div className="cohort-picker">
+      <button className={`theme ${tab === "sim" ? "alert-toggle on" : ""}`} onClick={() => onChange("sim")}>
+        시뮬 성과
+      </button>
+      <button className={`theme ${tab === "real" ? "alert-toggle on" : ""}`} onClick={() => onChange("real")}>
+        실매매 대조
+      </button>
+    </div>
+  );
+}
 function Dashboard() {
   const [data, setData] = useState<SimData | null>(null);
   const [version, setVersion] = useState("all");
+  const [tab, setTab] = useState<"sim" | "real">("sim");
   const [loadError, setLoadError] = useState("");
   useVisiblePolling(async () => {
     try {
@@ -1387,6 +1402,13 @@ function Dashboard() {
           minute: "2-digit",
         })
       : "—";
+  if (tab === "real")
+    return (
+      <div className="dash">
+        <DashTabs tab={tab} onChange={setTab} />
+        <RealVsV5Panel />
+      </div>
+    );
   if (!data) return loadError ? <div className="error"><WifiOff size={16} /><span>{loadError} 10초 후 다시 시도합니다.</span></div> : <Loading />;
   const cohort = data.byVersion?.find((x) => x.version === version);
   const s = cohort?.stats ?? data.summary;
@@ -1395,6 +1417,7 @@ function Dashboard() {
   const trades = version === "all" ? data.trades : data.trades.filter((t) => (t.logic?.trim() || "legacy") === version);
   return (
     <div className="dash">
+      <DashTabs tab={tab} onChange={setTab} />
       <section className="panel metrics-panel">
         <div className="panel-head">
           <div>
