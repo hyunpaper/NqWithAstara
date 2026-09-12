@@ -37,7 +37,16 @@ public sealed record StructureEngineOptions(StructureEngineMode Mode)
 public sealed record StructureTrendDto(string State, double? SignedTrend, double? PriceDirection,
     double? StructureDirection, double? Efficiency, double? Atr1m, double? Ema9, double? Ema21, double? Vwap,
     double? VwapSd, bool StructureEvidenceMissing, int BarCount, DateTimeOffset AnalysisCutoff,
-    string[] UsedFamilies, string[] MissingComponents, string[] Warnings);
+    string[] UsedFamilies, string[] MissingComponents, string[] Warnings,
+    StructureTrendComponentsDto? Components = null);
+
+/// <summary>추세 구성요소 하나의 원값·변환값(§9.4). 둘 다 결측이면 null이다(#146).</summary>
+public sealed record StructureTrendComponentDto(double? Raw, double? Value);
+
+/// <summary>§7/§16B 추세 구성요소 원값 스냅샷(#146). StructureDirection은 5분 구조 결측이면 전체가 null이다.</summary>
+public sealed record StructureTrendComponentsDto(StructureTrendComponentDto EmaDirection,
+    StructureTrendComponentDto SlopeDirection, StructureTrendComponentDto VwapDirection,
+    StructureTrendComponentDto? StructureDirection, StructureTrendComponentDto Efficiency);
 
 /// <summary>
 /// §11 Zone 저장 계약의 증거 묶음. Key는 (family, from, to)의 SHA-256이라 이 세 필드로 다시 계산되므로
@@ -284,8 +293,9 @@ public sealed class StructureAnalysisService(
                         RecordVersion, snapshot.Symbol, now, snapshot.SessionStart, snapshot.AnalysisAsOf,
                         snapshot.QuoteAt, lastBarStart, PolicyHash, EngineVersion, ModeName, EntryOwner,
                         DetailTransition, build.Status, liveSummary, preferredId,
-                        cached.Trend is null ? null : StructureViewMapper.Trend(cached.Trend), null, null,
-                        liveCandidateDtos, tickWarnings.ToArray(), tickNotes.ToArray());
+                        // #146: components는 full 평가에만 싣는다. 전이 레코드는 추가 부담 없이 기존 필드만 유지한다.
+                        cached.Trend is null ? null : StructureViewMapper.Trend(cached.Trend) with { Components = null },
+                        null, null, liveCandidateDtos, tickWarnings.ToArray(), tickNotes.ToArray());
                     var liveWrite = await observations.AppendAsync(liveRecord, ct);
                     if (!Current(request, snapshot, clock.GetLocalNow())) return;
                     liveWarnings = StructureObservationWriter.StorageWarnings(liveWrite);
@@ -366,9 +376,11 @@ public sealed class StructureAnalysisService(
             ? CandidateDisposition.Wait
             : CandidateSelection.Summarize(candidates)).ToString().ToUpperInvariant();
 
+        // #146: 추세 구성요소 원값은 full 평가에만 싣는다. summary는 기존 Trend 필드만 그대로 유지한다.
+        var observedTrendDto = full ? trendDto : trendDto with { Components = null };
         var record = new StructureObservationRecord(observationId, RecordVersion, snapshot.Symbol, now,
             snapshot.SessionStart, snapshot.AnalysisAsOf, snapshot.QuoteAt, lastBarStart, PolicyHash, EngineVersion,
-            ModeName, EntryOwner, full ? "full" : "summary", build.Status, summary, preferred, trendDto,
+            ModeName, EntryOwner, full ? "full" : "summary", build.Status, summary, preferred, observedTrendDto,
             full ? qualityDto : null, full ? zoneDtos : null, candidateDtos,
             warnings.ToArray(), notes.ToArray());
 
@@ -877,7 +889,26 @@ public static class StructureViewMapper
             Finite(trend.PriceDirection), Finite(trend.StructureDirection), Finite(trend.Efficiency),
             Finite(trend.Atr1m), Finite(trend.Ema9), Finite(trend.Ema21), Finite(trend.Vwap), Finite(trend.VwapSd),
             trend.StructureEvidenceMissing, trend.BarCount, trend.AnalysisCutoff, trend.UsedFamilies.ToArray(),
-            trend.MissingComponents.ToArray(), trend.Warnings.ToArray());
+            trend.MissingComponents.ToArray(), trend.Warnings.ToArray(), TrendComponents(trend));
+    }
+
+    /// <summary>#146: TrendEvaluator가 이미 계산한 원값을 관측용으로 노출한다. structureDirection은 5분 구조
+    /// 결측이면(trend.StructureDirection null) 구성요소 전체를 null로 남긴다.</summary>
+    static StructureTrendComponentsDto TrendComponents(TrendAssessment trend)
+    {
+        var components = trend.Components;
+        return new StructureTrendComponentsDto(
+            TrendComponent(components, "emaDirection"),
+            TrendComponent(components, "slopeDirection"),
+            TrendComponent(components, "vwapDirection"),
+            trend.StructureDirection is null ? null : TrendComponent(components, "structureDirection"),
+            TrendComponent(components, "efficiency"));
+    }
+
+    static StructureTrendComponentDto TrendComponent(ImmutableArray<TrendComponent> components, string name)
+    {
+        var found = components.FirstOrDefault(x => x.Name == name);
+        return new StructureTrendComponentDto(Finite(found?.Raw), Finite(found?.Value));
     }
 
     public static StructureZoneDto Zone(PriceZone zone)

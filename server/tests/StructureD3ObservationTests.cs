@@ -172,6 +172,58 @@ public sealed class StructureD3ObservationTests
         Assert.Equal("v5-structure.1-shadow", root.GetProperty("recordVersion").GetString());
     }
 
+    static TrendAssessment WithComponents(ImmutableArray<TrendComponent> components, double? structureDirection,
+        bool structureEvidenceMissing, ImmutableArray<string> missing) =>
+        new(TrendState.Up, 40, .5, structureDirection, .8, 1.0, 100.1, 99.9, 100, .3, structureEvidenceMissing, 45,
+            D3.At(45), components, ImmutableArray.Create("price"), missing, ImmutableArray<string>.Empty,
+            ImmutableArray<string>.Empty, ImmutableArray<string>.Empty);
+
+    /// <summary>#146: 각 구성요소의 raw·변환값을 이름으로 찾아 그대로 노출한다.</summary>
+    [Fact]
+    public void TrendMapsComponentsByNameFromTheEvaluatorOutput()
+    {
+        var components = ImmutableArray.Create(
+            new TrendComponent("emaDirection", "price", .5, .4621),
+            new TrendComponent("slopeDirection", "price", -.2, -.1974),
+            new TrendComponent("vwapDirection", "price", 1.0, .7616),
+            new TrendComponent("structureDirection", "structure", null, .3),
+            new TrendComponent("efficiency", "path", .8, .8));
+        var trend = WithComponents(components, .3, false, ImmutableArray<string>.Empty);
+
+        var dto = StructureViewMapper.Trend(trend).Components;
+
+        Assert.NotNull(dto);
+        Assert.Equal(.5, dto!.EmaDirection.Raw);
+        Assert.Equal(.4621, dto.EmaDirection.Value);
+        Assert.Equal(-.2, dto.SlopeDirection.Raw);
+        Assert.Equal(-.1974, dto.SlopeDirection.Value);
+        Assert.Equal(1.0, dto.VwapDirection.Raw);
+        Assert.Equal(.7616, dto.VwapDirection.Value);
+        Assert.NotNull(dto.StructureDirection);
+        Assert.Null(dto.StructureDirection!.Raw);
+        Assert.Equal(.3, dto.StructureDirection.Value);
+        Assert.Equal(.8, dto.Efficiency.Raw);
+        Assert.Equal(.8, dto.Efficiency.Value);
+    }
+
+    /// <summary>#146: 5분 구조 결측이면 structureDirection 구성요소 자체가 null이다.</summary>
+    [Fact]
+    public void TrendComponentsStructureDirectionIsNullWhenStructureEvidenceIsMissing()
+    {
+        var components = ImmutableArray.Create(
+            new TrendComponent("emaDirection", "price", .5, .4621),
+            new TrendComponent("slopeDirection", "price", -.2, -.1974),
+            new TrendComponent("vwapDirection", "price", 1.0, .7616),
+            new TrendComponent("structureDirection", "structure", null, null),
+            new TrendComponent("efficiency", "path", .8, .8));
+        var trend = WithComponents(components, null, true, ImmutableArray.Create("structureDirection"));
+
+        var dto = StructureViewMapper.Trend(trend);
+
+        Assert.Null(dto.Components!.StructureDirection);
+        Assert.NotNull(dto.Components.EmaDirection);
+    }
+
     [Fact]
     public async Task LatchFileIsStoredInTheV5StoreNotInTheTradeStore()
     {
