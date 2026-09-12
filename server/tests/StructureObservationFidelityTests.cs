@@ -150,6 +150,28 @@ public sealed class StructureObservationTransitionTests
         Assert.Equal(2, harness.Observations.Appends);
     }
 
+    /// <summary>#146: components는 full 관측에만 실리고, 같은 봉 안 전이 관측은 추가 부담 없이 이전과 동일하다.</summary>
+    [Fact]
+    public async Task TheFullReadyObservationCarriesTrendComponentsButTheTransitionDoesNot()
+    {
+        var harness = await Ready();
+        var full = Records(harness.Observations)[^1];
+        Assert.Equal("full", full.GetProperty("detail").GetString());
+        var trend = full.GetProperty("trend");
+        Assert.True(trend.TryGetProperty("components", out var components));
+        Assert.NotEqual(JsonValueKind.Null, components.ValueKind);
+        Assert.True(components.GetProperty("efficiency").TryGetProperty("value", out _));
+
+        harness.Clock.Now = D3.At(Fidelity.AnalysisMinute).AddSeconds(30);
+        await harness.Service.ObserveAsync(Breaking(harness.Generation), default);
+
+        var transition = Records(harness.Observations)[^1];
+        Assert.Equal(StructureAnalysisService.DetailTransition, transition.GetProperty("detail").GetString());
+        var transitionTrend = transition.GetProperty("trend");
+        Assert.True(transitionTrend.TryGetProperty("components", out var transitionComponents));
+        Assert.Equal(JsonValueKind.Null, transitionComponents.ValueKind);
+    }
+
     [Fact]
     public async Task AReadyToInvalidatedTransitionInsideTheSameBarIsWrittenToObservations()
     {
