@@ -417,13 +417,14 @@ public sealed class StructureD6ActiveWiringTests
     {
         var store = new RecordingStore();
         store.Watch.Add(new WatchItem(Fx.Symbol, "테스트"));
-        store.Seed(new SimTrade("v4-exiting-1", Fx.Symbol, "REBOUND", Fx.At(64), 100.00, 150.0, 99.55, "저항", "ATR",
-            "OPEN", null, null, null, 100.00, Score: 75, Logic: "v4", SessionEnd: Fx.SessionEnd));
+        store.Seed(new SimTrade("v4-exiting-1", Fx.Symbol, "REBOUND", Fx.At(64), 99.00, 99.60, 90.0, "저항", "ATR",
+            "OPEN", null, null, null, 99.00, Score: 75, Logic: "v4", SessionEnd: Fx.SessionEnd));
 
         var harness = Build(StructureEngineMode.Active, store);
         await PollAt(harness, 64);
         await PollAt(harness, 65);
         Assert.Equal(0, harness.Entries.Calls);
+        Assert.Equal("TARGET", Assert.Single(harness.Store.Trades).Status);
 
         await PollAt(harness, 66);
 
