@@ -118,6 +118,15 @@ public sealed class TickFlowTape(TimeProvider clock)
         }
     }
 
+    /// <summary>창 안의 체결 원본(시각·가격·수량). 방향은 붙이지 않는다 — LR_DELTA(#170)가 호가로 다시 판정한다.</summary>
+    public IReadOnlyList<(DateTimeOffset At, decimal Price, decimal Volume)> Prints(string symbol,
+        DateTimeOffset from, DateTimeOffset to)
+    {
+        if (!_flows.TryGetValue(symbol, out var flow)) return [];
+        lock (flow.Gate)
+            return flow.Trades.Where(x => x.At > from && x.At <= to).Select(x => (x.At, x.Price, x.Volume)).ToList();
+    }
+
     public void Clear() => _flows.Clear();
 
     /// <summary>재구독 시 계속 볼 종목의 테이프만 남긴다.</summary>

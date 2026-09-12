@@ -376,6 +376,27 @@ public sealed class ConfluenceReplayTests
         Assert.All(report.Techniques, row => Assert.Equal(10, row.HorizonBars));
     }
 
+    /// <summary>2군 6개도 같은 측정 대상이며, 저장되지 않는 호가·체결에 기대는 기법만 표본 0이다 (C3-2, #170).</summary>
+    [Fact]
+    public async Task ReplayMeasuresTheSecondTierTechniquesToo()
+    {
+        var store = new MemoryBars();
+        foreach (var day in new[] { "2026-09-01", "2026-09-02", "2026-09-03" })
+            store.Seed(day, "TSLA", 90);
+
+        var report = await new ConfluenceReplay(store).RunAsync(new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 3),
+            10, "QQQ", CancellationToken.None);
+
+        string[] tier2 =
+        [
+            TechniqueNames.Candle, TechniqueNames.MultiTimeframeAlignment, TechniqueNames.Squeeze,
+            TechniqueNames.VolatilityBreakout, TechniqueNames.RelativeVolumeDaily, TechniqueNames.LeeReadyDelta
+        ];
+        foreach (var name in tier2) Assert.Single(report.Techniques, x => x.Technique == name);
+        Assert.Equal(0, report.Techniques.Single(x => x.Technique == TechniqueNames.LeeReadyDelta).N);
+        Assert.True(report.Techniques.Single(x => x.Technique == TechniqueNames.VolatilityBreakout).N > 0);
+    }
+
     [Fact]
     public async Task ReplaySkipsTheBenchmarkSymbolAsAMeasuredSymbol()
     {
