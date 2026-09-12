@@ -118,6 +118,9 @@ public sealed class StructureAnalysisService(
     public const string NoteEntryCommitted = "V5_ENTRY_COMMITTED";
     public const string NoteEntryBlockedByOpenTrade = "V5_ENTRY_BLOCKED_BY_OPEN_TRADE";
     public const string NoteEntryPlanInvalid = "V5_ENTRY_PLAN_INVALID";
+
+    /// <summary>#117 §10: 같은 심볼의 직전 손절 이후 완료 봉이 정책 개수만큼 쌓이지 않았다.</summary>
+    public const string NoteEntryBlockedByStopCooldown = "V5_ENTRY_BLOCKED_BY_STOP_COOLDOWN";
     public const string NoteEntryUnavailable = "V5_ENTRY_PORT_UNAVAILABLE";
 
     /// <summary>
@@ -368,7 +371,8 @@ public sealed class StructureAnalysisService(
             // 같은 이벤트를 멱등하게 재시도한다(§12.6). off/shadow에서는 이 경로 자체가 없다.
             // 이슈 #26: 이 commit에서 READY로 커밋되는 후보를 알림 초안으로 잡아 둔다(진입 성공 시 ENTERED로 바뀌기 전).
             var readyForAlerts = candidates.Where(x => x.Disposition == CandidateDisposition.Ready).ToArray();
-            var activeEntry = await TryEnterPreferredAsync(request, candidates, preferred, snapshot, trend, gateNow, ct);
+            var activeEntry = await TryEnterPreferredAsync(request, candidates, preferred, snapshot, trend, gateNow,
+                build.Bars.Bars.Select(x => x.Start).ToImmutableArray(), ct);
             if (activeEntry is not null)
             {
                 candidates = activeEntry.Candidates;
@@ -435,7 +439,8 @@ public sealed class StructureAnalysisService(
     /// </summary>
     async Task<ActiveEntryResult?> TryEnterPreferredAsync(StructureObservationRequest request,
         ImmutableArray<EntryCandidate> candidates, string? preferredId, StructureSnapshot snapshot,
-        TrendAssessment? trend, DateTimeOffset now, CancellationToken ct)
+        TrendAssessment? trend, DateTimeOffset now, ImmutableArray<DateTimeOffset> completedBarStarts,
+        CancellationToken ct)
     {
         if (_options.Mode != StructureEngineMode.Active || preferredId is null) return null;
         var chosen = candidates.FirstOrDefault(x => x.EventId == preferredId);
@@ -459,7 +464,7 @@ public sealed class StructureAnalysisService(
             (trend?.State ?? TrendState.Unknown).ToString().ToUpperInvariant(), trend?.SignedTrend,
             chosen.EntryQuality, snapshot.AnalysisAsOf, snapshot.QuoteAt);
         var result = await tradeEntries.TryEnterAsync(new Domain.StructuralEntryRequest(snapshot.Symbol,
-            chosen.TriggerBarStart, now, snapshot.SessionEnd, context), ct);
+            chosen.TriggerBarStart, now, snapshot.SessionEnd, context, completedBarStarts, snapshot.SessionStart), ct);
 
         return result.Outcome switch
         {
@@ -481,6 +486,9 @@ public sealed class StructureAnalysisService(
             // 한 종목 OPEN 하나 제한은 버전 공통이다(§18). 후보는 READY로 남고 새 거래는 만들지 않는다.
             Domain.StructuralEntryOutcome.BlockedByOpenTrade =>
                 Blocked(candidates, chosen, NoteEntryBlockedByOpenTrade),
+            // #117: 같은 심볼의 직전 손절 이후 완료 봉이 부족하다. 후보는 READY로 남고 가드 키를 소비하지 않는다.
+            Domain.StructuralEntryOutcome.BlockedByStopCooldown =>
+                Blocked(candidates, chosen, NoteEntryBlockedByStopCooldown),
             _ => Blocked(candidates, chosen, NoteEntryPlanInvalid)
         };
     }
