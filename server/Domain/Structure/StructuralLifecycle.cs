@@ -311,15 +311,22 @@ public static class StructuralLifecycle
     /// <summary>
     /// 저장이 성공한 뒤에만 호출한다(§12.6). 실패했는데 이벤트를 소비한 것으로 남기지 않는다.
     /// </summary>
+    /// <param name="entryBlockedEventIds">
+    /// 이슈 #107: active에서 이번 poll에 진입이 막힌 후보. READY로 남기되 가드 키·쿨다운 표식을 소비하지 않아
+    /// 재시도가 가능하다. off/shadow는 진입 시도 자체가 없어 항상 비어 있고 "READY = 소비"가 그대로다(§8 파리티).
+    /// </param>
     public static StructuralLatch Commit(StructuralLatch latch, DateTimeOffset? evaluatedBarStart,
         ImmutableArray<EntryCandidate> candidates, IEnumerable<string> retiredZoneIds,
-        string? eventSignature, string? observationId)
+        string? eventSignature, string? observationId, IEnumerable<string>? entryBlockedEventIds = null)
     {
         ArgumentNullException.ThrowIfNull(latch);
         ArgumentNullException.ThrowIfNull(retiredZoneIds);
         var watermark = latch.WatermarkBarStart;
         if (evaluatedBarStart is { } start && (watermark is null || start > watermark.Value)) watermark = start;
 
+        var entryBlocked = entryBlockedEventIds is null
+            ? null
+            : new HashSet<string>(entryBlockedEventIds, StringComparer.Ordinal);
         var tombstones = latch.Tombstones;
         var guards = latch.ConsumedGuardKeys;
         var activatedBreakoutId = ActivatedBreakout(candidates)?.EventId;
@@ -327,7 +334,8 @@ public static class StructuralLifecycle
         {
             if (CandidateSelection.IsTerminal(candidate.Disposition))
                 tombstones = tombstones.SetItem(candidate.EventId, candidate.Disposition);
-            if (candidate.Disposition is CandidateDisposition.Ready or CandidateDisposition.Entered)
+            if (candidate.Disposition is CandidateDisposition.Ready or CandidateDisposition.Entered &&
+                entryBlocked?.Contains(candidate.EventId) != true)
             {
                 guards = guards.Add(candidate.DuplicateGuardKey);
                 if (candidate.Disposition == CandidateDisposition.Entered && candidate.Kind is SetupKind.Pullback or SetupKind.Rebound &&
