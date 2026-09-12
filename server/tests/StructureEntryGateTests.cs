@@ -269,6 +269,39 @@ public sealed class StructureEntryGateTests
     }
 
     [Fact]
+    public async Task ConcurrentSameSymbolPollsAdvanceTheUnknownTickSequenceOncePerCommittedPoll()
+    {
+        var harness = Build(StructureEngineMode.Shadow, policy: P with { PriceTickUnknownWarningPolls = 3 });
+        await ObserveAt(harness, 64, liquidity: null);
+        await Task.WhenAll(
+            ObserveAt(harness, 65, liquidity: null),
+            ObserveAt(harness, 65, liquidity: null));
+
+        var view = Published(harness);
+        Assert.Contains(StructureAnalysisService.NotePriceTickUnknown, view.Warnings);
+        Assert.Single(harness.Observations.AllLines, x => JsonDocument.Parse(x).RootElement
+            .GetProperty("warnings").EnumerateArray().Select(y => y.GetString())
+            .Contains(StructureAnalysisService.NotePriceTickUnknown));
+    }
+
+    [Fact]
+    public async Task ANewSessionStartsANewUnknownTickWarningSequence()
+    {
+        var harness = Build(StructureEngineMode.Shadow, policy: P with { PriceTickUnknownWarningPolls = 3 });
+        await ObserveAt(harness, 64, liquidity: null);
+        await ObserveAt(harness, 65, liquidity: null);
+
+        var nextSession = harness.Session with { Start = harness.Session.Start!.Value.AddMinutes(1),
+            End = harness.Session.End!.Value.AddMinutes(1) };
+        harness.Runtime.TryCommit(harness.Generation, state => state with { Market = nextSession });
+        var next = new StructureObservationRequest(Fx.Symbol, harness.Generation, nextSession, D6.Bars(65), D6.Daily(),
+            D6.QuotePrice(Fx.At(65)), Fx.At(65), null);
+        await harness.Structure.ObserveAsync(next, default);
+
+        Assert.DoesNotContain(StructureAnalysisService.NotePriceTickUnknown, Published(harness).Warnings);
+    }
+
+    [Fact]
     public async Task ASupportedTickLeavesTheEntryPathUnchanged()
     {
         var harness = Build(StructureEngineMode.Active);
