@@ -120,14 +120,14 @@ public sealed class StructureAnalysisService(
     public const string NoteEntryPlanInvalid = "V5_ENTRY_PLAN_INVALID";
 
     /// <summary>#117 §10: 같은 심볼의 직전 손절 이후 완료 봉이 정책 개수만큼 쌓이지 않았다.</summary>
-    public const string NoteEntryBlockedByStopCooldown = "V5_ENTRY_BLOCKED_BY_STOP_COOLDOWN";
+    public const string NoteEntryBlockedByStopCooldown = Domain.Validation.EntryBlockCodes.BlockedByStopCooldown;
     public const string NoteEntryUnavailable = "V5_ENTRY_PORT_UNAVAILABLE";
 
     /// <summary>
     /// #106: 이번 poll에 같은 심볼의 청산이 있었다. 청산을 만든 그 틱이 곧바로 신규 진입가가 되지 않도록
     /// 이 poll의 진입만 건너뛴다. 후보는 READY로 남고 쿨다운이 아니다.
     /// </summary>
-    public const string NoteEntrySuppressedBySamePollExit = "V5_ENTRY_SUPPRESSED_BY_SAME_POLL_EXIT";
+    public const string NoteEntrySuppressedBySamePollExit = Domain.Validation.EntryBlockCodes.SuppressedBySamePollExit;
 
     /// <summary>§16B 가격 단위: 관측된 가격이 정책 tick의 배수가 아니다(신규 READY 금지).</summary>
     public const string NotePriceTickUnsupported = "V5_PRICE_TICK_UNSUPPORTED";
@@ -471,7 +471,8 @@ public sealed class StructureAnalysisService(
             (trend?.State ?? TrendState.Unknown).ToString().ToUpperInvariant(), trend?.SignedTrend,
             chosen.EntryQuality, snapshot.AnalysisAsOf, snapshot.QuoteAt);
         var result = await tradeEntries.TryEnterAsync(new Domain.StructuralEntryRequest(snapshot.Symbol,
-            chosen.TriggerBarStart, now, snapshot.SessionEnd, context, completedBarStarts, snapshot.SessionStart), ct);
+            chosen.TriggerBarStart, now, snapshot.SessionEnd, context, completedBarStarts, snapshot.SessionStart,
+            chosen.Plan.TargetZoneSnapshot.Aliases), ct);
 
         return result.Outcome switch
         {
