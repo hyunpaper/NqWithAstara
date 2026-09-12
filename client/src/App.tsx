@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { useVisiblePolling } from "./useVisiblePolling";
 import LiquidityPanel from "./LiquidityPanel";
+import FeeWarningBadge from "./FeeWarningBadge";
 import StructurePanel from "./StructurePanel";
 // 이슈 #84: v5 코호트 섹션(SimStructurePanel)은 대시보드 렌더링에서 제거했다.
 // data.structure/서버 집계(SimulationCohorts.cs)는 유지되며, 아래 import와
@@ -49,6 +50,7 @@ import {
 import type { StructureCohortReport, TradeStructure } from "./dashboardTypes";
 import { tradeEntryTooltip } from "./dashboardTypes";
 import { blockTradeLabel, flowSourceLabel } from "./tradeTape";
+import { turnoverText } from "./metricsFormat";
 
 type Bar = { time: string; close: number; ema?: number; vwap?: number };
 type Indicators = {
@@ -112,6 +114,11 @@ type State = {
    * FE는 seq seed + Notification tag로 소비만 한다. 구버전 서버에는 없다.
    */
   structureEvents?: StructureEventRow[] | null;
+  /**
+   * 이슈 #130: 실계좌 US 왕복 수수료와 StructurePolicy.RoundTripFeePercent 불일치·만료 임박 경고.
+   * 구버전 서버에는 없을 수 있으므로 optional로 둔다.
+   */
+  warnings?: string[] | null;
 };
 type SearchResult = { symbol: string; name: string };
 type DailyMetrics = {
@@ -223,6 +230,8 @@ type Metrics = {
   /** 이슈 #133: 체결강도 원천("ws"|"rest"|"none")과 블록 체결 건수. 구버전 서버에는 없다. */
   flowSource?: string | null;
   blockTradeCount?: number | null;
+  /** 이슈 #132: 당일 누적 거래량 / 상장주식수(%). 메타가 없는 구버전 서버·종목에서는 없다. */
+  turnoverPercent?: number | null;
 };
 const api = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   const r = await fetch(url, init);
@@ -889,6 +898,7 @@ export default function App() {
             </div>
           </div>
           <div className="header-actions">
+            <FeeWarningBadge warnings={state?.warnings} />
             <div className={`market ${state?.market.isOpen ? "open" : ""}`}>
               <span />
               {state?.market.label || "시장 상태 확인 중"}
@@ -1830,6 +1840,11 @@ function MetricsCard({
               help={
                 d ? `세션 ${d.sessionElapsedPercent.toFixed(0)}% 경과` : undefined
               }
+            />
+            <MetricTile
+              label="회전율"
+              value={turnoverText(metrics?.turnoverPercent)}
+              help="당일 누적 거래량 / 상장주식수"
             />
           </div>
           <p className="metrics-note">

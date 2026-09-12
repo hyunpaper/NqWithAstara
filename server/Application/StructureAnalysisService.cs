@@ -110,7 +110,8 @@ public sealed class StructureAnalysisService(
     StructureEngineOptions? options = null,
     StructurePolicy? policy = null,
     IStructuralTradeEntries? tradeEntries = null,
-    StructureAlertPublisher? alerts = null)
+    StructureAlertPublisher? alerts = null,
+    SymbolMetadataService? metadata = null)
 {
     public const string LatchFile = "structure-lifecycle.json";
     public const string EntryOwnerV4 = "v4";
@@ -134,6 +135,12 @@ public sealed class StructureAnalysisService(
 
     /// <summary>§16B 가격 단위: 호가 근거가 없어 tick을 판정할 수 없다. 신규 READY는 계속 허용한다.</summary>
     public const string NotePriceTickUnknown = "V5_PRICE_TICK_UNKNOWN";
+
+    /// <summary>#132 §16A 종목 유형: 정책이 허용하지 않는 securityType·비보통주·레버리지다(신규 READY 금지).</summary>
+    public const string NoteSymbolTypeUnsupported = Domain.Structure.SymbolEligibility.CodeTypeUnsupported;
+
+    /// <summary>#132 §16A 종목 유형: 메타데이터가 없어 판정할 수 없다. 신규 READY는 계속 허용한다.</summary>
+    public const string NoteSymbolMetaUnknown = Domain.Structure.SymbolEligibility.NoteMetaUnknown;
 
     /// <summary>§12.5 gate 재확인에서 신규 진입이 막혔다. 뒤의 코드가 구체 사유다.</summary>
     public const string NoteEntryGateRecheck = "V5_ENTRY_BLOCKED_BY_GATE_RECHECK";
@@ -231,6 +238,8 @@ public sealed class StructureAnalysisService(
         var tickNote = PriceTickNote(snapshot.OptionalLiquidity, _policy);
         var tickSupported = !string.Equals(tickNote, NotePriceTickUnsupported, StringComparison.Ordinal);
         var tickUnknownWarning = false;
+        var symbolNote = SymbolEligibility.Note(metadata?.Get(request.Symbol), _policy);
+        var symbolBlocked = string.Equals(symbolNote, NoteSymbolTypeUnsupported, StringComparison.Ordinal);
 
         await RestoreAsync(ct);
         var latch = Latch(request.Symbol, snapshot.SessionStart);
@@ -253,7 +262,7 @@ public sealed class StructureAnalysisService(
                 if (!Current(request, snapshot, clock.GetLocalNow())) return;
                 tickUnknownWarning = TickUnknownWarning(request.Symbol, snapshot.SessionStart, tickNote);
                 var (tickNotes, tickWarnings) = WithTickDiagnostics(cached.Notes, cached.Warnings, tickNote,
-                    tickSupported, tickUnknownWarning);
+                    tickSupported, tickUnknownWarning, symbolNote, symbolBlocked);
                 var tickDiagnosticsChanged = !tickNotes.SequenceEqual(cached.Notes) ||
                                              !tickWarnings.SequenceEqual(cached.Warnings);
                 if (!transitioned && !tickDiagnosticsChanged && cached.Generation == request.Generation) return;
@@ -319,6 +328,7 @@ public sealed class StructureAnalysisService(
         var gate = StructuralLifecycle.Gate(latch, lastBarStart, lastBarEnd, lastBarEnd - lastBarStart, now, _policy);
 
         var blockers = build.Quality.BlockersForCandidate.Concat(gate.Blockers)
+            .Concat(symbolBlocked ? [NoteSymbolTypeUnsupported] : Array.Empty<string>())
             .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToImmutableArray();
 
         var detection = SetupDetector.Detect(SetupDetectionRequest.Create(snapshot.Symbol, snapshot.SessionStart,
@@ -371,6 +381,7 @@ public sealed class StructureAnalysisService(
             tickUnknownWarning = TickUnknownWarning(request.Symbol, snapshot.SessionStart, tickNote);
             if (tickNote is not null) notes.Add(tickNote);
             if (!tickSupported || tickUnknownWarning) warnings.Add(tickNote!);
+            if (symbolNote is not null) notes.Add(symbolNote);
             record = record with { Warnings = warnings.ToArray(), Notes = notes.ToArray() };
 
             // ── D6 active 진입(§18): READY 대표 후보 1개만 실제 시뮬 거래로 커밋한다. 거래 저장이 성공한 뒤에만
@@ -638,17 +649,19 @@ public sealed class StructureAnalysisService(
 
     static (ImmutableArray<string> Notes, ImmutableArray<string> Warnings) WithTickDiagnostics(
         IEnumerable<string> notes, IEnumerable<string> warnings, string? tickNote, bool tickSupported,
-        bool tickUnknownWarning)
+        bool tickUnknownWarning, string? symbolNote, bool symbolBlocked)
     {
         var nextNotes = new SortedSet<string>(notes.Where(x => !IsTickDiagnostic(x)), StringComparer.Ordinal);
         var nextWarnings = new SortedSet<string>(warnings.Where(x => !IsTickDiagnostic(x)), StringComparer.Ordinal);
         if (tickNote is not null) nextNotes.Add(tickNote);
         if (!tickSupported || tickUnknownWarning) nextWarnings.Add(tickNote!);
+        if (symbolNote is not null) nextNotes.Add(symbolNote);
+        if (symbolBlocked) nextWarnings.Add(symbolNote!);
         return (nextNotes.ToImmutableArray(), nextWarnings.ToImmutableArray());
     }
 
     static bool IsTickDiagnostic(string code) => string.Equals(code, NotePriceTickUnsupported, StringComparison.Ordinal) ||
-        string.Equals(code, NotePriceTickUnknown, StringComparison.Ordinal);
+        string.Equals(code, NotePriceTickUnknown, StringComparison.Ordinal) || SymbolEligibility.IsDiagnostic(code);
 
     static string ObservationSignature(string eventSignature, IEnumerable<string> notes, IEnumerable<string> warnings) =>
         $"{eventSignature}|notes={string.Join(',', notes.Order(StringComparer.Ordinal))}|warnings={string.Join(',', warnings.Order(StringComparer.Ordinal))}";

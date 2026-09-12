@@ -1,3 +1,5 @@
+using System.Collections;
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Reflection;
 using System.Text;
@@ -60,6 +62,14 @@ public sealed record StructurePolicy
     public decimal MinimumSupportedPrice { get; init; } = 1.00m;
     public int PriceTickUnknownWarningPolls { get; init; } = 3;
     public double RoundTripFeePercent { get; init; } = .2;
+
+    /// <summary>
+    /// §16A 종목 유형: v5 신규 진입을 허용하는 securityType 집합(#132). 레버리지 ETF·비보통주의 tick·변동성
+    /// 구조가 개별주 구조 문법(§5~§8)과 다르다는 판단이며 성과로 검증한 값이 아니다.
+    /// </summary>
+    public ImmutableArray<string> AllowedSecurityTypes { get; init; } = DefaultAllowedSecurityTypes;
+
+    static readonly ImmutableArray<string> DefaultAllowedSecurityTypes = ["STOCK", "DEPOSITARY_RECEIPT"];
 
     // ── 봉 집계 (§5.2) ──
     public int AggregationMinutes { get; init; } = 5;
@@ -189,6 +199,7 @@ public sealed record StructurePolicy
         int i => i.ToString(CultureInfo.InvariantCulture),
         long l => l.ToString(CultureInfo.InvariantCulture),
         decimal m => StructureMath.Price(m),
+        IEnumerable items => "[" + string.Join(',', items.Cast<object?>().Select(Canonical)) + "]",
         double d => double.IsFinite(d)
             ? d.ToString("R", CultureInfo.InvariantCulture)
             : throw new InvalidOperationException("Policy numbers must be finite; NaN/Infinity is never serialized."),

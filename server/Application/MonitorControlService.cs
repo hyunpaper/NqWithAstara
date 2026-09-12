@@ -11,7 +11,8 @@ public sealed class MonitorControlService(
     IMarketDataGateway market,
     IRealtimeMarketStream stream,
     IMonitorSignals signals,
-    MonitorRuntimeState runtime)
+    MonitorRuntimeState runtime,
+    FeeRateCheckService? feeCheck = null)
 {
     static readonly Regex SymbolPattern = new("^[A-Z0-9.-]{1,12}$", RegexOptions.CultureInvariant);
 
@@ -58,6 +59,8 @@ public sealed class MonitorControlService(
             runtime.CommitStart();
             await ApplyLatestSubscriptionsAsync();
         }
+        // 이슈 #130: 기동 시 1회 실계좌 US 왕복 수수료와 정책 값 정합을 확인한다. 실패해도 진입을 막지 않는다.
+        if (feeCheck is not null) await feeCheck.CheckOnMonitorStartAsync(requestCt);
     }
 
     public async Task StopAsync(CancellationToken requestCt)
