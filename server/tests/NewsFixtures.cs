@@ -117,6 +117,9 @@ static class NewsBuilder
     public static NewsFeedItem Item(string id, string title, DateTimeOffset at, params string[] tickers)
         => new(id, title, "목록 요약", "financial-juice", at, tickers);
 
+    public static NewsFeedItem Grouped(string id, string title, DateTimeOffset at, string groupId, params string[] tickers)
+        => new(id, title, "목록 요약", "financial-juice", at, tickers, GroupId: groupId);
+
     public static NewsFeedService Service(
         NewsOptions options, FakeNewsFeed feed, FakeNewsClassifier classifier, MemoryNewsStore store,
         NewsLocalStore local, NewsRuntimeState state, NewsClock clock, NewsDiagnostics diagnostics)

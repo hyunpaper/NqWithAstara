@@ -131,6 +131,40 @@ public sealed class NewsQueryServiceTests
         Assert.Equal("down", json.GetProperty("ollama").GetString());
         Assert.Equal(JsonValueKind.String, json.GetProperty("lastPollAt").ValueKind);
     }
+
+    [Fact]
+    public void HealthExposesThePromptVersion()
+    {
+        var (query, _, _) = Build();
+
+        var json = Serialize(query.Health());
+
+        Assert.Equal("v2b", json.GetProperty("promptVersion").GetString());
+    }
+
+    [Fact]
+    public void ArticlesExposeThePromptVersion()
+    {
+        var (query, state, options) = Build();
+        state.Add(Record("1", NewsSentiments.Positive, 3, Now, "NVDA") with { PromptVersion = "v2b" },
+            options.RecentCapacity);
+
+        var first = Serialize(query.Articles(null, null)).GetProperty("articles")[0];
+
+        Assert.Equal("v2b", first.GetProperty("promptVersion").GetString());
+    }
+
+    [Fact]
+    public void ArticlesExposeClassifiedFrom()
+    {
+        var (query, state, options) = Build();
+        state.Add(Record("1", NewsSentiments.Negative, 3, Now, "MARKET") with { ClassifiedFrom = "2" },
+            options.RecentCapacity);
+
+        var first = Serialize(query.Articles(null, null)).GetProperty("articles")[0];
+
+        Assert.Equal("2", first.GetProperty("classifiedFrom").GetString());
+    }
 }
 
 public sealed class NewsHostContractTests(AstraHostFixture host) : IClassFixture<AstraHostFixture>
@@ -167,6 +201,7 @@ public sealed class NewsHostContractTests(AstraHostFixture host) : IClassFixture
         Assert.Equal(0, news.GetProperty("queue").GetInt32());
         Assert.Equal("ok", news.GetProperty("ollama").GetString());
         Assert.Equal(JsonValueKind.Null, news.GetProperty("lastPollAt").ValueKind);
+        Assert.Equal("v2b", news.GetProperty("promptVersion").GetString());
     }
 
     [Fact]

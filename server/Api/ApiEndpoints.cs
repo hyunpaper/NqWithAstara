@@ -6,7 +6,14 @@ public static class ApiEndpoints
 {
     public static IEndpointRouteBuilder MapAstraApi(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/api/health", (MonitorRuntimeState r, FeeRateCheckService? feeCheck, NewsQueryService? news) => { var s = r.Snapshot(); return Results.Ok(new { app = "Astra", status = "ready", connection = s.ConnectionStatus, credentialsRequired = s.ConnectionStatus is "idle" or "error", guideUrl = s.ConnectionMessage.Contains("허용 IP") ? "https://developers.tossinvest.com/docs" : null, warnings = feeCheck?.Warnings ?? Array.Empty<string>(), news = news?.Health() }); });
+        app.MapGet("/api/health", async (MonitorRuntimeState r, FeeRateCheckService? feeCheck, NewsQueryService? news,
+            BarStoreService? bars, ConfluenceOptions? confluence, TimeProvider clock) =>
+        {
+            var s = r.Snapshot();
+            var barsHealth = bars is null ? null : await bars.HealthAsync(MarketRules.TradingDate(clock.GetUtcNow()),
+                confluence?.BenchmarkSymbol ?? "QQQ", CancellationToken.None);
+            return Results.Ok(new { app = "Astra", status = "ready", connection = s.ConnectionStatus, credentialsRequired = s.ConnectionStatus is "idle" or "error", guideUrl = s.ConnectionMessage.Contains("허용 IP") ? "https://developers.tossinvest.com/docs" : null, warnings = feeCheck?.Warnings ?? Array.Empty<string>(), news = news?.Health(), bars = barsHealth });
+        });
         app.MapGet("/api/news", (string? symbol, int? limit, NewsQueryService q) => Results.Ok(q.Articles(symbol, limit)));
         app.MapGet("/api/news/sentiment", (NewsQueryService q) => Results.Ok(q.Sentiment()));
         app.MapGet("/api/state", async (StateQueryService q) => Results.Ok(await q.GetAsync())); app.MapGet("/api/search", SearchAsync);
