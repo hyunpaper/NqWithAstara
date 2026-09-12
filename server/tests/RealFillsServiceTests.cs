@@ -41,6 +41,31 @@ public sealed class RealFillsServiceTests
     }
 
     [Fact]
+    public async Task OrdersAreQueriedOverTwoKstDaysAndFilteredByTheNewYorkTradingDate()
+    {
+        var beforeMidnightKst = new DateTimeOffset(2026, 9, 11, 23, 30, 0, Rf.Kst);
+        var afterMidnightKst = new DateTimeOffset(2026, 9, 12, 1, 4, 0, Rf.Kst);
+        var nextSessionKst = new DateTimeOffset(2026, 9, 12, 23, 0, 0, Rf.Kst);
+        var gateway = new FakeOrderGateway([
+            new TossOrderPage([
+                Rf.Order("o1", filledAt: beforeMidnightKst),
+                Rf.Order("o2", filledAt: afterMidnightKst),
+                Rf.Order("o3", filledAt: nextSessionKst)
+            ], null, false)
+        ]);
+        var store = new MemoryRealFillStore();
+
+        var result = await Rf.Service(gateway, store).RefreshAsync(Rf.TradingDate, CancellationToken.None);
+
+        Assert.Equal([(Rf.TradingDate, Rf.TradingDate.AddDays(1))], gateway.Ranges);
+        Assert.Equal(2, result.Fills);
+        using var json = JsonDocument.Parse(store.Files["2026-09-11.json"]);
+        Assert.Equal([beforeMidnightKst, afterMidnightKst],
+            json.RootElement.GetProperty("fills").EnumerateArray()
+                .Select(x => x.GetProperty("filledAt").GetDateTimeOffset()).ToArray());
+    }
+
+    [Fact]
     public async Task OnlyFilledOrdersWithAnExecutionAreStored()
     {
         var gateway = new FakeOrderGateway([

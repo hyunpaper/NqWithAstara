@@ -95,10 +95,10 @@ public sealed class RealFillsService(IMarketDataGateway gateway, IRealFillStore 
             while (pages < MaxPages)
             {
                 ct.ThrowIfCancellationRequested();
-                var page = await gateway.ClosedOrders(account.AccountSeq, tradingDate, tradingDate, cursor,
-                    PageLimit, ct);
+                var page = await gateway.ClosedOrders(account.AccountSeq, tradingDate, tradingDate.AddDays(1),
+                    cursor, PageLimit, ct);
                 pages++;
-                fills.AddRange(page.Orders.Where(Filled).Select(Record));
+                fills.AddRange(page.Orders.Where(x => Filled(x) && SameTradingDate(x, tradingDate)).Select(Record));
                 if (!page.HasNext || string.IsNullOrEmpty(page.NextCursor)) break;
                 cursor = page.NextCursor;
                 if (PageDelay > TimeSpan.Zero) await Task.Delay(PageDelay, ct);
@@ -115,6 +115,13 @@ public sealed class RealFillsService(IMarketDataGateway gateway, IRealFillStore 
             return new RealFillRefreshResult(false, tradingDate, 0, 0, "REAL_FILLS_FAILED");
         }
     }
+
+    /// <summary>
+    /// Toss `/orders`의 from/to는 KST 캘린더 날짜다. 미국 세션 하루는 KST로 이틀에 걸치므로
+    /// 이틀을 조회하고 뉴욕 거래일로 다시 걸러 앞뒤 세션의 체결을 섞지 않는다(#131).
+    /// </summary>
+    static bool SameTradingDate(TossOrder order, DateOnly tradingDate) =>
+        MarketRules.TradingDate(order.Execution!.FilledAt) == tradingDate;
 
     static bool Filled(TossOrder order) =>
         order.Execution is not null && string.Equals(order.Status, FilledStatus, StringComparison.OrdinalIgnoreCase);

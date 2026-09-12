@@ -8,10 +8,15 @@ static class Rf
     public static readonly DateOnly TradingDate = new(2026, 9, 11);
     public static readonly DateTimeOffset FilledAt = new(2026, 9, 11, 10, 0, 0, TimeSpan.FromHours(-4));
 
+    public static readonly TimeSpan Kst = TimeSpan.FromHours(9);
+
     public static TossOrder Order(string id, string side = "BUY", string status = "FILLED", bool executed = true,
-        int minute = 0) =>
+        int minute = 0, DateTimeOffset? filledAt = null) =>
         new(id, "TEST", side, "MARKET", status, FilledAt.AddMinutes(minute - 1),
-            executed ? new TossOrderExecution(10m, 100.25m, 1002.5m, 1.0025m, FilledAt.AddMinutes(minute)) : null);
+            executed
+                ? new TossOrderExecution(10m, 100.25m, 1002.5m, 1.0025m,
+                    filledAt ?? FilledAt.AddMinutes(minute))
+                : null);
 
     public static RealFillsService Service(FakeOrderGateway gateway, MemoryRealFillStore store,
         FakeRealFillDiagnostics? diagnostics = null) =>
@@ -58,6 +63,7 @@ sealed class FakeOrderGateway(IReadOnlyList<TossOrderPage> pages) : IMarketDataG
 {
     public List<string?> Cursors { get; } = [];
     public List<int> Limits { get; } = [];
+    public List<(DateOnly? From, DateOnly? To)> Ranges { get; } = [];
     public int Calls { get; private set; }
     public Exception? Failure { get; init; }
     public IReadOnlyList<TossAccount> AccountList { get; init; } = [new(7, "BROKERAGE")];
@@ -80,6 +86,7 @@ sealed class FakeOrderGateway(IReadOnlyList<TossOrderPage> pages) : IMarketDataG
         if (Failure is { } failure) throw failure;
         Cursors.Add(cursor);
         Limits.Add(limit);
+        Ranges.Add((from, to));
         return Task.FromResult(pages[Calls++]);
     }
 }
