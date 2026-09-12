@@ -2,6 +2,7 @@ using Astra.Server;
 using Astra.Server.Application;
 using Astra.Server.Domain;
 using Astra.Server.Domain.Structure;
+using System.Text.Json;
 using Xunit;
 
 /// <summary>
@@ -179,6 +180,13 @@ public sealed class StructureEntryGateTests
         var third = Published(harness);
         Assert.Contains(StructureAnalysisService.NotePriceTickUnknown, third.Warnings);
         Assert.True(harness.Store.Trades.Count == 1, Describe(third));
+        var warningRecords = harness.Observations.AllLines
+            .Select(x => JsonDocument.Parse(x).RootElement)
+            .Where(x => x.GetProperty("warnings").EnumerateArray()
+                .Select(y => y.GetString()).Contains(StructureAnalysisService.NotePriceTickUnknown))
+            .ToArray();
+        Assert.Single(warningRecords);
+        Assert.Equal("transition", warningRecords[0].GetProperty("detail").GetString());
     }
 
     [Fact]
@@ -193,6 +201,71 @@ public sealed class StructureEntryGateTests
         var view = Published(harness);
         Assert.Contains(StructureAnalysisService.NotePriceTickUnknown, view.Notes);
         Assert.DoesNotContain(StructureAnalysisService.NotePriceTickUnknown, view.Warnings);
+    }
+
+    [Fact]
+    public async Task AnUnsupportedBookResetsTheUnknownTickWarningSequence()
+    {
+        var harness = Build(StructureEngineMode.Active, policy: P with { PriceTickUnknownWarningPolls = 3 });
+        await ObserveAt(harness, 64, liquidity: null);
+        await ObserveAt(harness, 65, liquidity: null);
+        await ObserveAt(harness, 65, liquidity: new StructureLiquidity(99.6025m, 99.61m, Fx.At(65)));
+        await ObserveAt(harness, 65, liquidity: null);
+
+        var view = Published(harness);
+        Assert.Contains(StructureAnalysisService.NotePriceTickUnknown, view.Notes);
+        Assert.DoesNotContain(StructureAnalysisService.NotePriceTickUnknown, view.Warnings);
+    }
+
+    [Fact]
+    public async Task AStaleGenerationPollDoesNotAdvanceTheUnknownTickWarningSequence()
+    {
+        var harness = Build(StructureEngineMode.Active, policy: P with { PriceTickUnknownWarningPolls = 3 });
+        var currentGeneration = harness.Runtime.CommitWatchlistChange();
+        await harness.Structure.ObserveAsync(Request(harness, 64, liquidity: null), default);
+        var current = new StructureObservationRequest(Fx.Symbol, currentGeneration, harness.Session, D6.Bars(64),
+            D6.Daily(), D6.QuotePrice(Fx.At(64)), Fx.At(64), null);
+        await harness.Structure.ObserveAsync(current, default);
+        await harness.Structure.ObserveAsync(current with { OneMinuteBars = D6.Bars(65), QuoteAt = Fx.At(65),
+            QuotePrice = D6.QuotePrice(Fx.At(65)) }, default);
+
+        var view = Published(harness);
+        Assert.Contains(StructureAnalysisService.NotePriceTickUnknown, view.Notes);
+        Assert.DoesNotContain(StructureAnalysisService.NotePriceTickUnknown, view.Warnings);
+    }
+
+    [Fact]
+    public async Task ClearAndRemoveResetTheUnknownTickWarningSequence()
+    {
+        var harness = Build(StructureEngineMode.Shadow, policy: P with { PriceTickUnknownWarningPolls = 3 });
+        await ObserveAt(harness, 64, liquidity: null);
+        await ObserveAt(harness, 65, liquidity: null);
+        harness.Structure.Clear();
+        await ObserveAt(harness, 65, liquidity: null);
+        await ObserveAt(harness, 65, liquidity: null);
+        Assert.DoesNotContain(StructureAnalysisService.NotePriceTickUnknown, Published(harness).Warnings);
+
+        harness.Structure.Remove(Fx.Symbol);
+        await ObserveAt(harness, 65, liquidity: null);
+        await ObserveAt(harness, 65, liquidity: null);
+        Assert.DoesNotContain(StructureAnalysisService.NotePriceTickUnknown, Published(harness).Warnings);
+    }
+
+    [Fact]
+    public async Task UnknownTickCountersAreIsolatedBySymbol()
+    {
+        var harness = Build(StructureEngineMode.Shadow, policy: P with { PriceTickUnknownWarningPolls = 3 });
+        await ObserveAt(harness, 64, liquidity: null);
+        var other = new StructureObservationRequest("OTHER", harness.Generation, harness.Session, D6.Bars(64),
+            D6.Daily(), D6.QuotePrice(Fx.At(64)), Fx.At(64), null);
+        await harness.Structure.ObserveAsync(other, default);
+        await harness.Structure.ObserveAsync(other with { OneMinuteBars = D6.Bars(65), QuoteAt = Fx.At(65),
+            QuotePrice = D6.QuotePrice(Fx.At(65)) }, default);
+
+        await ObserveAt(harness, 65, liquidity: null);
+        Assert.DoesNotContain(StructureAnalysisService.NotePriceTickUnknown, Published(harness).Warnings);
+        await ObserveAt(harness, 65, liquidity: null);
+        Assert.Contains(StructureAnalysisService.NotePriceTickUnknown, Published(harness).Warnings);
     }
 
     [Fact]

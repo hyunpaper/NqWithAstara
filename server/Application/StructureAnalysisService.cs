@@ -221,7 +221,7 @@ public sealed class StructureAnalysisService(
         var lastBarEnd = build.LastCompletedBarEnd.Value;
         var tickNote = PriceTickNote(snapshot.OptionalLiquidity, _policy);
         var tickSupported = !string.Equals(tickNote, NotePriceTickUnsupported, StringComparison.Ordinal);
-        var tickUnknownWarning = TickUnknownWarning(request.Symbol, snapshot.SessionStart, tickNote);
+        var tickUnknownWarning = false;
 
         await RestoreAsync(ct);
         var latch = Latch(request.Symbol, snapshot.SessionStart);
@@ -235,33 +235,34 @@ public sealed class StructureAnalysisService(
         // 다시 계산해 READY를 WAIT로 되돌리지 않는다(재계산 결과는 gate가 신규 트리거를 막아 퇴행한다).
         if (reusable && cached!.AnalysisAsOf == snapshot.AnalysisAsOf)
         {
-            var (tickNotes, tickWarnings) = WithTickDiagnostics(cached.Notes, cached.Warnings, tickNote,
-                tickSupported, tickUnknownWarning);
-            var tickDiagnosticsChanged = !tickNotes.SequenceEqual(cached.Notes) ||
-                                         !tickWarnings.SequenceEqual(cached.Warnings);
             var refreshed = StructuralLifecycle.ApplyLive(cached.Candidates, snapshot.QuotePrice, now);
             var liveSignature = Signature(refreshed);
             var transitioned = !string.Equals(liveSignature, Signature(cached.Candidates), StringComparison.Ordinal);
-            if (!transitioned && !tickDiagnosticsChanged && cached.Generation == request.Generation) return;
-
-            var preferredId = CandidateSelection.SelectPreferred(refreshed)?.EventId;
-            var liveCandidateDtos = refreshed.Select(StructureViewMapper.Candidate).ToArray();
-            var liveSummary = (refreshed.Length == 0
-                ? CandidateDisposition.Wait
-                : CandidateSelection.Summarize(refreshed)).ToString().ToUpperInvariant();
 
             using (await runtime.EnterControlAsync(ct))
             {
                 if (!Current(request, snapshot, clock.GetLocalNow())) return;
+                tickUnknownWarning = TickUnknownWarning(request.Symbol, snapshot.SessionStart, tickNote);
+                var (tickNotes, tickWarnings) = WithTickDiagnostics(cached.Notes, cached.Warnings, tickNote,
+                    tickSupported, tickUnknownWarning);
+                var tickDiagnosticsChanged = !tickNotes.SequenceEqual(cached.Notes) ||
+                                             !tickWarnings.SequenceEqual(cached.Warnings);
+                if (!transitioned && !tickDiagnosticsChanged && cached.Generation == request.Generation) return;
+
+                var preferredId = CandidateSelection.SelectPreferred(refreshed)?.EventId;
+                var liveCandidateDtos = refreshed.Select(StructureViewMapper.Candidate).ToArray();
+                var liveSummary = (refreshed.Length == 0
+                    ? CandidateDisposition.Wait
+                    : CandidateSelection.Summarize(refreshed)).ToString().ToUpperInvariant();
 
                 var liveWarnings = ImmutableArray<string>.Empty;
                 if (transitioned || tickDiagnosticsChanged)
                 {
-                    // #64 §16/§16B: 같은 봉 안의 상태 전이(READY→INVALIDATED/EXPIRED)도 관측에 남긴다.
-                    // 기록은 이벤트 서명이 바뀐 poll에서만 일어나고 ID가 그 서명을 포함하므로 주기 반복은
-                    // 그대로 중복 폐기된다. 상태는 종결 방향으로만 움직여 봉당 기록 수는 후보 수로 제한된다.
+                    // 같은 봉 안에서도 후보 상태 또는 tick 진단 상태가 바뀌면 관측에 남긴다.
+                    // 두 상태가 모두 같으면 ID도 같아 주기 반복은 중복 폐기된다.
                     var liveRecord = new StructureObservationRecord(
-                        StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash, liveSignature),
+                        StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash,
+                            ObservationSignature(liveSignature, tickNotes, tickWarnings)),
                         RecordVersion, snapshot.Symbol, now, snapshot.SessionStart, snapshot.AnalysisAsOf,
                         snapshot.QuoteAt, lastBarStart, PolicyHash, EngineVersion, ModeName, EntryOwner,
                         DetailTransition, build.Status, liveSummary, preferredId,
@@ -330,11 +331,9 @@ public sealed class StructureAnalysisService(
 
         var warnings = new SortedSet<string>(build.Warnings, StringComparer.Ordinal);
         foreach (var blocker in detection.ReadyBlockers) warnings.Add(blocker);
-        if (tickNote is not null) notes.Add(tickNote);
-        if (!tickSupported || tickUnknownWarning) warnings.Add(tickNote!);
 
         var signature = StructuralLifecycle.EventSignature(candidates, preferred);
-        // #64: 관측 ID는 (봉, 이벤트 서명) 쌍이다. 같은 봉의 같은 상태는 그대로 중복 폐기되고 전이만 새 ID를 얻는다.
+        // 관측 ID는 완료 봉과 후보·진단 서명으로 만든다. 같은 상태의 반복은 중복 폐기된다.
         var observationId = StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash, signature);
         var full = !string.Equals(signature, latch.LastEventSignature, StringComparison.Ordinal);
 
@@ -358,6 +357,12 @@ public sealed class StructureAnalysisService(
             // #62 §12.5: 계산·파일 I/O·gate 경합 뒤의 실제 commit 시각이다. 진입 재확인은 이 시각으로 한다.
             var gateNow = clock.GetLocalNow();
             if (!Current(request, snapshot, gateNow)) return;
+            tickUnknownWarning = TickUnknownWarning(request.Symbol, snapshot.SessionStart, tickNote);
+            if (tickNote is not null) notes.Add(tickNote);
+            if (!tickSupported || tickUnknownWarning) warnings.Add(tickNote!);
+            observationId = StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash,
+                ObservationSignature(signature, notes, warnings));
+            record = record with { ObservationId = observationId, Warnings = warnings.ToArray(), Notes = notes.ToArray() };
 
             // ── D6 active 진입(§18): READY 대표 후보 1개만 실제 시뮬 거래로 커밋한다. 거래 저장이 성공한 뒤에만
             // 후보를 ENTERED로 바꾸고 래치에 tombstone을 남기며, 실패하면 관측·래치도 갱신하지 않아 다음 poll이
@@ -377,11 +382,13 @@ public sealed class StructureAnalysisService(
                     candidateDtos = candidates.Select(StructureViewMapper.Candidate).ToArray();
                     summary = CandidateSelection.Summarize(candidates).ToString().ToUpperInvariant();
                 }
+                observationId = StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash,
+                    ObservationSignature(signature, notes, warnings));
                 record = record with
                 {
                     Detail = full ? "full" : "summary", CandidateSummary = summary, PreferredCandidateId = preferred,
                     Candidates = candidateDtos, Zones = full ? zoneDtos : null, Quality = full ? qualityDto : null,
-                    Notes = notes.ToArray()
+                    ObservationId = observationId, Warnings = warnings.ToArray(), Notes = notes.ToArray()
                 };
             }
 
@@ -604,6 +611,9 @@ public sealed class StructureAnalysisService(
 
     static bool IsTickDiagnostic(string code) => string.Equals(code, NotePriceTickUnsupported, StringComparison.Ordinal) ||
         string.Equals(code, NotePriceTickUnknown, StringComparison.Ordinal);
+
+    static string ObservationSignature(string eventSignature, IEnumerable<string> notes, IEnumerable<string> warnings) =>
+        $"{eventSignature}|notes={string.Join(',', notes.Order(StringComparer.Ordinal))}|warnings={string.Join(',', warnings.Order(StringComparer.Ordinal))}";
 
     StructureLayer BuildLayer(StructureSnapshot snapshot, DateTimeOffset cutoff, StructureSnapshotBuild build,
         ImmutableArray<PriceZone> previousZones, IEnumerable<string> retired)
