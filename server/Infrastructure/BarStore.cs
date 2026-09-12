@@ -3,10 +3,17 @@ using Astra.Server.Application;
 namespace Astra.Server.Infrastructure;
 
 /// <summary>봉 저장 파일 어댑터(#165 C5). `App_Data/bars` 아래에만 쓴다.</summary>
-public sealed class BarStore(IWebHostEnvironment env) : IBarStore
+public sealed class BarStore : IBarStore
 {
-    readonly string _root = Path.Combine(env.ContentRootPath, "App_Data", "bars");
+    readonly string _root;
     readonly SemaphoreSlim _gate = new(1, 1);
+
+    public BarStore(IWebHostEnvironment env) : this(Path.Combine(env.ContentRootPath, "App_Data", "bars"))
+    {
+    }
+
+    /// <summary>호스트 없이 도는 측정 진입점(#169 C5)이 쓰는 생성자.</summary>
+    public BarStore(string root) => _root = root ?? throw new ArgumentNullException(nameof(root));
 
     public async Task<string?> LastLineAsync(string day, string symbol, CancellationToken ct)
     {
@@ -66,6 +73,19 @@ public sealed class BarStore(IWebHostEnvironment env) : IBarStore
             if (!File.Exists(path)) return 0;
             var lines = await File.ReadAllLinesAsync(path, ct);
             return lines.Count(x => x.Length > 0);
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<IReadOnlyList<string>> ReadLinesAsync(string day, string symbol, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var path = FilePath(day, symbol);
+            if (!File.Exists(path)) return [];
+            var lines = await File.ReadAllLinesAsync(path, ct);
+            return lines.Where(x => x.Length > 0).ToArray();
         }
         finally { _gate.Release(); }
     }

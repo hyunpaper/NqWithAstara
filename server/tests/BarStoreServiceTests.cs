@@ -192,6 +192,9 @@ public sealed class BarStoreServiceTests
         public Task<int> CountLinesAsync(string day, string symbol, CancellationToken ct) =>
             Task.FromResult(Lines(day, symbol).Count);
 
+        public Task<IReadOnlyList<string>> ReadLinesAsync(string day, string symbol, CancellationToken ct) =>
+            Task.FromResult(Lines(day, symbol));
+
         public Task DeleteDayAsync(string day, CancellationToken ct)
         {
             foreach (var key in _files.Keys.Where(x => x.Day == day).ToArray()) _files.Remove(key);

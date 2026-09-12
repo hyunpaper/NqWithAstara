@@ -1,4 +1,5 @@
 ﻿using Astra.Server.Application;
+using Astra.Server.Application.Backtest;
 
 namespace Astra.Server.Api;
 
@@ -28,6 +29,7 @@ public static class ApiEndpoints
         app.MapGet("/api/metrics/{symbol}", MetricsAsync);
         app.MapGet("/api/liquidity/{symbol}", LiquidityAsync);
         app.MapGet("/api/structure/{symbol}", StructureAsync);
+        app.MapGet("/api/confluence/weights", ConfluenceWeights);
         app.MapGet("/api/confluence/{symbol}", ConfluenceAsync);
         app.MapPut("/api/positions/{symbol}", PutPositionAsync);
         app.MapDelete("/api/positions/{symbol}", async (string symbol, PositionService service, CancellationToken ct) => { await service.RemoveAsync(symbol, ct); return Results.NoContent(); });
@@ -41,6 +43,25 @@ public static class ApiEndpoints
     static async Task<IResult> StructureAsync(string symbol, StructureAnalysisService query, CancellationToken ct) { var result = await query.GetAsync(symbol, ct); return result.HttpStatus switch { 400 => Results.BadRequest(), 404 => Results.NotFound(), _ => Results.Ok(result.Response) }; }
     /// <summary>이슈 #167: 최신 컨플루언스 점수와 기법별 값. 조회가 계산을 유발하지 않는다(C1 1단계).</summary>
     static async Task<IResult> ConfluenceAsync(string symbol, ConfluenceService query, CancellationToken ct) { var result = await query.GetAsync(symbol, ct); return result.HttpStatus switch { 400 => Results.BadRequest(), 404 => Results.NotFound(), _ => Results.Ok(result.Response) }; }
+    /// <summary>이슈 #169: 기동 시 읽은 가중치 파일과 그 근거. 조회가 측정을 유발하지 않는다(C5).</summary>
+    static IResult ConfluenceWeights(ConfluenceWeightsDocument document) => Results.Ok(new
+    {
+        weightsVersion = document.WeightsVersion,
+        source = document.IsDefault ? "default" : "file",
+        measuredAt = document.MeasuredAt,
+        window = new { from = document.WindowFrom, to = document.WindowTo },
+        horizonBars = document.HorizonBars,
+        weights = document.Weights.ToDictionary(x => x.Key, x => new
+        {
+            w = x.Value.W,
+            n = x.Value.N,
+            hitRate = x.Value.HitRate,
+            ci = new[] { ConfluenceWeightsDocument.Finite(x.Value.CiLow), ConfluenceWeightsDocument.Finite(x.Value.CiHigh) },
+            brier = ConfluenceWeightsDocument.Finite(x.Value.Brier),
+            pValue = ConfluenceWeightsDocument.Finite(x.Value.PValue),
+            status = x.Value.Status
+        }, StringComparer.Ordinal)
+    });
     /// <summary>이슈 #28: additive 검증 보고서 조회. 읽기 전용이며 운영 진입/청산·점수·비용 정책을 바꾸지 않는다.</summary>
     static async Task<IResult> ValidationAsync(int? days, ValidationQueryService query, CancellationToken ct) { var result = await query.GetAsync(days, ct); return result.HttpStatus == 400 ? Results.BadRequest(new { message = $"days는 1~{ValidationQueryService.MaxWindowDays} 범위여야 합니다." }) : Results.Ok(result.Report); }
     /// <summary>이슈 #131: 저장된 실체결과 v5 관측의 대조 보고서. 조회가 Toss를 호출하지 않는다.</summary>
