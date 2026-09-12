@@ -180,6 +180,42 @@ public sealed class StructureTrendDirectionGateTests
         Assert.Null(candidate.EntryQuality);
     }
 
+    /// <summary>방향 게이트는 signedTrend 부호만 본다. 히스테리시스가 바꾸는 state label은 무관하다(§7, #148).</summary>
+    [Theory]
+    [InlineData("PULLBACK")]
+    [InlineData("BREAKOUT")]
+    public void TheDirectionGateReadsTheSignedTrendSignAndIgnoresTheStateLabel(string kind)
+    {
+        foreach (var state in States(kind))
+        {
+            Assert.Contains(SetupDetector.CodeTrendDirectionOpposesLong,
+                Only(kind, D2.Trend(state, -30, structureDirection: -.5)).RejectionCodes);
+            Assert.DoesNotContain(SetupDetector.CodeTrendDirectionOpposesLong,
+                Only(kind, D2.Trend(state, 30, structureDirection: .5)).RejectionCodes);
+        }
+    }
+
+    /// <summary>TREND_UNAVAILABLE은 추세 계산 가능 여부만 본다. state label과는 독립이다(§16B, #148).</summary>
+    [Theory]
+    [InlineData("PULLBACK")]
+    [InlineData("BREAKOUT")]
+    public void TheTrendUnavailableBlockerIsIndependentOfTheStateLabel(string kind)
+    {
+        foreach (var state in States(kind))
+            Assert.Contains(EntryQualityEvaluator.ReasonTrendUnavailable,
+                Only(kind, D2.Trend(state, null, structureDirection: null,
+                    readyBlockers: TrendEvaluator.BlockerTrendUnavailable)).RejectionCodes);
+
+        foreach (var state in States(kind))
+            Assert.DoesNotContain(EntryQualityEvaluator.ReasonTrendUnavailable,
+                Only(kind, D2.Trend(state, 30, structureDirection: .5)).RejectionCodes);
+    }
+
+    /// <summary>PULLBACK은 state 게이트를 따로 갖고 있으므로 그 게이트를 통과하는 label만 비교 대상이다(§8).</summary>
+    static TrendState[] States(string kind) => kind == "PULLBACK"
+        ? [TrendState.Up, TrendState.Transition]
+        : [TrendState.Up, TrendState.Down, TrendState.Range, TrendState.Transition, TrendState.Unknown];
+
     [Fact]
     public void TheDirectionRejectionCodeIsDeterministicAndRidesTheCandidateFingerprint()
     {
