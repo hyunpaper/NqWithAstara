@@ -15,8 +15,9 @@ public sealed class StructureEntryGateTests
     sealed record Harness(StructureAnalysisService Structure, RecordingStore Store, MemoryObservationStore Observations,
         MonitorRuntimeState Runtime, GateClock Clock, CountingEntryPort Entries, long Generation, MarketSession Session);
 
-    static Harness Build(StructureEngineMode mode, MarketSession? session = null)
+    static Harness Build(StructureEngineMode mode, MarketSession? session = null, StructurePolicy? policy = null)
     {
+        var activePolicy = policy ?? P;
         var market = session ?? D6.Session;
         var clock = new GateClock(Fx.At(60));
         var store = new RecordingStore();
@@ -24,8 +25,8 @@ public sealed class StructureEntryGateTests
         var observations = new MemoryObservationStore();
         var runtime = new MonitorRuntimeState();
         var entries = new CountingEntryPort(new StructuralTradeEntryService(store));
-        var structure = new StructureAnalysisService(store, new StructureObservationWriter(observations, P), runtime,
-            clock, new SilentDiagnostics(), new StructureEngineOptions(mode), P, entries);
+        var structure = new StructureAnalysisService(store, new StructureObservationWriter(observations, activePolicy), runtime,
+            clock, new SilentDiagnostics(), new StructureEngineOptions(mode), activePolicy, entries);
         var generation = runtime.CommitStart();
         runtime.TryCommit(generation, s => s with { Market = market });
         return new Harness(structure, store, observations, runtime, clock, entries, generation, market);
@@ -162,6 +163,36 @@ public sealed class StructureEntryGateTests
         Assert.DoesNotContain(StructureAnalysisService.NotePriceTickUnknown, view.Warnings);
         Assert.All(view.Candidates, x => Assert.DoesNotContain(StructuralPlanner.UnsupportedPriceTick, x.RejectionCodes));
         Assert.True(harness.Store.Trades.Count == 1, Describe(view));
+    }
+
+    [Fact]
+    public async Task ConsecutiveUnknownTickPollsEscalateToWarningWithoutBlockingTheEntry()
+    {
+        var harness = Build(StructureEngineMode.Active, policy: P with { PriceTickUnknownWarningPolls = 3 });
+        await ObserveAt(harness, 64, liquidity: null);
+        await ObserveAt(harness, 65, liquidity: null);
+        var second = Published(harness);
+        Assert.Contains(StructureAnalysisService.NotePriceTickUnknown, second.Notes);
+        Assert.DoesNotContain(StructureAnalysisService.NotePriceTickUnknown, second.Warnings);
+
+        await ObserveAt(harness, 65, liquidity: null);
+        var third = Published(harness);
+        Assert.Contains(StructureAnalysisService.NotePriceTickUnknown, third.Warnings);
+        Assert.True(harness.Store.Trades.Count == 1, Describe(third));
+    }
+
+    [Fact]
+    public async Task AVerifiedBookResetsTheUnknownTickWarningSequence()
+    {
+        var harness = Build(StructureEngineMode.Active, policy: P with { PriceTickUnknownWarningPolls = 3 });
+        await ObserveAt(harness, 64, liquidity: null);
+        await ObserveAt(harness, 65, liquidity: null);
+        await ObserveAt(harness, 65, liquidity: new StructureLiquidity(99.60m, 99.61m, Fx.At(65)));
+        await ObserveAt(harness, 65, liquidity: null);
+
+        var view = Published(harness);
+        Assert.Contains(StructureAnalysisService.NotePriceTickUnknown, view.Notes);
+        Assert.DoesNotContain(StructureAnalysisService.NotePriceTickUnknown, view.Warnings);
     }
 
     [Fact]

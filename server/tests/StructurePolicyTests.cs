@@ -25,6 +25,7 @@ public sealed class StructurePolicyTests
         {
             StructurePolicy.Default with { ZoneEligibilityStrength = .36 },
             StructurePolicy.Default with { PriceTick = .05m },
+            StructurePolicy.Default with { PriceTickUnknownWarningPolls = 4 },
             StructurePolicy.Default with { ProfileMaxBins = 401 },
             StructurePolicy.Default with { ReactionWindowBars = 6 },
             StructurePolicy.Default with { MinimumNetR = 1.3 },
@@ -69,6 +70,7 @@ public sealed class StructurePolicyTests
         Assert.Equal(30, p.BreakoutCooldownMinutes);
         Assert.Equal(20L * 1024 * 1024, p.ObservationDailyByteLimit);
         Assert.Equal(.01m, p.PriceTick);
+        Assert.Equal(3, p.PriceTickUnknownWarningPolls);
         Assert.Equal(400, p.ProfileMaxBins);
         Assert.Equal(.15, p.ZoneHalfWidthAtrFactor);
         Assert.Equal(390, p.RecencyTradingMinutes);

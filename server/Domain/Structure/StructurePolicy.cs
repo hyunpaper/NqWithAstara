@@ -51,6 +51,7 @@ public sealed record StructurePolicy
     // ── 가격 단위 (§16A 표, §16B 비용·가격 단위) ──
     public decimal PriceTick { get; init; } = .01m;
     public decimal MinimumSupportedPrice { get; init; } = 1.00m;
+    public int PriceTickUnknownWarningPolls { get; init; } = 3;
     public double RoundTripFeePercent { get; init; } = .2;
 
     // ── 봉 집계 (§5.2) ──
