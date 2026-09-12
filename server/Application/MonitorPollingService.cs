@@ -98,7 +98,9 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
             var entries = !v4OwnsNewEntries
                 ? Array.Empty<SimulationEntry>()
                 : kinds.Select(k => { var plan = PriceLevels.Enter(quote.Price, 1, result.Indicators.Atr, levels); return new SimulationEntry(k, quote.Price, plan.Target ?? quote.Price, plan.Stop ?? quote.Price, plan.TargetBasis, plan.StopBasis, score, Math.Round(ext, 2), Math.Round(result.Indicators.RelativeVolume, 2), buyShare, Math.Round(result.Indicators.Rsi, 1), reasons, clock.GetUtcNow(), market.End, bar.Timestamp); }).ToArray();
-            if (!await UpdateTrades(gen, t => SimulationEngine.Process(t, item.Symbol, bars, quote.Price, quote.At, score, result.Indicators.Vwap, entries), token,
+            // 이슈 #106: 이 poll에서 종결된 거래가 있으면 같은 틱이 v5 신규 진입가가 되지 않도록 아래로 전달한다.
+            var exited = false;
+            if (!await UpdateTrades(gen, t => { var next = SimulationEngine.Process(t, item.Symbol, bars, quote.Price, quote.At, score, result.Indicators.Vwap, entries); exited = ClosedInThisPoll(t, next, item.Symbol); return next; }, token,
                     () => clock.GetLocalNow() < market.End && clock.GetLocalNow() - quote.At <= TimeSpan.FromMinutes(3) && (entries.Length == 0 || market.End - clock.GetLocalNow() >= TimeSpan.FromMinutes(40)))) return PollOutcome.Ignored;
             if (!runtime.TryCommit(gen, () =>
             {
@@ -109,7 +111,7 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
             var view = new SignalView(item.Symbol, item.Name, quote.Price, Math.Round((quote.Price / bars[0].Open - 1) * 100, 2), score, action, reasons, quote.At, false, ind, chart, pos, result.Indicators.Atr, st.Display, st.DisplayAt, bt.Display, bt.DisplayAt); runtime.TryCommit(gen, () => Signals[item.Symbol] = view);
             // ── v5 구조 엔진(설계 §12): v4 결과·저장은 위에서 이미 확정됐다. 아래는 별도 경로이며 v4 값을 읽지도 바꾸지도 않는다.
             // off는 계산을 유발하지 않고, shadow는 관측만 한다. 오류는 종목 단위로 격리해 v4 신호를 훼손하지 않는다(§16).
-            await ObserveStructureAsync(item.Symbol, all, daily, quote, market, gen, token);
+            await ObserveStructureAsync(item.Symbol, all, daily, quote, market, gen, exited, token);
             return PollOutcome.Ok;
         }
         catch (Exception ex) { diagnostics.MarketDataFailed(item.Symbol, "poll", ex); runtime.TryCommit(gen, () => Signals.TryRemove(item.Symbol, out _)); return PollOutcome.Failed; }
@@ -122,7 +124,8 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
     /// v5 계산·저장·호가 조회 실패는 v4 신호·거래·알림에 영향을 주지 않도록 종목 단위로 격리한다.
     /// </summary>
     async Task ObserveStructureAsync(string symbol, IReadOnlyList<Candle> bars, IReadOnlyList<Candle>? daily,
-        (double Price, DateTimeOffset At) quote, MarketSession market, long gen, CancellationToken ct)
+        (double Price, DateTimeOffset At) quote, MarketSession market, long gen, bool exitedThisPoll,
+        CancellationToken ct)
     {
         // off는 계산도 조회도 유발하지 않는다(§16B 모드 게이트) — 호가 조회는 이 줄 아래에서만 일어난다.
         if (structure is null || structure.Mode == StructureEngineMode.Off) return;
@@ -131,7 +134,7 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
             // 미배선 시절과 동일하게 동작하도록 feed가 없으면 결측(null)이다. 추정 spread를 만들지 않는다.
             var book = liquidity is null ? null : await liquidity.TryGetAsync(symbol, ct);
             await structure.ObserveAsync(new StructureObservationRequest(symbol, gen, market, bars, daily,
-                quote.Price, quote.At, book), ct);
+                quote.Price, quote.At, book, exitedThisPoll), ct);
         }
         catch (Exception ex) { diagnostics.MarketDataFailed(symbol, "structure-v5", ex); }
     }
@@ -173,6 +176,13 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
             foreach (var (symbol, bars) in fetched) current = SimulationEngine.ReplayBars(current, symbol, bars);
             return SimulationEngine.CloseExpiredSessions(current, clock.GetUtcNow());
         }, ct);
+    }
+    // 이슈 #106: 이 poll에서 OPEN이던 이 심볼의 거래가 종결됐는지. 봉 replay·틱 청산 어느 경로든 종결이면 참이다.
+    static bool ClosedInThisPoll(IReadOnlyList<SimTrade> before, IReadOnlyList<SimTrade> after, string symbol)
+    {
+        var open = before.Where(x => x.Status == "OPEN" && x.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase))
+            .Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
+        return open.Count > 0 && after.Any(x => x.Status != "OPEN" && open.Contains(x.Id));
     }
     static bool ValidBar(Candle x) => double.IsFinite(x.Open) && double.IsFinite(x.High) && double.IsFinite(x.Low) && double.IsFinite(x.Close) && double.IsFinite(x.Volume) && x.Open > 0 && x.High > 0 && x.Low > 0 && x.Close > 0 && x.Volume >= 0 && x.High >= Math.Max(x.Open, x.Close) && x.Low <= Math.Min(x.Open, x.Close) && x.High >= x.Low;
     enum PollOutcome { Ignored, Ok, Warmup, Invalid, Failed }
