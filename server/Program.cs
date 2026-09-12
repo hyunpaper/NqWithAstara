@@ -11,6 +11,7 @@ builder.Services.AddSingleton(_ => new HttpClient { BaseAddress = new Uri("https
 builder.Services.AddSingleton<TossClient>(); builder.Services.AddSingleton<TossMarketDataGateway>(); builder.Services.AddSingleton<IMarketDataGateway>(x => x.GetRequiredService<TossMarketDataGateway>());
 builder.Services.AddSingleton<IOrderBookGateway>(x => x.GetRequiredService<TossMarketDataGateway>());
 builder.Services.AddSingleton<IMonitorDiagnostics, MonitorDiagnostics>();
+builder.Services.AddSingleton<TickFlowTape>(); builder.Services.AddSingleton<TradeTapeFallbackService>();
 builder.Services.AddSingleton<TossStreamService>(); builder.Services.AddSingleton<IRealtimeMarketStream>(x => x.GetRequiredService<TossStreamService>());
 // v5 구조 엔진(설계 §18): 설정 StructureEngineMode=off|shadow|active, 기본 off. off는 계산을 유발하지 않는다.
 builder.Services.AddSingleton(Astra.Server.Domain.Structure.StructurePolicy.Default);
