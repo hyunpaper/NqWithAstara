@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
 using Astra.Server.Domain.Structure;
@@ -18,7 +18,7 @@ public sealed record StructureObservationRecord(string ObservationId, string Rec
     DateTimeOffset LastCompletedBarStart, string PolicyHash, string EngineVersion, string Mode, string EntryOwner,
     string Detail, string Status, string CandidateSummary, string? PreferredCandidateId, StructureTrendDto? Trend,
     StructureQualityDto? Quality, StructureZoneDto[]? Zones, StructureCandidateDto[] Candidates,
-    string[] Warnings, string[] Notes);
+    string[] Warnings, string[] Notes, ConfluenceDto? Confluence = null);
 
 public sealed record ObservationWriteResult(bool Written, bool Duplicate, bool Limited, long FileBytes,
     bool Core = false, bool ZonesOmitted = false, bool CoreLimited = false,
