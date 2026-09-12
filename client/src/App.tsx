@@ -1150,7 +1150,6 @@ export default function App() {
               <>
                 <div className="stock-head">
                   <div>
-                    <div className="eyebrow">미국 주식</div>
                     <h2>{signal.symbol}</h2>
                   </div>
                   <div className="big-price">
@@ -2022,7 +2021,6 @@ function PendingStock({
     <>
       <div className="stock-head">
         <div>
-          <div className="eyebrow">미국 주식</div>
           <h2>{stock.symbol}</h2>
         </div>
         <div className="muted">시세 대기 중</div>
