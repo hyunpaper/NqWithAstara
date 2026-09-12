@@ -113,11 +113,16 @@ B-1(동일 targetZoneId 세션 내 소비)·#47 쿨다운 키 kind 제거 판단
 | `missingLiquidity = true` | 호가가 없어 **spread=0으로 가정**하고 자격을 평가했다(현 운영 정책, 이 이슈에서 바꾸지 않는다) |
 | `trend.state` 없음 | 추세 미수집. 추세 코호트에서 별도 집단으로 분리된다 |
 | `detail = "summary"` | Zone 배열·품질 상세가 없다(§16). 근거 재현 범위가 좁다 |
+| `WidthFromTickOnly` | 1.0.2609.1201부터 가격선 반폭 생성 시 ATR이 없어서 tick 하한만 쓴 경우를 뜻한다. 일봉 context level은 세션 최초 사용 가능 ATR이 생기면 그 ATR 폭으로 재계산되며 이 플래그를 붙이지 않는다 |
 
 호가는 **결측 / 관측된 0 스프레드 / 관측된 양수 스프레드** 세 집단으로 나눈다. 결측과 "실제로 0"을 합치면
 비용 가정의 효과가 보이지 않는다.
 
-### 3.3 시간 규율
+### 3.3 §6.3 C-2 daily 폭 예외
+
+C-2. 일봉 context level은 세션 시작 전 이미 알려진 원천이지만, 장 초반에는 1분 ATR14가 아직 없다. ATR이 없을 때는 tick 하한 반폭과 `WidthFromTickOnly`로 노출하고, 세션 최초 사용 가능 ATR이 생긴 뒤에는 `0.15·ATR_first` 반폭으로 확장해 `WidthFromTickOnly`를 제거한다. 병합 간격과 `maxWidth`는 여전히 cutoff ATR 기준이며, 확장된 daily zone과 인접 pivot zone의 합산 폭이 `maxWidth`를 넘으면 병합하지 않는다.
+
+### 3.4 시간 규율
 
 - `observedAt` 또는 `analysisAsOf`가 `AsOf`보다 뒤인 관측은 **입력에서 제외**한다.
 - `enteredAt`이 `AsOf`보다 뒤인 거래는 **연결하지 않는다**(그 시점에는 진입하지 않은 것이다).
@@ -126,7 +131,7 @@ B-1(동일 targetZoneId 세션 내 소비)·#47 쿨다운 키 kind 제거 판단
 - 학습/검증 분리는 **New York 거래일 단위 anchored walk-forward**다. 한 세션이 두 구간에 동시에 들어가지 않고,
   검증 구간의 모든 거래일은 학습 구간보다 뒤다. 세션이 `folds+1`개 미만이면 fold를 만들지 않고 검증 불가로 보고한다.
 
-### 3.4 보존 한계 (표본이 좋아 보여도 사라지지 않는다)
+### 3.5 보존 한계 (표본이 좋아 보여도 사라지지 않는다)
 
 | 한계 코드 | 내용 |
 |---|---|
