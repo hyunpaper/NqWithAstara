@@ -337,44 +337,76 @@ public sealed class StructureZoneBuilderTests
         Assert.Equal(100.41m, lineZones[0].Upper);
     }
 
-    [Fact]
-    public void DailyContextLevelsAt103WithObservedAtr049UseAtrWidthTickFlagOnlyWhenMissingAndRespectMaxWidthBoundary()
-    {
-        var daily = ImmutableArray.Create(
-            new StructureDailyBar(new DateOnly(2026, 9, 8), 99.34m, 103.00m, 85.14m, 100.32m, 1_000_000));
-        var bars = Enumerable.Range(0, 20)
-            .Select(i => Fx.Bar(i, 100.00m, 100.245m, 99.755m, 100.00m))
-            .ToImmutableArray();
+    static ImmutableArray<StructureBar> SessionWithLateSwingHigh(decimal lateSwingHigh) =>
+        Enumerable.Range(0, 25).Select(i => i switch
+        {
+            18 => Fx.Steady(i, 102.70m, 103.18m, 102.80m, 0),
+            22 => Fx.Steady(i, lateSwingHigh - .48m, lateSwingHigh, 102.80m, 0),
+            _ => Fx.Steady(i, 102.52m, 103.00m, 102.80m, 0)
+        }).ToImmutableArray();
 
-        var early = ZoneBuilder.Build(ZoneBuildRequest.Create(Fx.Symbol, Fx.SessionStart, Fx.SessionEnd,
-            Fx.At(10), bars, ImmutableArray<StructureBar>.Empty, daily), P);
+    static ZoneBuildResult BuildAt103(int cutoffMinute, decimal lateSwingHigh) =>
+        ZoneBuilder.Build(ZoneBuildRequest.Create(Fx.Symbol, Fx.SessionStart, Fx.SessionEnd, Fx.At(cutoffMinute),
+            SessionWithLateSwingHigh(lateSwingHigh), ImmutableArray<StructureBar>.Empty,
+            ImmutableArray.Create(new StructureDailyBar(new DateOnly(2026, 9, 8),
+                99.34m, 103.00m, 85.14m, 100.32m, 1_000_000))), P);
+
+    [Fact]
+    public void DailyContextLevelUsesTickWidthUntilTheSessionHasAnAtrAndThenTheAtrHalfWidth()
+    {
+        var early = BuildAt103(10, 103.22m);
+        Assert.Null(early.Atr1mAtCutoff);
         var earlyDailyHigh = early.Zones.Single(x => x.Sources.Any(s => s.Kind == "daily-H"));
         Assert.Contains("WidthFromTickOnly", earlyDailyHigh.ApproximationFlags);
         Assert.Equal(102.99m, earlyDailyHigh.Lower);
         Assert.Equal(103.01m, earlyDailyHigh.Upper);
 
-        var afterAtrSeed = ZoneBuilder.Build(ZoneBuildRequest.Create(Fx.Symbol, Fx.SessionStart, Fx.SessionEnd,
-            Fx.At(20), bars, ImmutableArray<StructureBar>.Empty, daily), P);
-        var dailyHigh = afterAtrSeed.Zones.Single(x => x.Sources.Any(s => s.Kind == "daily-H"));
-        Assert.DoesNotContain("WidthFromTickOnly", dailyHigh.ApproximationFlags);
-        Assert.Equal(102.93m, dailyHigh.Lower);
-        Assert.Equal(103.07m, dailyHigh.Upper);
-        Assert.Equal(Fx.SessionStart, dailyHigh.Sources.Single(s => s.Kind == "daily-H").ConfirmedAt);
+        var late = BuildAt103(25, 103.22m);
+        Assert.Equal(.48, late.Atr1mAtCutoff!.Value, 6);
+        var dailyHighSource = late.Zones
+            .SelectMany(x => x.Sources).Single(s => s.Kind == "daily-H");
+        Assert.Equal(Fx.SessionStart, dailyHighSource.ConfirmedAt);
+        Assert.Equal(.07m, ZoneBuilder.HalfWidth(late.Atr1mAtCutoff, P));
+        Assert.All(late.Zones.Where(x => !x.ProfileOnly),
+            z => Assert.DoesNotContain("WidthFromTickOnly", z.ApproximationFlags));
+    }
 
-        var dailyCandidate = Line(103.00m, .07m, Fx.Daily("2026-09-08-H", 103.00m));
-        var mergeablePivot = Line(103.17m, .10m, Fx.Pivot("adjacent-within-max-width", 103.17m, 15, 17));
-        var tooWidePivot = Line(103.26m, .18m, Fx.Pivot("adjacent-over-max-width", 103.26m, 15, 17));
+    [Fact]
+    public void AtrWidenedDailyZoneMergesWithAdjacentPivotZonesExactlyUpToTheMaxWidthCap()
+    {
+        var built = BuildAt103(25, 103.22m);
+        var maxWidth = StructureMath.ScaledFloor(P.ZoneMergeMaxWidthFloor, P.ZoneMergeMaxWidthAtrFactor,
+            built.Atr1mAtCutoff);
+        Assert.Equal(.36m, StructureMath.RoundToCent(maxWidth));
 
-        var merged = ZoneBuilder.Assemble([dailyCandidate, mergeablePivot], Request(20), .49, P).Zones;
-        var mergedZone = Assert.Single(merged);
-        Assert.Equal(102.93m, mergedZone.Lower);
-        Assert.Equal(103.27m, mergedZone.Upper);
-        Assert.Contains(mergedZone.Sources, x => x.Kind == "daily-L");
-        Assert.Contains(mergedZone.Sources, x => x.Kind == "pivot-1m-L");
+        var zone = built.Zones.Single(x => x.Sources.Any(s => s.Kind == "daily-H"));
+        Assert.Equal(102.93m, zone.Lower);
+        Assert.Equal(103.29m, zone.Upper);
+        Assert.Equal(.36m, zone.Width);
+        Assert.True(zone.Width <= maxWidth);
+        Assert.True(zone.Width + P.PriceTick > maxWidth);
+        Assert.Contains(zone.Sources, x => x.Kind == "pivot-1m-H" && x.Price == 103.18m);
+        Assert.Contains(zone.Sources, x => x.Kind == "pivot-1m-H" && x.Price == 103.22m);
+    }
 
-        var split = ZoneBuilder.Assemble([dailyCandidate, tooWidePivot], Request(20), .49, P).Zones;
-        Assert.Equal(2, split.Length);
-        Assert.Contains(split, x => x.Lower == 102.93m && x.Upper == 103.07m);
-        Assert.Contains(split, x => x.Lower == 103.08m && x.Upper == 103.44m);
+    [Fact]
+    public void AtrWidenedDailyZoneSplitsFromTheAdjacentPivotZoneOneTickBeyondTheMaxWidthCap()
+    {
+        var built = BuildAt103(25, 103.23m);
+        var maxWidth = StructureMath.ScaledFloor(P.ZoneMergeMaxWidthFloor, P.ZoneMergeMaxWidthAtrFactor,
+            built.Atr1mAtCutoff);
+
+        var dailyZone = built.Zones.Single(x => x.Sources.Any(s => s.Kind == "daily-H"));
+        Assert.Equal(102.93m, dailyZone.Lower);
+        Assert.Equal(103.25m, dailyZone.Upper);
+        Assert.Contains(dailyZone.Sources, x => x.Kind == "pivot-1m-H" && x.Price == 103.18m);
+
+        var lateZone = built.Zones.Single(x => x.Sources.Any(s => s.Price == 103.23m));
+        Assert.Equal(103.16m, lateZone.Lower);
+        Assert.Equal(103.30m, lateZone.Upper);
+        Assert.DoesNotContain(lateZone.Sources, x => x.Kind == "daily-H");
+        Assert.Equal(.37m, lateZone.Upper - dailyZone.Lower);
+        Assert.True(lateZone.Upper - dailyZone.Lower > maxWidth);
+        Assert.True(lateZone.Upper - dailyZone.Lower - P.PriceTick <= maxWidth);
     }
 }
