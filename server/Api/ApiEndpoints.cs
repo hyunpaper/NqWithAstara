@@ -31,6 +31,17 @@ public static class ApiEndpoints
         app.MapGet("/api/structure/{symbol}", StructureAsync);
         app.MapGet("/api/confluence/weights", ConfluenceWeights);
         app.MapGet("/api/confluence/{symbol}", ConfluenceAsync);
+        app.MapPost("/api/replays", StartReplayAsync);
+        app.MapGet("/api/replays/latest", async (HistoricalReplayService service) =>
+        {
+            var run = await service.LatestAsync();
+            return run is null ? Results.NotFound(new { message = "저장된 과거 replay가 없습니다." }) : Results.Ok(run);
+        });
+        app.MapGet("/api/replays/{id}", async (string id, HistoricalReplayService service) =>
+        {
+            var run = await service.GetAsync(id);
+            return run is null ? Results.NotFound(new { message = "과거 replay 작업을 찾을 수 없습니다." }) : Results.Ok(run);
+        });
         app.MapPut("/api/positions/{symbol}", PutPositionAsync);
         app.MapDelete("/api/positions/{symbol}", async (string symbol, PositionService service, CancellationToken ct) => { await service.RemoveAsync(symbol, ct); return Results.NoContent(); });
         app.Map("/api/{**path}", () => Results.NotFound(new { message = "API endpoint not found." })); return app;
@@ -62,6 +73,17 @@ public static class ApiEndpoints
             status = x.Value.Status
         }, StringComparer.Ordinal)
     });
+    static async Task<IResult> StartReplayAsync(HistoricalReplayRequest? request, HistoricalReplayService service,
+        CancellationToken ct)
+    {
+        var result = await service.StartAsync(request, ct);
+        return result.HttpStatus switch
+        {
+            202 => Results.Accepted($"/api/replays/{result.Run!.Id}", result.Run),
+            409 => Results.Conflict(new { message = result.Message }),
+            _ => Results.BadRequest(new { message = result.Message })
+        };
+    }
     /// <summary>이슈 #28: additive 검증 보고서 조회. 읽기 전용이며 운영 진입/청산·점수·비용 정책을 바꾸지 않는다.</summary>
     static async Task<IResult> ValidationAsync(int? days, ValidationQueryService query, CancellationToken ct) { var result = await query.GetAsync(days, ct); return result.HttpStatus == 400 ? Results.BadRequest(new { message = $"days는 1~{ValidationQueryService.MaxWindowDays} 범위여야 합니다." }) : Results.Ok(result.Report); }
     /// <summary>이슈 #131: 저장된 실체결과 v5 관측의 대조 보고서. 조회가 Toss를 호출하지 않는다.</summary>

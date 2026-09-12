@@ -103,3 +103,13 @@ public sealed class BarStore : IBarStore
 
     string FilePath(string day, string symbol) => Path.Combine(_root, day, symbol.ToUpperInvariant() + ".jsonl");
 }
+
+public sealed class ReplayBarStoreFactory : IReplayBarStoreFactory
+{
+    public IBarStore Create(string root) => new BarStore(root);
+}
+
+public sealed class ReplayWorkspace(IWebHostEnvironment environment) : IReplayWorkspace
+{
+    public string Root => Path.Combine(environment.ContentRootPath, "App_Data");
+}

@@ -7,6 +7,7 @@ import {
   BellOff,
   ChevronRight,
   Gauge,
+  History,
   LayoutDashboard,
   Layers,
   PanelLeftClose,
@@ -62,6 +63,7 @@ import {
 import { scoreBadge, scoreBadgeTitle } from "./newsFormat";
 import ConfluencePanel from "./ConfluencePanel";
 import { gaugeTone, scoreText2 } from "./confluenceFormat";
+import HistoricalReplayPanel from "./HistoricalReplayPanel";
 
 type Bar = { time: string; close: number; ema?: number; vwap?: number };
 type Indicators = {
@@ -426,7 +428,7 @@ export default function App() {
     [notice, setNotice] = useState(""),
     // v5 구조 분석은 실시간 시그널 화면과 섞지 않고 별도 뷰로 분리한다(설계 §13, §19-10).
     // 이슈 #128: 새로고침 후에도 화면을 유지하기 위해 URL hash에서 초기값을 읽는다.
-    [view, setView] = useState<"live" | "dash" | "structure">(
+    [view, setView] = useState<"live" | "dash" | "structure" | "replay">(
       () => parseViewHash(window.location.hash).view,
     ),
     // 이슈 #26: 라이브 목록 정렬 선택(모드별 유효성은 resolveSortKey가 판정). localStorage에 저장.
@@ -926,6 +928,8 @@ export default function App() {
               <h1>
                 {view === "dash"
                   ? "시뮬레이션 대시보드"
+                  : view === "replay"
+                    ? "과거 검증"
                   : view === "structure"
                     ? "구조 분석 (v5)"
                     : "실시간 시그널"}
@@ -934,6 +938,8 @@ export default function App() {
               <p>
                 {view === "dash"
                   ? "청산 실적 요약"
+                  : view === "replay"
+                    ? "기간 지정 가상 replay"
                   : view === "structure"
                     ? "종목별 추세 · 후보 · 계획"
                     : "미국 정규장 · 조건 기반 모니터링"}
@@ -954,6 +960,13 @@ export default function App() {
               <span />
               {state?.market.label || "시장 상태 확인 중"}
             </div>
+            <button
+              className={`theme ${view === "replay" ? "alert-toggle on" : ""}`}
+              title={view === "replay" ? "실시간 시그널로 돌아가기" : "과거 검증"}
+              onClick={() => setView(view === "replay" ? "live" : "replay")}
+            >
+              {view === "replay" ? <Activity size={18} /> : <History size={18} />}
+            </button>
             <button
               className={`start ${state?.running ? "stop" : ""}`}
               disabled={busy || !state}
@@ -1038,6 +1051,7 @@ export default function App() {
           </div>
         )}
         {view === "dash" && <Dashboard />}
+        {view === "replay" && <HistoricalReplayPanel />}
         {view === "structure" && (
           <StructurePanel
             watchlist={state?.watchlist ?? []}
