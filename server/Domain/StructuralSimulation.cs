@@ -19,7 +19,12 @@ public enum StructuralEntryOutcome
     /// <summary>해당 종목에 OPEN 거래가 있다. 한 종목 OPEN 하나 제한은 버전 공통이다(§18).</summary>
     BlockedByOpenTrade,
     /// <summary>동결 계획의 가격 순서(0 &lt; Stop &lt; Entry &lt; Target)가 성립하지 않는다. 거래를 만들지 않는다.</summary>
-    InvalidPlan
+    InvalidPlan,
+    /// <summary>
+    /// 같은 심볼·같은 세션의 최신 STOP 청산 이후 완료 봉이 <see cref="StructurePolicy.StopReentryCooldownBars"/>개에
+    /// 못 미친다(§10 손절 후 재진입 제한). 거래를 만들지 않는다.
+    /// </summary>
+    BlockedByStopCooldown
 }
 
 /// <summary>
@@ -27,7 +32,8 @@ public enum StructuralEntryOutcome
 /// 다른 어디서도 만들지 않는다. EnteredAt/SessionEnd는 Application이 명시적으로 전달한다(§4).
 /// </summary>
 public sealed record StructuralEntryRequest(string Symbol, DateTimeOffset TriggerBarStart,
-    DateTimeOffset EnteredAt, DateTimeOffset SessionEnd, FrozenStructureContext Context);
+    DateTimeOffset EnteredAt, DateTimeOffset SessionEnd, FrozenStructureContext Context,
+    IReadOnlyList<DateTimeOffset>? CompletedBarStarts = null, DateTimeOffset? SessionStart = null);
 
 public sealed record StructuralEntryResult(List<SimTrade> Trades, StructuralEntryOutcome Outcome, SimTrade? Trade);
 
@@ -76,7 +82,8 @@ public static class StructuralSimulation
     /// 같은 EntryEventId는 다시 진입하지 않고(재시작·저장 실패 재시도 멱등성), 종목당 OPEN 1개 제한은 v4/v5 공통이며,
     /// Score에는 EntryQuality를 끼워 넣지 않는다(§11 "Score는 과거 의미 보존"). Logic은 계획의 EngineVersion이다.
     /// </summary>
-    public static StructuralEntryResult Enter(IReadOnlyList<SimTrade> source, StructuralEntryRequest request)
+    public static StructuralEntryResult Enter(IReadOnlyList<SimTrade> source, StructuralEntryRequest request,
+        StructurePolicy? policy = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(request);
@@ -88,6 +95,9 @@ public static class StructuralSimulation
 
         if (trades.Any(x => x.Symbol.Equals(request.Symbol, StringComparison.OrdinalIgnoreCase) && x.Status == "OPEN"))
             return new StructuralEntryResult(trades, StructuralEntryOutcome.BlockedByOpenTrade, null);
+
+        if (StopCooldownActive(trades, request, (policy ?? StructurePolicy.Default).StopReentryCooldownBars))
+            return new StructuralEntryResult(trades, StructuralEntryOutcome.BlockedByStopCooldown, null);
 
         var plan = request.Context.PlanSnapshot;
         var entry = (double)plan.EntryReference;
@@ -112,5 +122,32 @@ public static class StructuralSimulation
                 "UNOBSERVED", null));
         trades.Add(trade);
         return new StructuralEntryResult(trades, StructuralEntryOutcome.Entered, trade);
+    }
+
+    /// <summary>
+    /// §10 손절 후 재진입 제한. 같은 심볼의 최신 STOP 청산이 일어난 완료 봉을 0번째로 세어, 트리거 봉이 그 봉으로부터
+    /// cooldownBars개 뒤에 오기 전까지 차단한다(= 청산 봉 이후 닫힌 완료 봉이 cooldownBars개 미만이면 차단).
+    /// 시계를 보지 않고 요청이 준 완료 봉 시각만 센다. ExitAt이 없는 legacy 거래, 이전 세션의 청산, 완료 봉 근거가
+    /// 없는 요청은 차단 근거로 쓰지 않는다.
+    /// </summary>
+    static bool StopCooldownActive(List<SimTrade> trades, StructuralEntryRequest request, int cooldownBars)
+    {
+        if (cooldownBars <= 0 || request.CompletedBarStarts is not { Count: > 0 } bars) return false;
+
+        DateTimeOffset? latestStop = null;
+        foreach (var trade in trades)
+        {
+            if (!trade.Symbol.Equals(request.Symbol, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!string.Equals(trade.Status, "STOP", StringComparison.Ordinal)) continue;
+            if (trade.ExitAt is not { } exit) continue;
+            if (latestStop is null || exit > latestStop) latestStop = exit;
+        }
+        if (latestStop is not { } stoppedAt) return false;
+        if (request.SessionStart is { } sessionStart && stoppedAt < sessionStart) return false;
+
+        var stopBarStart = new DateTimeOffset(stoppedAt.Year, stoppedAt.Month, stoppedAt.Day, stoppedAt.Hour,
+            stoppedAt.Minute, 0, stoppedAt.Offset);
+        var completed = bars.Count(x => x > stopBarStart && x <= request.TriggerBarStart);
+        return completed < cooldownBars;
     }
 }
