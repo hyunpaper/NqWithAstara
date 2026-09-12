@@ -57,17 +57,65 @@ public sealed record ConfluencePolicy
     public double AdxScoreScale { get; init; } = 50;
     public double AdxLowConfidence { get; init; } = .4;
 
+    // ── 2군 기법 파라미터 (C3-2, #170) ──
+
+    /// <summary>캔들 확인 점수 — 강세 장악형·망치·핀바 순. 성과로 탐색한 값이 아니다.</summary>
+    public double CandleEngulfingScore { get; init; } = .6;
+    public double CandleHammerScore { get; init; } = .5;
+    public double CandlePinBarScore { get; init; } = .4;
+
+    /// <summary>선행 하락 조건 — 패턴 봉의 저가가 직전 N봉 최저를 갱신해야 한다.</summary>
+    public int CandlePriorLowLookbackBars { get; init; } = 5;
+
+    /// <summary>몸통이 ATR의 이 비율 미만이면 confidence를 낮춘다(zone 근접을 알 수 없는 대체 기준).</summary>
+    public double CandleBodyAtrRatio { get; init; } = .3;
+    public double CandleWeakBodyConfidence { get; init; } = .5;
+
+    /// <summary>MTA 정렬이 보는 EMA 쌍. 시간대마다 각자의 세션 봉으로 시딩한다(C2).</summary>
+    public int MtaEmaFastPeriod { get; init; } = 9;
+    public int MtaEmaSlowPeriod { get; init; } = 21;
+
+    /// <summary>15m EMA21이 아직 warmup(15m 봉 21개=315분 전)이면 1m·5m만 보고 낮춘 confidence.</summary>
+    public double MtaHigherTimeframeWarmupConfidence { get; init; } = .6;
+
+    /// <summary>켈트너 채널 — EMA(20) ± 1.5·ATR(20). 기존 ATR(14)와 별개 인스턴스다.</summary>
+    public int KeltnerEmaPeriod { get; init; } = 20;
+    public int KeltnerAtrPeriod { get; init; } = 20;
+    public double KeltnerAtrFactor { get; init; } = 1.5;
+
+    /// <summary>스퀴즈 해제 봉의 방향 점수, 스퀴즈 지속("대기")·그 외 상태의 confidence.</summary>
+    public double SqueezeReleaseScore { get; init; } = .8;
+    public double SqueezeActiveConfidence { get; init; } = .5;
+    public double SqueezeIdleConfidence { get; init; } = .3;
+
+    /// <summary>변동성 돌파 계수 K — 원 전략의 표준값 0.5 고정이며 성과로 탐색하지 않았다(미검증).</summary>
+    public double VolatilityBreakoutK { get; init; } = .5;
+
+    /// <summary>변동성 돌파 MA 필터 거래일 수와, 필터를 통과하지 못했을 때의 confidence.</summary>
+    public int VolatilityBreakoutFilterDays { get; init; } = 3;
+    public double VolatilityBreakoutFilterConfidence { get; init; } = .5;
+
+    /// <summary>일 단위 RVOL이 같은 시각 누적 거래량을 비교하는 과거 거래일 수. 모자라면 warmup이다.</summary>
+    public int DailyRelativeVolumeLookbackSessions { get; init; } = 20;
+
+    /// <summary>유사 Lee-Ready 델타의 누적 창(분)과 최소 체결 표본. 표본이 모자라면 warmup이다.</summary>
+    public int LeeReadyWindowMinutes { get; init; } = 15;
+    public int LeeReadyMinimumTrades { get; init; } = 20;
+
     /// <summary>
-    /// C4 상관군. 같은 정보축 묶음은 군 안에서 1/n로 나눈다. `군이름:기법,기법` 형식이며 2·3군이
-    /// 들어오면 이 목록만 늘어난다. 1군 채택 목록에는 각 군에 한 기법씩만 있어 실질 계수는 1.0이다.
+    /// C4 상관군. 같은 정보축 묶음은 군 안에서 1/n로 나눈다. `군이름:기법,기법` 형식이며 3군이
+    /// 들어오면 이 목록만 늘어난다. 2군 편입으로 밴드·레인지·추세·거래량·체결흐름 군이 각 2기법이 됐다.
     /// </summary>
     public ImmutableArray<string> CorrelationGroups { get; init; } = DefaultCorrelationGroups;
 
     static readonly ImmutableArray<string> DefaultCorrelationGroups =
     [
         "oscillator:RSI,STOCH,WILLIAMS_R",
-        "volatilityBand:BB_PERCENT_B,KELTNER",
-        "range:DONCHIAN,ORB15"
+        "volatilityBand:BB_PERCENT_B,KELTNER,SQUEEZE",
+        "range:DONCHIAN,ORB15,VOL_BREAKOUT",
+        "trend:ADX_DMI,MTA_ALIGN",
+        "volume:RVOL,RVOL_DAILY",
+        "flow:OBI,LR_DELTA"
     ];
 
     public static readonly ConfluencePolicy Default = new();

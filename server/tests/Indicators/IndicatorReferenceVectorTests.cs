@@ -173,4 +173,19 @@ public sealed class IndicatorReferenceVectorTests
 
         Assert.Equal(expected, TickRule.Series(trades).ToArray());
     }
+    [Theory]
+    [InlineData("cdl-normal.json")]
+    [InlineData("cdl-boundary.json")]
+    public void CandlePatterns_match_talib_cdl_vector(string vector)
+    {
+        var root = IndicatorVectors.Load(vector);
+        var bars = IndicatorVectors.Bars(root);
+
+        Assert.Equal(Ints(root, "expectedEngulfing"), CandlePatterns.Engulfing(bars).ToArray());
+        Assert.Equal(Ints(root, "expectedHammer"), CandlePatterns.Hammer(bars).ToArray());
+        Assert.Equal(Ints(root, "expectedPinBar"), CandlePatterns.BullishPinBar(bars).ToArray());
+    }
+
+    static int[] Ints(System.Text.Json.JsonElement root, string property) =>
+        root.GetProperty(property).EnumerateArray().Select(x => x.GetInt32()).ToArray();
 }

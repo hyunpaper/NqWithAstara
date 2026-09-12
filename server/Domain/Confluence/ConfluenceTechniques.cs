@@ -7,9 +7,9 @@ namespace Astra.Server.Domain.Confluence;
 /// C3 기법 어댑터 1군 10개 (#167). 전부 순수 함수이며 완료 봉과 이미 관측된 값만 읽는다(C6).
 /// score·confidence는 C3 표의 정의 그대로이고 어떤 임계도 성과로 탐색하지 않았다.
 /// </summary>
-public static class ConfluenceTechniques
+public static partial class ConfluenceTechniques
 {
-    /// <summary>C3 표의 1군 10개를 평가 대상 봉(마지막 완료 봉) 기준으로 계산한다.</summary>
+    /// <summary>C3 1군 10개와 C3-2 2군 6개를 평가 대상 봉(마지막 완료 봉) 기준으로 계산한다.</summary>
     public static ImmutableArray<TechniqueSignal> Evaluate(ConfluenceInput input, ConfluencePolicy policy)
     {
         ArgumentNullException.ThrowIfNull(input);
@@ -25,7 +25,8 @@ public static class ConfluenceTechniques
             AtrChannel(input, policy),
             OpeningRange(input, policy),
             RelativeStrength(input, policy),
-            OrderBookImbalance(input, policy)
+            OrderBookImbalance(input, policy),
+            ..Tier2(input, policy)
         ];
     }
 

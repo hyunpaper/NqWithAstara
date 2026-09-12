@@ -3,6 +3,7 @@ using System.Text.Json;
 using Astra.Server;
 using Astra.Server.Application;
 using Astra.Server.Domain.Confluence;
+using Astra.Server.Domain.Indicators;
 using Astra.Server.Domain.Structure;
 using Xunit;
 
@@ -244,6 +245,92 @@ public sealed class ConfluenceApplicationTests
 
         Assert.Equal("measured.1", score!.WeightsVersion);
         Assert.Equal(4.0, score.Contributing.Single(x => x.Name == TechniqueNames.Macd).Weight);
+    }
+
+    /// <summary>2군 입력 배선 — 전일 일봉·체결 테이프·과거 세션 거래량 곡선 (C3-2, #170).</summary>
+    [Fact]
+    public void SecondTierInputsReachTheTechniquesFromTheApplicationLayer()
+    {
+        var clock = new MovableClock(D3.At(NowMinute));
+        var tape = new TickFlowTape(clock);
+        var confluence = new ConfluenceService(Watched(), clock, ConfluencePolicy.Default, null, null, tape);
+        for (var i = 0; i < 30; i++)
+            tape.RecordTick(new TossTrade(D3.Symbol, 100m + i * .01m, 10m, D3.At(NowMinute - 5).AddSeconds(i),
+                "USD"));
+        confluence.ObserveQuote(D3.Symbol, D3.SessionStart,
+            new StructureLiquidity(99m, 101m, D3.At(NowMinute - 6), 200, 100));
+
+        var bars = D3.Candles(Bars).Take(Bars - 1).Select(Bar).ToImmutableArray();
+        var score = confluence.Evaluate(D3.Symbol, D3.SessionStart, bars, D3.Daily());
+
+        var breakout = score!.Contributing.Single(x => x.Name == TechniqueNames.VolatilityBreakout);
+        Assert.True(breakout.Contributing);
+        Assert.True(breakout.Evidence["previousRange"] > 0);
+
+        var delta = score.Contributing.Single(x => x.Name == TechniqueNames.LeeReadyDelta);
+        Assert.Equal(30, delta.Evidence["samples"]);
+        Assert.Equal(30, delta.Evidence["quotedSamples"]);
+        Assert.True(delta.Contributing);
+
+        Assert.True(score.Contributing.Single(x => x.Name == TechniqueNames.RelativeVolumeDaily).Warmup);
+    }
+
+    [Fact]
+    public async Task VolumeProfilesAreBuiltFromTheStoredBarsOfEarlierSessions()
+    {
+        var store = new MemoryBarStore();
+        store.Seed("2026-09-09", D3.Symbol, 60);
+        store.Seed("2026-09-10", D3.Symbol, 60);
+        var profiles = new BarStoreVolumeProfiles(store, 20);
+        var session = new DateOnly(2026, 9, 11);
+
+        var loaded = profiles.Profiles(D3.Symbol, session);
+        for (var attempt = 0; attempt < 100 && loaded.Length < 2; attempt++)
+        {
+            await Task.Delay(20);
+            loaded = profiles.Profiles(D3.Symbol, session);
+        }
+
+        Assert.Equal(2, loaded.Length);
+        Assert.Equal(new DateOnly(2026, 9, 9), loaded[0].Date);
+        Assert.Equal(60, loaded[1].Cumulative.Length);
+        Assert.True(loaded[1].At(60) > loaded[1].At(30));
+    }
+
+    sealed class MemoryBarStore : IBarStore
+    {
+        readonly Dictionary<(string Day, string Symbol), List<string>> _files = [];
+
+        public void Seed(string day, string symbol, int count)
+        {
+            var start = DateTimeOffset.Parse($"{day}T13:30:00Z");
+            _files[(day, symbol)] = Enumerable.Range(0, count)
+                .Select(i => JsonSerializer.Serialize(new
+                {
+                    t = start.AddMinutes(i).UtcDateTime, o = 100.0, h = 100.5, l = 99.5, c = 100.2, v = 1000.0
+                }))
+                .ToList();
+        }
+
+        public Task<string?> LastLineAsync(string day, string symbol, CancellationToken ct) =>
+            Task.FromResult<string?>(null);
+
+        public Task AppendAsync(string day, string symbol, string line, CancellationToken ct) => Task.CompletedTask;
+
+        public Task<IReadOnlyList<string>> ListDaysAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(_files.Keys.Select(x => x.Day).Distinct().Order().ToList());
+
+        public Task<IReadOnlyList<string>> ListSymbolsAsync(string day, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(
+                _files.Keys.Where(x => x.Day == day).Select(x => x.Symbol).ToList());
+
+        public Task<int> CountLinesAsync(string day, string symbol, CancellationToken ct) => Task.FromResult(0);
+
+        public Task<IReadOnlyList<string>> ReadLinesAsync(string day, string symbol, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(
+                _files.TryGetValue((day, symbol), out var lines) ? lines : []);
+
+        public Task DeleteDayAsync(string day, CancellationToken ct) => Task.CompletedTask;
     }
 
     static StructureBar Bar(Candle candle) =>

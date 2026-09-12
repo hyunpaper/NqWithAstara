@@ -1,0 +1,259 @@
+using System.Collections.Immutable;
+using Astra.Server.Domain.Indicators;
+
+namespace Astra.Server.Domain.Confluence;
+
+/// <summary>
+/// C3-2 기법 어댑터 2군 6개 (#170). 1군과 같은 계약 — 완료 봉만 읽는 순수 함수이고 표준 파라미터는 고정이며
+/// 전부 w=1.0 미검증으로 편입한다. 진입 판정에는 쓰이지 않는다(C1 1단계).
+/// </summary>
+public static partial class ConfluenceTechniques
+{
+    /// <summary>2군 6개를 평가 대상 봉 기준으로 계산한다.</summary>
+    public static ImmutableArray<TechniqueSignal> Tier2(ConfluenceInput input, ConfluencePolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(policy);
+        return
+        [
+            Candle(input, policy),
+            MultiTimeframeAlignment(input, policy),
+            Squeeze(input, policy),
+            VolatilityBreakout(input, policy),
+            RelativeVolumeDaily(input, policy),
+            LeeReadyDelta(input, policy)
+        ];
+    }
+
+    // ── 캔들 확인: 선행 하락(직전 5봉 저점 갱신) 위의 강세 장악형 +0.6 / 망치 +0.5 / 핀바 +0.4 ──
+    public static TechniqueSignal Candle(ConfluenceInput input, ConfluencePolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(policy);
+        var name = TechniqueNames.Candle;
+        if (Last(input) is not { } i) return TechniqueSignal.WarmingUp(name);
+
+        var lookback = Math.Max(1, policy.CandlePriorLowLookbackBars);
+        var atr = Atr(input, policy)[i];
+        if (i < lookback || atr.Warmup || atr.Value is not { } range || range <= 0)
+            return TechniqueSignal.WarmingUp(name);
+
+        var priorLow = LowestLow(input.Bars, i - lookback, i - 1);
+        var newLow = (double)input.Bars[i].Low < priorLow;
+        var engulfing = CandlePatterns.Engulfing(input.Bars)[i] > 0;
+        var hammer = CandlePatterns.Hammer(input.Bars)[i] > 0;
+        var pinBar = CandlePatterns.BullishPinBar(input.Bars)[i] > 0;
+
+        var score = !newLow ? 0
+            : engulfing ? policy.CandleEngulfingScore
+            : hammer ? policy.CandleHammerScore
+            : pinBar ? policy.CandlePinBarScore
+            : 0;
+        var body = CandlePatterns.RealBody(input.Bars[i]);
+        var confidence = body >= policy.CandleBodyAtrRatio * range ? 1 : policy.CandleWeakBodyConfidence;
+        return TechniqueSignal.Create(name, score, confidence,
+            ("engulfing", engulfing ? 1 : 0), ("hammer", hammer ? 1 : 0), ("pinBar", pinBar ? 1 : 0),
+            ("priorLow", priorLow), ("newLow", newLow ? 1 : 0), ("bodyAtr", body / range));
+    }
+
+    // ── MTA 정렬: 1m/5m/15m의 EMA9>EMA21 정렬 수. 15m EMA21이 아직 없으면 1m·5m만으로 c=0.6 ──
+    public static TechniqueSignal MultiTimeframeAlignment(ConfluenceInput input, ConfluencePolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(policy);
+        var name = TechniqueNames.MultiTimeframeAlignment;
+        if (Last(input) is null) return TechniqueSignal.WarmingUp(name);
+
+        var minute = Aligned(input.Bars, policy);
+        var fiveMinute = Aligned(
+            SessionTimeframe.Aggregate(input.Bars, input.SessionStart, SessionTimeframe.FiveMinutes), policy);
+        var fifteenMinute = Aligned(
+            SessionTimeframe.Aggregate(input.Bars, input.SessionStart, SessionTimeframe.FifteenMinutes), policy);
+        // 1m·5m 둘 중 하나라도 EMA21 warmup이면 "다중 시간대"가 성립하지 않는다.
+        if (minute is not { } first || fiveMinute is not { } second)
+            return TechniqueSignal.WarmingUp(name, ("align1m", minute is true ? 1 : minute is false ? 0 : null),
+                ("align5m", fiveMinute is true ? 1 : fiveMinute is false ? 0 : null));
+
+        var total = fifteenMinute is null ? 2 : 3;
+        var aligned = (first ? 1 : 0) + (second ? 1 : 0) + (fifteenMinute is true ? 1 : 0);
+        return TechniqueSignal.Create(name, AlignmentScore(aligned, total),
+            fifteenMinute is null ? policy.MtaHigherTimeframeWarmupConfidence : 1,
+            ("aligned", aligned), ("timeframes", total), ("align1m", first ? 1 : 0), ("align5m", second ? 1 : 0),
+            ("align15m", fifteenMinute is null ? null : fifteenMinute is true ? 1 : 0));
+    }
+
+    // ── BB-in-KC 스퀴즈: 해제 직후 KC 상단 위 +0.8 / 하단 아래 −0.8, 스퀴즈 지속은 "대기"(0, c=0.5) ──
+    public static TechniqueSignal Squeeze(ConfluenceInput input, ConfluencePolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(policy);
+        var name = TechniqueNames.Squeeze;
+        if (Last(input) is not { } i || i < 1) return TechniqueSignal.WarmingUp(name);
+
+        var bands = BollingerBands.Series(input.Bars, policy.BollingerPeriod, policy.BollingerDeviations);
+        var keltner = KeltnerChannel.Series(input.Bars, input.PreviousSessionClose, policy.KeltnerEmaPeriod,
+            policy.KeltnerAtrPeriod, policy.KeltnerAtrFactor);
+        if (Inside(bands, keltner, i) is not { } now || Inside(bands, keltner, i - 1) is not { } previous)
+            return TechniqueSignal.WarmingUp(name);
+
+        var upper = keltner[i].Upper!.Value;
+        var lower = keltner[i].Lower!.Value;
+        var close = (double)input.Bars[i].Close;
+        var released = previous && !now;
+        var score = released ? close > upper ? policy.SqueezeReleaseScore
+            : close < lower ? -policy.SqueezeReleaseScore
+            : 0
+            : 0;
+        var confidence = score != 0 ? 1 : now ? policy.SqueezeActiveConfidence : policy.SqueezeIdleConfidence;
+        return TechniqueSignal.Create(name, score, confidence,
+            ("squeeze", now ? 1 : 0), ("released", released ? 1 : 0), ("keltnerUpper", upper),
+            ("keltnerLower", lower), ("bollingerUpper", bands[i].Upper), ("bollingerLower", bands[i].Lower));
+    }
+
+    // ── 유사 Lee-Ready 델타: 체결가 vs 호가 중간값으로 방향 추정, 최근 15분 (매수−매도)/(매수+매도) ──
+    public static TechniqueSignal LeeReadyDelta(ConfluenceInput input, ConfluencePolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(policy);
+        var name = TechniqueNames.LeeReadyDelta;
+        if (Last(input) is not { } i) return TechniqueSignal.WarmingUp(name);
+        if (input.Trades.IsDefaultOrEmpty) return TechniqueSignal.Missing(name, ("samples", 0));
+
+        var end = input.Bars[i].End;
+        var from = end - TimeSpan.FromMinutes(Math.Max(1, policy.LeeReadyWindowMinutes));
+        var quotes = input.OrderBook.IsDefaultOrEmpty
+            ? []
+            : input.OrderBook.Where(x => x.Mid is not null).OrderBy(x => x.ObservedAt).ToArray();
+
+        decimal buy = 0, sell = 0, previousPrice = 0;
+        var hasPrevious = false;
+        int samples = 0, quoted = 0;
+        foreach (var trade in input.Trades.OrderBy(x => x.At))
+        {
+            if (trade.At > end) break;
+            var mid = MidAt(quotes, trade.At);
+            var direction = mid is { } value && trade.Price != value
+                ? trade.Price > value ? 1 : -1
+                : TickRule.Sign(TickRule.Classify(hasPrevious ? previousPrice : null, trade.Price)) ?? 0;
+            if (trade.At > from && trade.Volume > 0)
+            {
+                samples++;
+                if (mid is not null) quoted++;
+                if (direction > 0) buy += trade.Volume;
+                else if (direction < 0) sell += trade.Volume;
+            }
+            previousPrice = trade.Price;
+            hasPrevious = true;
+        }
+
+        if (samples == 0) return TechniqueSignal.Missing(name, ("samples", 0));
+        var total = buy + sell;
+        if (samples < policy.LeeReadyMinimumTrades || total <= 0)
+            return TechniqueSignal.WarmingUp(name, ("samples", samples), ("quotedSamples", quoted));
+
+        return TechniqueSignal.Create(name, (double)((buy - sell) / total), 1,
+            ("samples", samples), ("quotedSamples", quoted), ("buyVolume", (double)buy),
+            ("sellVolume", (double)sell));
+    }
+
+    /// <summary>체결 시각 이하의 가장 최근 호가 중간값. 그런 호가가 없으면 null이며 틱룰로 넘어간다.</summary>
+    static decimal? MidAt(IReadOnlyList<OrderBookSnapshot> quotes, DateTimeOffset at)
+    {
+        decimal? mid = null;
+        foreach (var quote in quotes)
+        {
+            if (quote.ObservedAt > at) break;
+            mid = quote.Mid;
+        }
+        return mid;
+    }
+
+    // ── 일 단위 RVOL: 당일 누적 거래량 / 최근 20거래일 같은 시각 누적 평균, tanh(rvol−1)×당일 방향 ──
+    public static TechniqueSignal RelativeVolumeDaily(ConfluenceInput input, ConfluencePolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(policy);
+        var name = TechniqueNames.RelativeVolumeDaily;
+        if (Last(input) is not { } i) return TechniqueSignal.WarmingUp(name);
+
+        var elapsed = (int)Math.Round((input.Bars[i].End - input.SessionStart).TotalMinutes,
+            MidpointRounding.AwayFromZero);
+        decimal cumulative = 0;
+        for (var k = 0; k <= i; k++) cumulative += input.Bars[k].Volume;
+
+        var sessions = input.PreviousSessionVolumes.IsDefault
+            ? ImmutableArray<SessionVolumeProfile>.Empty
+            : input.PreviousSessionVolumes;
+        var rvol = DailyRelativeVolume.Compute(cumulative, elapsed, sessions,
+            policy.DailyRelativeVolumeLookbackSessions);
+        if (rvol is not { } value)
+            return TechniqueSignal.WarmingUp(name, ("sessions", sessions.Length), ("elapsedMinutes", elapsed));
+
+        var direction = ConfluenceMath.Sign((double)(input.Bars[i].Close - input.Bars[0].Open));
+        return TechniqueSignal.Create(name, ConfluenceMath.Tanh(value - 1) * direction, 1,
+            ("relativeVolumeDaily", value), ("direction", direction), ("elapsedMinutes", elapsed),
+            ("cumulativeVolume", (double)cumulative), ("sessions", sessions.Length));
+    }
+
+    // ── 변동성 돌파(재정의판): 목표가 = 정규장 첫 완료봉 시가 + 전일 레인지 × K(0.5 고정, 미검증) ──
+    public static TechniqueSignal VolatilityBreakout(ConfluenceInput input, ConfluencePolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(policy);
+        var name = TechniqueNames.VolatilityBreakout;
+        if (Last(input) is not { } i) return TechniqueSignal.WarmingUp(name);
+
+        var daily = input.PreviousDailyBars;
+        var atr = Atr(input, policy)[i];
+        if (daily.IsDefaultOrEmpty || atr.Warmup || atr.Value is not { } range || range <= 0)
+            return TechniqueSignal.WarmingUp(name);
+
+        var previousRange = (double)(daily[^1].High - daily[^1].Low);
+        if (previousRange <= 0) return TechniqueSignal.WarmingUp(name, ("previousRange", previousRange));
+
+        var sessionOpen = (double)input.Bars[0].Open;
+        var target = sessionOpen + previousRange * policy.VolatilityBreakoutK;
+        var close = (double)input.Bars[i].Close;
+        var score = close >= target
+            ? Math.Min((close - target) / range, 1)
+            : ConfluenceMath.Clamp((close - target) / previousRange, -1, 0);
+
+        // 3~5일 MA 필터: 첫봉 시가가 전 N거래일 종가 평균 위일 때만 온전한 confidence를 준다.
+        var filterDays = Math.Max(1, policy.VolatilityBreakoutFilterDays);
+        double? average = daily.Length >= filterDays
+            ? daily.TakeLast(filterDays).Average(x => (double)x.Close)
+            : null;
+        var confidence = average is { } mean && sessionOpen > mean ? 1 : policy.VolatilityBreakoutFilterConfidence;
+        return TechniqueSignal.Create(name, score, confidence,
+            ("target", target), ("previousRange", previousRange), ("k", policy.VolatilityBreakoutK),
+            ("sessionOpen", sessionOpen), ("close", close), ("atr", range), ("filterAverage", average));
+    }
+
+    /// <summary>BB(20,2)가 KC 안에 완전히 들어갔는가. 둘 중 하나라도 warmup이면 null이다.</summary>
+    static bool? Inside(ImmutableArray<BollingerPoint> bands, ImmutableArray<KeltnerPoint> keltner, int index) =>
+        bands[index].Upper is { } bandUpper && bands[index].Lower is { } bandLower &&
+        keltner[index].Upper is { } channelUpper && keltner[index].Lower is { } channelLower
+            ? bandUpper < channelUpper && bandLower > channelLower
+            : null;
+
+    /// <summary>정렬 비율을 [−1,+1]로 편다 — 3시간대면 3정렬 +1 · 2정렬 +1/3 · 1정렬 −1/3 · 0정렬 −1이다.</summary>
+    public static double AlignmentScore(int aligned, int total) =>
+        total < 1 ? 0 : ConfluenceMath.Clamp(((double)aligned / total - .5) * 2);
+
+    /// <summary>한 시간대의 EMA9 &gt; EMA21 여부. EMA21 warmup이면 null이다.</summary>
+    static bool? Aligned(ImmutableArray<IndicatorBar> bars, ConfluencePolicy policy)
+    {
+        if (bars.Length == 0) return null;
+        var fast = Ema.Series(bars, policy.MtaEmaFastPeriod)[^1].Value;
+        var slow = Ema.Series(bars, policy.MtaEmaSlowPeriod)[^1].Value;
+        return fast is { } f && slow is { } s ? f > s : null;
+    }
+
+    /// <summary>구간 [from, to]의 최저 저가. 호출부가 구간을 보장한다.</summary>
+    static double LowestLow(ImmutableArray<IndicatorBar> bars, int from, int to)
+    {
+        var lowest = (double)bars[from].Low;
+        for (var i = from + 1; i <= to; i++) lowest = Math.Min(lowest, (double)bars[i].Low);
+        return lowest;
+    }
+}

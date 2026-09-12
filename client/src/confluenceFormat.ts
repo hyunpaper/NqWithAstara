@@ -27,6 +27,12 @@ const TECHNIQUE_LABELS: Record<string, string> = {
   ORB15: "개장 레인지",
   RS_QQQ: "상대강도(QQQ)",
   OBI: "호가 불균형",
+  CANDLE: "캔들 확인",
+  MTA_ALIGN: "다중 시간대 정렬",
+  SQUEEZE: "변동성 스퀴즈",
+  VOL_BREAKOUT: "변동성 돌파",
+  RVOL_DAILY: "상대거래량(일)",
+  LR_DELTA: "체결 델타",
 };
 
 export const techniqueLabel = (name: string | null | undefined): string =>

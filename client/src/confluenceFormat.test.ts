@@ -51,6 +51,14 @@ describe("techniqueLabel", () => {
     expect(techniqueLabel("RS_QQQ")).toBe("상대강도(QQQ)");
     expect(techniqueLabel("OBI")).toBe("호가 불균형");
   });
+  it("2군 기법명도 한국어로 바꾼다", () => {
+    expect(techniqueLabel("CANDLE")).toBe("캔들 확인");
+    expect(techniqueLabel("MTA_ALIGN")).toBe("다중 시간대 정렬");
+    expect(techniqueLabel("SQUEEZE")).toBe("변동성 스퀴즈");
+    expect(techniqueLabel("VOL_BREAKOUT")).toBe("변동성 돌파");
+    expect(techniqueLabel("RVOL_DAILY")).toBe("상대거래량(일)");
+    expect(techniqueLabel("LR_DELTA")).toBe("체결 델타");
+  });
   it("미등록 기법명은 원문 그대로 폴백한다", () => {
     expect(techniqueLabel("UNKNOWN_TECHNIQUE")).toBe("UNKNOWN_TECHNIQUE");
   });

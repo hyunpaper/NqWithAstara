@@ -14,7 +14,8 @@ public sealed record ConfluenceMeasurementReport(DateOnly From, DateOnly To, int
 /// <summary>
 /// 저장 봉 재생 러너 (C5, #169). `App_Data/bars/&lt;날짜&gt;/&lt;심볼&gt;.jsonl`을 날짜·심볼별로 시간순 재생하며
 /// 각 완료 봉에서 K2 기법 신호를 계산한다. 신호는 <see cref="SequentialBarReplay"/> 슬라이스만 보고,
-/// 미래 봉은 결과(N봉 후 수익) 계산에서만 읽는다. 호가는 저장되지 않으므로 OBI는 항상 c=0이다.
+/// 미래 봉은 결과(N봉 후 수익) 계산에서만 읽는다. 호가·체결은 저장되지 않으므로 OBI·LR_DELTA는 항상 c=0이다.
+/// 전일 일봉과 과거 세션 누적 거래량 곡선은 이미 재생을 마친 날에서만 쌓는다(C6).
 /// </summary>
 public sealed class ConfluenceReplay(IBarStore store, ConfluencePolicy? policy = null,
     MeasurementPolicy? measurement = null)
@@ -31,6 +32,7 @@ public sealed class ConfluenceReplay(IBarStore store, ConfluencePolicy? policy =
         var days = ConfluenceWalkForward.DaysInWindow(await store.ListDaysAsync(ct), from, to);
         var outcomes = new List<SignalOutcome>();
         var symbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var history = new Dictionary<string, SymbolHistory>(StringComparer.OrdinalIgnoreCase);
         int barCount = 0, signalCount = 0;
 
         foreach (var day in days)
@@ -45,7 +47,9 @@ public sealed class ConfluenceReplay(IBarStore store, ConfluencePolicy? policy =
                 if (bars.Length == 0) continue;
                 symbols.Add(symbol);
                 barCount += bars.Length;
-                signalCount += Replay(symbol, bars, benchmark, outcomes);
+                if (!history.TryGetValue(symbol, out var past)) history[symbol] = past = new SymbolHistory();
+                signalCount += Replay(symbol, bars, benchmark, outcomes, past);
+                past.Append(day, bars);
             }
         }
 
@@ -60,14 +64,15 @@ public sealed class ConfluenceReplay(IBarStore store, ConfluencePolicy? policy =
 
     /// <summary>하루·한 심볼 재생. 창마다 기법을 평가하고 발생한 신호의 지평별 결과를 모은다.</summary>
     int Replay(string symbol, ImmutableArray<IndicatorBar> bars, ImmutableArray<IndicatorBar> benchmark,
-        List<SignalOutcome> outcomes)
+        List<SignalOutcome> outcomes, SymbolHistory past)
     {
         var sessionStart = bars[0].Start;
         var signals = 0;
         foreach (var window in SequentialBarReplay.Windows(symbol, sessionStart, bars, benchmark))
         {
             var input = new ConfluenceInput(symbol, sessionStart, window.Completed, window.Benchmark,
-                ImmutableArray<OrderBookSnapshot>.Empty, RelativeVolume(window.Completed), null);
+                ImmutableArray<OrderBookSnapshot>.Empty, RelativeVolume(window.Completed),
+                past.PreviousSessionClose, past.DailyBars, past.Profiles, ImmutableArray<ConfluenceTrade>.Empty);
             var evaluated = ConfluenceTechniques.Evaluate(input, _policy);
             var atr = AverageTrueRange.Series(window.Completed, null, _policy.AtrPeriod)[^1].Value;
             if (atr is not { } range) continue;
@@ -94,6 +99,25 @@ public sealed class ConfluenceReplay(IBarStore store, ConfluencePolicy? policy =
             .Select(x => new StructureBar(x.Start, x.End, x.Open, x.High, x.Low, x.Close, (double)x.Volume))
             .ToArray();
         return SessionIndicators.RelativeVolume(converted, converted[^1].Start, _policy.RelativeVolumeLookbackBars);
+    }
+
+    /// <summary>이미 재생을 마친 과거 세션들만 담는다 — 당일 값은 하루가 끝난 뒤에 들어간다(C6).</summary>
+    sealed class SymbolHistory
+    {
+        readonly List<IndicatorBar> _daily = [];
+        readonly List<SessionVolumeProfile> _profiles = [];
+
+        public ImmutableArray<IndicatorBar> DailyBars => [.._daily];
+        public ImmutableArray<SessionVolumeProfile> Profiles => [.._profiles];
+        public decimal? PreviousSessionClose => _daily.Count == 0 ? null : _daily[^1].Close;
+
+        public void Append(DateOnly day, ImmutableArray<IndicatorBar> bars)
+        {
+            if (bars.Length == 0) return;
+            _daily.Add(new IndicatorBar(bars[0].Start, bars[^1].End, bars[0].Open, bars.Max(x => x.High),
+                bars.Min(x => x.Low), bars[^1].Close, bars.Sum(x => x.Volume)));
+            _profiles.Add(SessionVolumeProfile.FromBars(day, bars[0].Start, bars));
+        }
     }
 
     public async Task<ImmutableArray<IndicatorBar>> LoadAsync(string day, string symbol, CancellationToken ct) =>
