@@ -138,6 +138,7 @@ flowchart LR
 - **테스트 파일에는 주석을 달지 않는다.** 의도는 테스트 이름으로 표현한다.
 - 일반 코드 주석은 **짧게** 쓴다. 설계 근거·문서 인용을 장문으로 달지 않는다.
 - 변경 사유·설계 판단은 커밋 메시지와 PR 본문에 쓴다 (§3 커밋 컨벤션 참고).
+- `<summary>`는 한 줄 + `(§번호, #이슈)`까지. 대안 기각 사유·장문 근거는 커밋·PR 본문에 쓴다.
 
 ## 4. PR → CI → 리뷰 → 머지 파이프라인
 
@@ -249,7 +250,17 @@ dotnet test server/tests/Astra.Server.Tests.csproj --configuration Release
 cd client && npm ci && npm run build && npm test                # vitest + coverage
 ```
 
-테스트 커버리지 100%가 서버·클라이언트 공통 목표다. 신규 코드는 테스트를 동반한다.
+커버리지 목표는 계층별로 다르다. 신규 코드는 테스트를 동반한다.
+
+| 계층 | 목표 |
+|---|---|
+| 서버 Domain | 95%+ |
+| 서버 Application | 85%+ |
+| 서버 Infrastructure/Api | 수치 목표 없음 — 계약 테스트(ArchitectureBoundary·HostContract)로만 검증 |
+| 클라이언트 로직 모듈(`structureTypes`·`structureSort`·`alertPlanner`·`dashboardTypes`·`viewRoute`) | 100% |
+| 클라이언트 렌더 컴포넌트(`App.tsx`·`StructureChart.tsx`) | 커버리지 목표 제외 |
+
+스모크성 인프라 테스트는 커버리지 수치 확보 목적으로 추가하지 않는다.
 
 앱 실행/종료 스크립트는 로컬 전용이며 저장소에 포함하지 않는다 (`/scripts/`는 gitignore).
 
