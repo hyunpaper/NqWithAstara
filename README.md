@@ -239,6 +239,12 @@ flowchart TB
 - 구조 엔진 소스는 레거시 진입점(`MarketRules.Enter`/`PriceLevels.*` 등)을 참조하지 않는다 (정적 테스트로 강제).
 - `StructurePolicy.RoundTripFeePercent`를 바꾸면 PolicyHash가 바뀌어 래치가 리셋되므로, 정규장 밖에서만 재기동한다.
 
+### 뉴스 감성 (선택 기능, Ollama 필요)
+
+- `News:Enabled`(기본 `false`)를 켜면 60초 주기로 saveticker 목록을 증분 수집해 로컬 Ollama(`qwen2.5:7b-instruct`)로 호재/악재를 분류하고 `App_Data/news/<날짜>.jsonl`에 남긴다.
+- 새 기사는 매칭 여부와 무관하게 전부 분류하되 관심종목 매칭 기사가 큐에서 앞서고, 종목이 없는 거시 뉴스는 `MARKET` 의사 심볼로 모인다. `GET /api/news`·`GET /api/news/sentiment`로 조회한다.
+- **표시·관측 전용이며 v5 진입 판정에 연결되지 않는다.** `Enabled=false`면 피드·Ollama 호출이 전혀 없다.
+
 ## 6. 로컬 검증 (PR 전 필수)
 
 CI와 동일 스택: Node.js 22, .NET 9.
