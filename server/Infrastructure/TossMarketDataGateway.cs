@@ -12,4 +12,10 @@ public sealed class TossMarketDataGateway(TossClient client) : IMarketDataGatewa
     public Task<MarketSession> Session(DateTimeOffset now, CancellationToken ct) => client.Session(now, ct);
     public Task<OrderBookSnapshot> OrderBook(string symbol, CancellationToken ct) => client.OrderBook(symbol, ct);
     public Task<string> GetAccessTokenAsync(CancellationToken ct) => client.GetAccessTokenAsync(ct);
+    public Task<IReadOnlyList<TossTrade>> Trades(string symbol, int count, CancellationToken ct) => client.Trades(symbol, count, ct);
+    public Task<IReadOnlyList<StockInfo>> StockInfos(string symbols, CancellationToken ct) => client.StockInfos(symbols, ct);
+    public Task<IReadOnlyList<TossAccount>> Accounts(CancellationToken ct) => client.Accounts(ct);
+    public Task<IReadOnlyList<TossCommission>> Commissions(int accountSeq, CancellationToken ct) => client.Commissions(accountSeq, ct);
+    public Task<TossOrderPage> ClosedOrders(int accountSeq, DateOnly? from, DateOnly? to, string? cursor, int limit, CancellationToken ct) => client.ClosedOrders(accountSeq, from, to, cursor, limit, ct);
+    public Task<IReadOnlyList<TossHolding>> Holdings(int accountSeq, CancellationToken ct) => client.Holdings(accountSeq, ct);
 }
