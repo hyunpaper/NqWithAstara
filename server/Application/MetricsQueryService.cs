@@ -2,9 +2,9 @@ using System.Collections.Concurrent;
 
 namespace Astra.Server.Application;
 
-public sealed record MetricsResponse(string Symbol, bool MarketOpen, bool Running, DailyMetrics? Daily, DailyMetrics? Daily5m, DailyMetrics? Daily10m, object? Flow, object? Flow5m, object? Flow10m, DateTimeOffset UpdatedAt, double? TurnoverPercent = null);
+public sealed record MetricsResponse(string Symbol, bool MarketOpen, bool Running, DailyMetrics? Daily, DailyMetrics? Daily5m, DailyMetrics? Daily10m, object? Flow, object? Flow5m, object? Flow10m, DateTimeOffset UpdatedAt, string FlowSource = "none", int? BlockTradeCount = null, double? TurnoverPercent = null);
 
-public sealed class MetricsQueryService(ILocalStore store, IMarketDataGateway marketData, IRealtimeMarketStream stream, MonitorRuntimeState runtime, TimeProvider clock, SymbolMetadataService? metadata = null)
+public sealed class MetricsQueryService(ILocalStore store, IMarketDataGateway marketData, IRealtimeMarketStream stream, MonitorRuntimeState runtime, TimeProvider clock, TickFlowTape? tape = null, SymbolMetadataService? metadata = null)
 {
     /// <summary>#132 회전율(%) = 당일 누적 거래량 / 상장주식수 × 100. 메타·거래량이 없으면 null이다.</summary>
     public static double? Turnover(DailyMetrics? daily, StockInfo? info) =>
@@ -48,6 +48,6 @@ public sealed class MetricsQueryService(ILocalStore store, IMarketDataGateway ma
         if (open && metadata is not null) await metadata.EnsureAsync([symbol], ct);
         return (200, new(symbol, open, state.Running, daily, open ? Near(TimeSpan.FromMinutes(5)) : null, open ? Near(TimeSpan.FromMinutes(10)) : null,
             open ? Flow(now.AddMinutes(-5), now) : null, open ? Flow(now.AddMinutes(-10), now.AddMinutes(-5)) : null, open ? Flow(now.AddMinutes(-15), now.AddMinutes(-10)) : null, now,
-            Turnover(daily, metadata?.Get(symbol))));
+            tape?.FlowSource(symbol) ?? "none", tape?.BlockTradeCount(symbol), Turnover(daily, metadata?.Get(symbol))));
     }
 }

@@ -6,7 +6,7 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
     MonitorRuntimeState runtime, TimeProvider clock, IMonitorDiagnostics diagnostics,
     StructureAnalysisService? structure = null, StructureLiquidityFeed? liquidity = null,
     StructureAlertPublisher? alerts = null, SymbolMetadataService? metadata = null,
-    FeeRateCheckService? feeCheck = null) : IMonitorSignals
+    FeeRateCheckService? feeCheck = null, TradeTapeFallbackService? tradeTape = null) : IMonitorSignals
 {
     public bool Running => runtime.Snapshot().Running; public long Generation => runtime.Snapshot().Generation;
     public string ConnectionStatus => runtime.Snapshot().ConnectionStatus; public string ConnectionMessage => runtime.Snapshot().ConnectionMessage;
@@ -77,6 +77,8 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
                 runtime.TryCommit(gen, () => Signals.TryRemove(item.Symbol, out _)); return PollOutcome.Warmup;
             }
 
+            // ws 틱이 끊겼으면 REST 체결 내역으로 체결강도를 보정한다(이슈 #133). 표시·보정 전용이다.
+            if (tradeTape is not null) await tradeTape.RefreshAsync(item.Symbol, token);
             var result = Indicators.Evaluate(bars); var score = result.Score; var reasons = result.Reasons; double? buyShare = null;
             if (stream.Flow(item.Symbol, quote.At - TimeSpan.FromMinutes(5), quote.At) is { } flow && flow.Buy + flow.Sell > 0) { buyShare = Math.Round((double)(flow.Buy / (flow.Buy + flow.Sell)) * 100, 1); if (buyShare >= 60) { score = Math.Min(100, score + 5); reasons = [.. reasons, $"체결강도 매수 우위 ({buyShare:0}%)"]; } else if (buyShare <= 40) { score = Math.Max(0, score - 5); reasons = [.. reasons, $"체결강도 매도 우위 ({buyShare:0}%)"]; } }
             if (!watched)

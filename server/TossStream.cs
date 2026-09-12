@@ -8,8 +8,10 @@ using System.Text.RegularExpressions;
 namespace Astra.Server;
 
 /// <summary>Receives public US trade ticks from Toss. REST candles remain the source for indicators.</summary>
-public sealed class TossStreamService(ILogger<TossStreamService> log) : Application.IRealtimeMarketStream, IAsyncDisposable
+public sealed class TossStreamService(ILogger<TossStreamService> log, Application.TickFlowTape? tape = null) : Application.IRealtimeMarketStream, IAsyncDisposable
 {
+    readonly Application.TickFlowTape _tape = tape ?? new Application.TickFlowTape(TimeProvider.System);
+
     const int MaxSymbols = 30;
     const int MaxMessageBytes = 256 * 1024;
     static readonly Uri Endpoint = new("wss://openapi-ws.tossinvest.com/ws/v1");
@@ -25,37 +27,14 @@ public sealed class TossStreamService(ILogger<TossStreamService> log) : Applicat
 
     public bool TryGetLatest(string symbol, out TossTrade trade) => Latest.TryGetValue(symbol, out trade!);
 
-    /// <summary>틱 룰(직전 체결가 대비 상승/하락)로 분류한 최근 매수·매도 체결량. Toss 웹소켓은 체결 방향을 주지 않아 로컬 추정치다.</summary>
-    sealed class TickFlow { public readonly object Gate = new(); public readonly Queue<(DateTimeOffset At, decimal Buy, decimal Sell)> Trades = new(); public decimal LastPrice; public int LastDirection; }
-    readonly ConcurrentDictionary<string, TickFlow> _flows = new(StringComparer.OrdinalIgnoreCase);
-
-    void RecordFlow(TossTrade trade)
-    {
-        var flow = _flows.GetOrAdd(trade.Symbol, _ => new TickFlow());
-        lock (flow.Gate)
-        {
-            var direction = flow.LastPrice == 0 ? 0 : trade.Price > flow.LastPrice ? 1 : trade.Price < flow.LastPrice ? -1 : flow.LastDirection;
-            flow.LastPrice = trade.Price;
-            flow.LastDirection = direction;
-            flow.Trades.Enqueue((trade.Timestamp, direction > 0 ? trade.Volume : 0, direction < 0 ? trade.Volume : 0));
-            var cutoff = DateTimeOffset.UtcNow.AddMinutes(-15);
-            while (flow.Trades.Count > 5000 || (flow.Trades.Count > 0 && flow.Trades.Peek().At < cutoff)) flow.Trades.Dequeue();
-        }
-    }
+    /// <summary>틱 룰 분류는 <see cref="Application.TickFlowTape"/>가 소유한다 — ws 틱과 REST 체결이 같은 규칙을 쓴다.</summary>
+    void RecordFlow(TossTrade trade) => _tape.RecordTick(trade);
 
     public (decimal Buy, decimal Sell)? Flow(string symbol, TimeSpan window)
         => Flow(symbol, DateTimeOffset.UtcNow - window, DateTimeOffset.UtcNow.AddSeconds(5));
 
     public (decimal Buy, decimal Sell)? Flow(string symbol, DateTimeOffset from, DateTimeOffset to)
-    {
-        if (!_flows.TryGetValue(symbol, out var flow)) return null;
-        lock (flow.Gate)
-        {
-            decimal buy = 0, sell = 0; var any = false;
-            foreach (var t in flow.Trades) { if (t.At < from || t.At >= to) continue; any = true; buy += t.Buy; sell += t.Sell; }
-            return any ? (buy, sell) : null;
-        }
-    }
+        => _tape.Flow(symbol, from, to);
 
     public async Task StartAsync(
         IEnumerable<string> symbols,
@@ -80,11 +59,8 @@ public sealed class TossStreamService(ILogger<TossStreamService> log) : Applicat
         {
             var carried = normalized.Select(x => Latest.TryGetValue(x, out var trade) ? trade : null)
                 .OfType<TossTrade>().ToArray();
-            var carriedFlows = normalized.Select(x => _flows.TryGetValue(x, out var flow) ? (x, flow) : default)
-                .Where(x => x.flow is not null).ToArray();
-            await StopCoreAsync();
+            await StopCoreAsync(normalized);
             foreach (var trade in carried) Latest[trade.Symbol] = trade;
-            foreach (var (symbol, flow) in carriedFlows) _flows[symbol] = flow;
             LastTickAt = carried.Length > 0 ? carried.Max(x => x.Timestamp) : null;
             _runCts = new CancellationTokenSource();
             Status = "connecting";
@@ -101,7 +77,7 @@ public sealed class TossStreamService(ILogger<TossStreamService> log) : Applicat
         finally { _lifecycle.Release(); }
     }
 
-    async Task StopCoreAsync()
+    async Task StopCoreAsync(string[]? retainFlows = null)
     {
         var cts = _runCts;
         var task = _runTask;
@@ -117,7 +93,7 @@ public sealed class TossStreamService(ILogger<TossStreamService> log) : Applicat
         Status = "idle";
         Message = "실시간 연결 중지됨";
         Latest.Clear();
-        _flows.Clear();
+        if (retainFlows is null) _tape.Clear(); else _tape.Retain(retainFlows);
         LastTickAt = null;
     }
 
