@@ -67,7 +67,7 @@ realizedFillCostModelVersion, netR}`.
 | `score` | C4 합산 `Σ w·c·s / Σ w·c`, [−1,+1] | 기여 기법이 하나도 없으면 **null**(0으로 대체하지 않는다) |
 | `warmupCount` | warmup 상태인 기법 수 | — |
 | `policyHash` | `ConfluencePolicy`의 canonical JSON SHA-256. `StructurePolicy.policyHash`와 **별개** | — |
-| `weightsVersion` | 가중치 집합의 버전. 초기값 `uniform.1`(전부 1.0, 미검증) | — |
+| `weightsVersion` | 가중치 집합의 버전. 파일이 없으면 `uniform.1`(전부 1.0, 미검증), K4 측정 파일이 있으면 `w-<yyyyMMdd>-<hash8>`(§5B) | — |
 | `techniques[]` | 기법별 `{name, score, confidence, weight, warmup, contributing, correlationGroup, evidence}` | 기법 자체는 항상 10개가 실린다 |
 
 기법별 `score`∈[−1,+1](롱 전용이므로 음수는 "롱에 불리")과 `confidence`∈[0,1] 정의는 설계 C3 표 그대로다.
@@ -87,7 +87,7 @@ realizedFillCostModelVersion, netR}`.
 
 `warmup`이거나 `confidence = 0`인 기법은 합산의 분자·분모 양쪽에서 빠진다. 상관군(`oscillator`,
 `volatilityBand`, `range`)은 군 안의 기여 기법 수 n으로 가중치를 1/n 한다 — 1군 목록에는 각 군에 한 기법씩만
-있어 현재 실질 계수는 1.0이다. 가중치는 전부 1.0(미검증)에서 시작하며 측정(K4) 전에는 바뀌지 않는다(C1 §16A).
+있어 현재 실질 계수는 1.0이다. 가중치는 전부 1.0(미검증)에서 시작하며 K4 측정(§5B)이 `verified`로 판정한 기법만 바뀐다(C1 §16A).
 
 조회 API는 두 곳이다. `GET /api/confluence/{symbol}`은 최신 점수와 기법별 값을, `/api/structure/{symbol}`은
 additive `confluence: {score, warmupCount, weightsVersion}` 요약을 돌려준다. 두 경로 모두 **조회가 계산을
@@ -379,6 +379,78 @@ fixture는 전부 코드로 생성한다(**운영 실데이터는 커밋하지 �
 `report`(매칭률·세 분류 건수·괴리 중앙값/사분위·`topUserOnlyRejections` 상위 5개·`rows`), `limitations`다.
 `limitations`의 `REAL_FILLS_NOT_COLLECTED`(실체결 미수집)·`REAL_FILLS_NO_OBSERVATIONS`(그날 관측 파일 없음)는
 "대조 불가"를 뜻하며 0건 성과로 읽지 않는다.
+
+---
+
+## 5B. 컨플루언스 측정 파이프라인 (#169, 설계 C5)
+
+정교함을 **측정**하는 유일한 경로다. 가중치는 이 결과로만 바뀐다. 진입·게이트는 이 절의 영향을 받지 않는다.
+
+### 5B.1 실행
+
+```bash
+# 기본 창: 오늘을 적용 주 시작일로 보는 직전 4주 (측정 4주 → 적용 1주 워크포워드)
+dotnet run --project server -- confluence-measure
+# 창·지평 지정
+dotnet run --project server -- confluence-measure --from 2026-08-17 --to 2026-09-13 --horizon 10
+```
+
+서버를 띄우지 않고 `App_Data/bars`만 읽어 표를 출력하고 `App_Data/confluence-weights.json`을 쓴 뒤 종료한다.
+저장 봉이 한 개도 없으면 **파일을 쓰지 않는다**(전부 1.0 유지). 외부 API를 호출하지 않는다.
+
+### 5B.2 측정 정의
+
+- **재생**: 날짜 폴더·심볼별로 저장 완료 1분봉을 시간순 재생한다. 각 창은 0..i 슬라이스만 담은 새 객체이며
+  현재 봉 이후는 창 안에 **존재하지 않는다** — 미래 차단은 타입과 테스트로 고정되어 있다(C6).
+- **신호 발생**: warmup이 아니고 `confidence > 0`이며 `|score| ≥ 0.3`. 이 임계는 `MeasurementPolicy`의
+  상수이며 **성과로 탐색한 값이 아니다(미검증)**.
+- **결과**: 신호 봉 종가 기준 N봉 후(5·10·20) 종가 변화 ÷ ATR14. 방향 적중은 `sign(score) == sign(수익)`이고
+  움직임이 0이면 적중이 아니다. 기대값은 왕복 0.2% + 스프레드 0.01%를 뺀 값이며, **저장 호가가 없어
+  스프레드는 정책 기본값**이다(관측값이 아니다). 남은 봉이 N개 미만이면 표본에서 빠진다.
+- **결측**: 저장 호가 스냅샷이 없으므로 `OBI`는 항상 c=0(표본 0)이고, 그날 QQQ 봉이 저장돼 있지 않으면
+  `RS_QQQ`도 c=0이다. 전일 종가를 저장하지 않으므로 세션 첫 봉 TR은 고저폭으로 계산한다.
+
+### 5B.3 통계
+
+| 값 | 정의 |
+|---|---|
+| `n` | 지평별 신호 표본 수 |
+| `hitRate` | 적중 / n |
+| `ci` | Wilson score interval 95% — `(p̂ + z²/2n ± z·√(p̂(1−p̂)/n + z²/4n²)) / (1 + z²/n)`, z=1.959964 |
+| `brier` | `(1/n)·Σ(f−o)²`, 예측확률 `f = (score+1)/2`, 결과 `o = 적중 1 / 미적중 0` |
+| `pValue` | 귀무가설 적중률 0.5의 이항 정확검정 양측 p — `min(2·P(X≤k), 2·P(X≥k), 1)` |
+| BH 보정 | 기법 10개 동시, q=0.05. p를 오름차순으로 두고 `p(k) ≤ (k/m)·q`를 만족하는 최대 k까지 기각 |
+
+`status`는 `unverified`(n<50) · `rejected`(n≥50이지만 BH 미통과) · `verified`(n≥50 ∧ BH 통과)다.
+**표본 부족은 통과로 위장하지 않는다** — 가중치가 바뀌지 않는다는 뜻이다.
+
+### 5B.4 재가중과 파일 스키마
+
+`w = clamp((적중률 − 0.5) × 2, 0, 1)`이며 **`verified`일 때만** 적용한다. `unverified`·`rejected`는 1.0을
+유지한다. 워크포워드는 측정 4주 → 적용 1주이며 측정 창 밖 날짜 폴더는 읽지 않는다.
+
+```json
+{
+  "weightsVersion": "w-20260914-1a2b3c4d",
+  "measuredAt": "2026-09-14T06:00:00+00:00",
+  "window": { "from": "2026-08-17", "to": "2026-09-13" },
+  "horizonBars": 10,
+  "weights": {
+    "MACD": { "w": 0.4, "n": 120, "hitRate": 0.7, "ci": [0.6042, 0.781], "brier": 0.22,
+              "pValue": 0.0001, "status": "verified" }
+  }
+}
+```
+
+`weightsVersion`은 `w-<측정일 yyyyMMdd>-<결과 SHA-256 앞 8자>`다 — 같은 측정 결과는 같은 버전을 낸다.
+`brier`·`pValue`·`ci`는 표본이 없으면 `null`이다.
+
+### 5B.5 서버 로딩과 조회
+
+서버는 기동 시 이 파일을 **한 번** 읽어 K2 합산과 관측 `weightsVersion`에 주입한다. 파일이 없거나 깨졌으면
+무시하고 경고 로그를 남긴 뒤 전부 1.0(`uniform.1`)으로 돈다. 현재 가중치와 근거는
+`GET /api/confluence/weights`가 `{weightsVersion, source, measuredAt, window, horizonBars, weights}`로
+돌려준다. `source`는 파일을 읽었으면 `file`, 기본값이면 `default`다. 조회가 측정을 유발하지 않는다.
 
 ---
 
