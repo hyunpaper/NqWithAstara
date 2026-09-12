@@ -184,6 +184,7 @@ public sealed class MonitorPollingTests
         public Task<IReadOnlyList<string>> ListSymbolsAsync(string day, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<string>>(_files.Keys.Where(x => x.Item1 == day).Select(x => x.Item2).ToArray());
         public Task<int> CountLinesAsync(string day, string symbol, CancellationToken ct) => Task.FromResult(Lines(day, symbol).Count);
+        public Task<IReadOnlyList<string>> ReadLinesAsync(string day, string symbol, CancellationToken ct) => Task.FromResult(Lines(day, symbol));
         public Task DeleteDayAsync(string day, CancellationToken ct)
         {
             foreach (var key in _files.Keys.Where(x => x.Item1 == day).ToArray()) _files.Remove(key);

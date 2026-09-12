@@ -50,6 +50,9 @@ public interface IBarStore
     Task<IReadOnlyList<string>> ListDaysAsync(CancellationToken ct);
     Task<IReadOnlyList<string>> ListSymbolsAsync(string day, CancellationToken ct);
     Task<int> CountLinesAsync(string day, string symbol, CancellationToken ct);
+
+    /// <summary>저장 봉 재생(#169 C5)이 읽는 하루치 줄. 파일이 없으면 빈 목록이다.</summary>
+    Task<IReadOnlyList<string>> ReadLinesAsync(string day, string symbol, CancellationToken ct);
     Task DeleteDayAsync(string day, CancellationToken ct);
 }
 
