@@ -20,7 +20,8 @@ public static partial class ConfluenceTechniques
             MultiTimeframeAlignment(input, policy),
             Squeeze(input, policy),
             VolatilityBreakout(input, policy),
-            RelativeVolumeDaily(input, policy)
+            RelativeVolumeDaily(input, policy),
+            LeeReadyDelta(input, policy)
         ];
     }
 
@@ -107,6 +108,64 @@ public static partial class ConfluenceTechniques
         return TechniqueSignal.Create(name, score, confidence,
             ("squeeze", now ? 1 : 0), ("released", released ? 1 : 0), ("keltnerUpper", upper),
             ("keltnerLower", lower), ("bollingerUpper", bands[i].Upper), ("bollingerLower", bands[i].Lower));
+    }
+
+    // ── 유사 Lee-Ready 델타: 체결가 vs 호가 중간값으로 방향 추정, 최근 15분 (매수−매도)/(매수+매도) ──
+    public static TechniqueSignal LeeReadyDelta(ConfluenceInput input, ConfluencePolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(policy);
+        var name = TechniqueNames.LeeReadyDelta;
+        if (Last(input) is not { } i) return TechniqueSignal.WarmingUp(name);
+        if (input.Trades.IsDefaultOrEmpty) return TechniqueSignal.Missing(name, ("samples", 0));
+
+        var end = input.Bars[i].End;
+        var from = end - TimeSpan.FromMinutes(Math.Max(1, policy.LeeReadyWindowMinutes));
+        var quotes = input.OrderBook.IsDefaultOrEmpty
+            ? []
+            : input.OrderBook.Where(x => x.Mid is not null).OrderBy(x => x.ObservedAt).ToArray();
+
+        decimal buy = 0, sell = 0, previousPrice = 0;
+        var hasPrevious = false;
+        int samples = 0, quoted = 0;
+        foreach (var trade in input.Trades.OrderBy(x => x.At))
+        {
+            if (trade.At > end) break;
+            var mid = MidAt(quotes, trade.At);
+            var direction = mid is { } value && trade.Price != value
+                ? trade.Price > value ? 1 : -1
+                : TickRule.Sign(TickRule.Classify(hasPrevious ? previousPrice : null, trade.Price)) ?? 0;
+            if (trade.At > from && trade.Volume > 0)
+            {
+                samples++;
+                if (mid is not null) quoted++;
+                if (direction > 0) buy += trade.Volume;
+                else if (direction < 0) sell += trade.Volume;
+            }
+            previousPrice = trade.Price;
+            hasPrevious = true;
+        }
+
+        if (samples == 0) return TechniqueSignal.Missing(name, ("samples", 0));
+        var total = buy + sell;
+        if (samples < policy.LeeReadyMinimumTrades || total <= 0)
+            return TechniqueSignal.WarmingUp(name, ("samples", samples), ("quotedSamples", quoted));
+
+        return TechniqueSignal.Create(name, (double)((buy - sell) / total), 1,
+            ("samples", samples), ("quotedSamples", quoted), ("buyVolume", (double)buy),
+            ("sellVolume", (double)sell));
+    }
+
+    /// <summary>체결 시각 이하의 가장 최근 호가 중간값. 그런 호가가 없으면 null이며 틱룰로 넘어간다.</summary>
+    static decimal? MidAt(IReadOnlyList<OrderBookSnapshot> quotes, DateTimeOffset at)
+    {
+        decimal? mid = null;
+        foreach (var quote in quotes)
+        {
+            if (quote.ObservedAt > at) break;
+            mid = quote.Mid;
+        }
+        return mid;
     }
 
     // ── 일 단위 RVOL: 당일 누적 거래량 / 최근 20거래일 같은 시각 누적 평균, tanh(rvol−1)×당일 방향 ──

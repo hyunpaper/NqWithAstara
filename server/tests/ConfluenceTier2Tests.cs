@@ -317,4 +317,76 @@ public sealed class ConfluenceTier2Tests
         Assert.True(ConfluenceTechniques.RelativeVolumeDaily(Cf.Input(Cf.Ramp(30, 100, .05)), Policy).Warmup);
         Assert.True(ConfluenceTechniques.RelativeVolumeDaily(Cf.Input([]), Policy).Warmup);
     }
+    static ImmutableArray<ConfluenceTrade> Tape(int count, decimal price, decimal step) =>
+        Enumerable.Range(0, count)
+            .Select(i => new ConfluenceTrade(Cf.SessionStart.AddMinutes(25).AddSeconds(i), price + step * i, 10))
+            .ToImmutableArray();
+
+    static ImmutableArray<OrderBookSnapshot> Book(decimal bid, decimal ask) =>
+        [new OrderBookSnapshot(Cf.SessionStart.AddMinutes(24), 100, 100, bid, ask)];
+
+    [Fact]
+    public void LeeReadyDelta_is_positive_when_prints_land_above_the_quote_midpoint()
+    {
+        var signal = ConfluenceTechniques.LeeReadyDelta(
+            Cf.Input(Cf.Ramp(30, 100, .05), book: Book(99, 101), trades: Tape(24, 101.5m, 0)), Policy);
+
+        Assert.False(signal.Warmup);
+        Assert.Equal(1, signal.Score, 4);
+        Assert.Equal(1, signal.Confidence);
+        Assert.Equal(24, Cf.Evidence(signal, "samples"));
+        Assert.Equal(24, Cf.Evidence(signal, "quotedSamples"));
+    }
+
+    [Fact]
+    public void LeeReadyDelta_is_negative_when_prints_land_below_the_quote_midpoint()
+    {
+        var signal = ConfluenceTechniques.LeeReadyDelta(
+            Cf.Input(Cf.Ramp(30, 100, .05), book: Book(99, 101), trades: Tape(24, 98.5m, 0)), Policy);
+
+        Assert.Equal(-1, signal.Score, 4);
+    }
+
+    [Fact]
+    public void LeeReadyDelta_falls_back_to_the_tick_rule_when_the_print_sits_on_the_midpoint()
+    {
+        var signal = ConfluenceTechniques.LeeReadyDelta(
+            Cf.Input(Cf.Ramp(30, 100, .05), book: Book(99.9m, 100.1m), trades: Tape(24, 100m, .01m)), Policy);
+
+        Assert.Equal(24, Cf.Evidence(signal, "quotedSamples"));
+        Assert.InRange(signal.Score, .9, 1);
+    }
+
+    [Fact]
+    public void LeeReadyDelta_is_warmup_below_the_minimum_sample_size()
+    {
+        var signal = ConfluenceTechniques.LeeReadyDelta(
+            Cf.Input(Cf.Ramp(30, 100, .05), book: Book(99, 101), trades: Tape(19, 101.5m, 0)), Policy);
+
+        Assert.True(signal.Warmup);
+        Assert.Equal(19, Cf.Evidence(signal, "samples"));
+    }
+
+    [Fact]
+    public void LeeReadyDelta_has_no_confidence_without_any_print()
+    {
+        var signal = ConfluenceTechniques.LeeReadyDelta(Cf.Input(Cf.Ramp(30, 100, .05), book: Book(99, 101)), Policy);
+
+        Assert.False(signal.Warmup);
+        Assert.Equal(0, signal.Confidence);
+        Assert.Equal(0, Cf.Evidence(signal, "samples"));
+    }
+
+    [Fact]
+    public void LeeReadyDelta_ignores_prints_older_than_the_window()
+    {
+        var stale = Tape(24, 101.5m, 0)
+            .Select(x => x with { At = x.At.AddMinutes(-40) })
+            .ToImmutableArray();
+
+        var signal = ConfluenceTechniques.LeeReadyDelta(
+            Cf.Input(Cf.Ramp(30, 100, .05), book: Book(99, 101), trades: stale), Policy);
+
+        Assert.Equal(0, signal.Confidence);
+    }
 }
