@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Globalization;
 
 namespace Astra.Server.Domain.Structure;
@@ -207,9 +207,14 @@ public static class StructuralLifecycle
         string.Join('|', BreakoutCooldownKeyPrefix, symbol, StructureMath.Iso(sessionStart),
             SetupKinds.Name(SetupKind.Breakout), zoneId, StructureMath.Iso(activatedAt));
 
+    /// <summary>
+    /// §8 "하나의 구조 사건 = 하나의 거래". 같은 zone·episode의 PULLBACK과 REBOUND는 zone·anchor·
+    /// invalidation·손절이 동일한 하나의 사건이므로 kind를 키에 넣지 않는다(이슈 #118).
+    /// BREAKOUT은 episode 기반이 아니고 §10 쿨다운이 담당한다.
+    /// </summary>
     static string? EpisodeConsumptionKey(EntryCandidate candidate) => candidate.EpisodeStartAt is not { } episodeStart
         ? null
-        : string.Join('|', "episode-consumed", candidate.KindName, candidate.ZoneId, StructureMath.Iso(episodeStart));
+        : string.Join('|', "episode-consumed", candidate.ZoneId, StructureMath.Iso(episodeStart));
 
     /// <summary>래치에 남은 쿨다운 표식을 ZoneId별 마지막 발동 시각으로 정리한다.</summary>
     static Dictionary<string, DateTimeOffset> BreakoutActivations(StructuralLatch latch)
