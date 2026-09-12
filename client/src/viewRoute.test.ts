@@ -10,6 +10,10 @@ describe("parseViewHash", () => {
     expect(parseViewHash("#structure")).toEqual({ view: "structure" });
   });
 
+  it("maps #replay to replay", () => {
+    expect(parseViewHash("#replay")).toEqual({ view: "replay" });
+  });
+
   it("maps #structure/SYMBOL to structure with symbol", () => {
     expect(parseViewHash("#structure/PLTR")).toEqual({
       view: "structure",
@@ -48,6 +52,10 @@ describe("parseViewHash", () => {
 describe("formatViewHash", () => {
   it("round-trips dash", () => {
     expect(parseViewHash(formatViewHash("dash"))).toEqual({ view: "dash" });
+  });
+
+  it("round-trips replay", () => {
+    expect(parseViewHash(formatViewHash("replay"))).toEqual({ view: "replay" });
   });
 
   it("round-trips structure without symbol", () => {

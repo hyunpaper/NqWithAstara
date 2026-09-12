@@ -56,6 +56,10 @@ builder.Services.AddSingleton<RealFillsService>(); builder.Services.AddSingleton
 // 이슈 #165: 컨플루언스 측정 파이프라인(K4)의 저장 봉 — 완료 1분봉 로컬 저장 + QQQ 벤치마크 폴링.
 builder.Services.AddSingleton(_ => { var c = new ConfluenceOptions(); builder.Configuration.GetSection("Confluence").Bind(c); return c; });
 builder.Services.AddSingleton<IBarStore, BarStore>();
+builder.Services.AddSingleton<IReplayBarStoreFactory, ReplayBarStoreFactory>();
+builder.Services.AddSingleton<IReplayWorkspace, ReplayWorkspace>();
+builder.Services.AddSingleton<IHistoricalBarSource, TossHistoricalBarSource>();
+builder.Services.AddSingleton<HistoricalReplayService>();
 builder.Services.AddSingleton<BarStoreService>(); builder.Services.AddSingleton<BenchmarkPollingService>();
 builder.Services.AddSingleton<IBenchmarkBarSource>(x => x.GetRequiredService<BenchmarkPollingService>());
 // 이슈 #167: 컨플루언스 기법 신호·합산. 가중치는 전부 1.0(미검증)에서 시작하고 K4가 파일로 채운다.

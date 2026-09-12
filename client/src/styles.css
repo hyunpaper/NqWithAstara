@@ -1093,6 +1093,16 @@ footer {
   font-size: 9px;
   margin-top: 12px;
 }
+.replay-view { display: flex; flex-direction: column; gap: 14px; }
+.replay-control form { display: flex; flex-wrap: wrap; gap: 12px; padding: 14px 18px; align-items: end; }
+.replay-control label { color: var(--muted); font-size: 10px; }
+.replay-control input { display: block; margin-top: 5px; padding: 8px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }
+.replay-control button { padding: 9px 14px; border: 0; border-radius: 4px; color: var(--bg); background: var(--text); cursor: pointer; }
+.replay-control button:disabled { opacity: .5; cursor: wait; }
+.replay-notice, .replay-error, .replay-summary p { margin: 0; padding: 0 18px 14px; color: var(--muted); font-size: 11px; }
+.replay-error { color: var(--red); }
+.replay-meta, .replay-totals { display: flex; flex-wrap: wrap; gap: 12px 22px; padding: 14px 18px; font-size: 11px; }
+.replay-meta span, .replay-totals span { color: var(--muted); }
 .app-version {
   margin-left: 8px;
   opacity: 0.6;
