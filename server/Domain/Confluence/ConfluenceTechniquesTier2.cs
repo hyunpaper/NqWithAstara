@@ -16,7 +16,8 @@ public static partial class ConfluenceTechniques
         ArgumentNullException.ThrowIfNull(policy);
         return
         [
-            Candle(input, policy)
+            Candle(input, policy),
+            MultiTimeframeAlignment(input, policy)
         ];
     }
 
@@ -49,6 +50,45 @@ public static partial class ConfluenceTechniques
         return TechniqueSignal.Create(name, score, confidence,
             ("engulfing", engulfing ? 1 : 0), ("hammer", hammer ? 1 : 0), ("pinBar", pinBar ? 1 : 0),
             ("priorLow", priorLow), ("newLow", newLow ? 1 : 0), ("bodyAtr", body / range));
+    }
+
+    // ── MTA 정렬: 1m/5m/15m의 EMA9>EMA21 정렬 수. 15m EMA21이 아직 없으면 1m·5m만으로 c=0.6 ──
+    public static TechniqueSignal MultiTimeframeAlignment(ConfluenceInput input, ConfluencePolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(policy);
+        var name = TechniqueNames.MultiTimeframeAlignment;
+        if (Last(input) is null) return TechniqueSignal.WarmingUp(name);
+
+        var minute = Aligned(input.Bars, policy);
+        var fiveMinute = Aligned(
+            SessionTimeframe.Aggregate(input.Bars, input.SessionStart, SessionTimeframe.FiveMinutes), policy);
+        var fifteenMinute = Aligned(
+            SessionTimeframe.Aggregate(input.Bars, input.SessionStart, SessionTimeframe.FifteenMinutes), policy);
+        // 1m·5m 둘 중 하나라도 EMA21 warmup이면 "다중 시간대"가 성립하지 않는다.
+        if (minute is not { } first || fiveMinute is not { } second)
+            return TechniqueSignal.WarmingUp(name, ("align1m", minute is true ? 1 : minute is false ? 0 : null),
+                ("align5m", fiveMinute is true ? 1 : fiveMinute is false ? 0 : null));
+
+        var total = fifteenMinute is null ? 2 : 3;
+        var aligned = (first ? 1 : 0) + (second ? 1 : 0) + (fifteenMinute is true ? 1 : 0);
+        return TechniqueSignal.Create(name, AlignmentScore(aligned, total),
+            fifteenMinute is null ? policy.MtaHigherTimeframeWarmupConfidence : 1,
+            ("aligned", aligned), ("timeframes", total), ("align1m", first ? 1 : 0), ("align5m", second ? 1 : 0),
+            ("align15m", fifteenMinute is null ? null : fifteenMinute is true ? 1 : 0));
+    }
+
+    /// <summary>정렬 비율을 [−1,+1]로 편다 — 3시간대면 3정렬 +1 · 2정렬 +1/3 · 1정렬 −1/3 · 0정렬 −1이다.</summary>
+    public static double AlignmentScore(int aligned, int total) =>
+        total < 1 ? 0 : ConfluenceMath.Clamp(((double)aligned / total - .5) * 2);
+
+    /// <summary>한 시간대의 EMA9 &gt; EMA21 여부. EMA21 warmup이면 null이다.</summary>
+    static bool? Aligned(ImmutableArray<IndicatorBar> bars, ConfluencePolicy policy)
+    {
+        if (bars.Length == 0) return null;
+        var fast = Ema.Series(bars, policy.MtaEmaFastPeriod)[^1].Value;
+        var slow = Ema.Series(bars, policy.MtaEmaSlowPeriod)[^1].Value;
+        return fast is { } f && slow is { } s ? f > s : null;
     }
 
     /// <summary>구간 [from, to]의 최저 저가. 호출부가 구간을 보장한다.</summary>

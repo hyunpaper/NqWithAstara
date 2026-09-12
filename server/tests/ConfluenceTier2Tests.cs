@@ -85,4 +85,54 @@ public sealed class ConfluenceTier2Tests
         Assert.True(ConfluenceTechniques.Candle(Cf.Input(Cf.Downtrend(4, 100, .3)), Policy).Warmup);
         Assert.True(ConfluenceTechniques.Candle(Cf.Input([]), Policy).Warmup);
     }
+    [Theory]
+    [InlineData(3, 3, 1)]
+    [InlineData(2, 3, 0.3333)]
+    [InlineData(1, 3, -0.3333)]
+    [InlineData(0, 3, -1)]
+    [InlineData(2, 2, 1)]
+    [InlineData(1, 2, 0)]
+    public void MtaAlign_maps_the_alignment_ratio_onto_the_full_range(int aligned, int total, double expected)
+    {
+        Assert.Equal(expected, ConfluenceTechniques.AlignmentScore(aligned, total), 4);
+    }
+
+    [Fact]
+    public void MtaAlign_scores_a_full_three_timeframe_uptrend_with_confidence_one()
+    {
+        var signal = ConfluenceTechniques.MultiTimeframeAlignment(Cf.Input(Cf.Ramp(330, 100, .05)), Policy);
+
+        Assert.False(signal.Warmup);
+        Assert.Equal(1, signal.Score, 4);
+        Assert.Equal(1, signal.Confidence);
+        Assert.Equal(3, Cf.Evidence(signal, "timeframes"));
+        Assert.Equal(3, Cf.Evidence(signal, "aligned"));
+    }
+
+    [Fact]
+    public void MtaAlign_drops_confidence_to_the_policy_value_before_the_fifteen_minute_ema_exists()
+    {
+        var signal = ConfluenceTechniques.MultiTimeframeAlignment(Cf.Input(Cf.Ramp(200, 100, .05)), Policy);
+
+        Assert.Equal(Policy.MtaHigherTimeframeWarmupConfidence, signal.Confidence, 4);
+        Assert.Equal(2, Cf.Evidence(signal, "timeframes"));
+        Assert.Equal(1, signal.Score, 4);
+        Assert.Null(Cf.Evidence(signal, "align15m"));
+    }
+
+    [Fact]
+    public void MtaAlign_goes_negative_when_no_timeframe_is_aligned()
+    {
+        var signal = ConfluenceTechniques.MultiTimeframeAlignment(Cf.Input(Cf.Ramp(200, 100, -.05)), Policy);
+
+        Assert.Equal(-1, signal.Score, 4);
+        Assert.Equal(0, Cf.Evidence(signal, "aligned"));
+    }
+
+    [Fact]
+    public void MtaAlign_is_warmup_until_the_five_minute_ema21_exists()
+    {
+        Assert.True(ConfluenceTechniques.MultiTimeframeAlignment(Cf.Input(Cf.Ramp(100, 100, .05)), Policy).Warmup);
+        Assert.True(ConfluenceTechniques.MultiTimeframeAlignment(Cf.Input([]), Policy).Warmup);
+    }
 }

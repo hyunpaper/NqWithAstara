@@ -44,12 +44,13 @@ public static class TechniqueNames
 
     // ── C3-2 2군 (#170) ──
     public const string Candle = "CANDLE";
+    public const string MultiTimeframeAlignment = "MTA_ALIGN";
 
     public static readonly ImmutableArray<string> All =
     [
         Macd, Rsi, BollingerPercentB, AdxDmi, VwapDeviation, RelativeVolume, AtrChannel, OpeningRange,
         RelativeStrength, OrderBookImbalance,
-        Candle
+        Candle, MultiTimeframeAlignment
     ];
 }
 

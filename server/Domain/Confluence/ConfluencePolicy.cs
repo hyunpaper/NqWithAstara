@@ -71,6 +71,13 @@ public sealed record ConfluencePolicy
     public double CandleBodyAtrRatio { get; init; } = .3;
     public double CandleWeakBodyConfidence { get; init; } = .5;
 
+    /// <summary>MTA 정렬이 보는 EMA 쌍. 시간대마다 각자의 세션 봉으로 시딩한다(C2).</summary>
+    public int MtaEmaFastPeriod { get; init; } = 9;
+    public int MtaEmaSlowPeriod { get; init; } = 21;
+
+    /// <summary>15m EMA21이 아직 warmup(15m 봉 21개=315분 전)이면 1m·5m만 보고 낮춘 confidence.</summary>
+    public double MtaHigherTimeframeWarmupConfidence { get; init; } = .6;
+
     /// <summary>
     /// C4 상관군. 같은 정보축 묶음은 군 안에서 1/n로 나눈다. `군이름:기법,기법` 형식이며 2·3군이
     /// 들어오면 이 목록만 늘어난다. 1군 채택 목록에는 각 군에 한 기법씩만 있어 실질 계수는 1.0이다.
