@@ -42,6 +42,17 @@ public interface IStructureObservationStore
     Task WriteTextAsync(string file, string content, CancellationToken ct);
 }
 
+/// <summary>완료 1분봉 파일 저장소(#165 C5). `App_Data/bars/&lt;날짜&gt;/&lt;심볼&gt;.jsonl` 아래에만 쓴다.</summary>
+public interface IBarStore
+{
+    Task<string?> LastLineAsync(string day, string symbol, CancellationToken ct);
+    Task AppendAsync(string day, string symbol, string line, CancellationToken ct);
+    Task<IReadOnlyList<string>> ListDaysAsync(CancellationToken ct);
+    Task<IReadOnlyList<string>> ListSymbolsAsync(string day, CancellationToken ct);
+    Task<int> CountLinesAsync(string day, string symbol, CancellationToken ct);
+    Task DeleteDayAsync(string day, CancellationToken ct);
+}
+
 public interface IMonitorSignals
 {
     bool TryGet(string symbol, out SignalView signal);

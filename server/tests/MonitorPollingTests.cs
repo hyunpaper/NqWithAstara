@@ -88,6 +88,109 @@ public sealed class MonitorPollingTests
         return new(store, market, new FakeStream(), runtime, new FixedTimeProvider(Now), new FakeDiagnostics());
     }
 
+    [Fact]
+    public async Task CompletedBarsAreHandedToTheBarStoreForWatchedSymbols()
+    {
+        var store = new FakeStore();
+        store.Watch.Add(new("NVDA", "NVIDIA"));
+        var market = new FakeMarket(OpenSession, Bars(30), (100, Now));
+        var recorder = new RecordingBarStore();
+        var barStore = new BarStoreService(recorder, new FixedTimeProvider(Now));
+        var runtime = new MonitorRuntimeState();
+        var poller = new MonitorPollingService(store, market, new FakeStream(), runtime, new FixedTimeProvider(Now),
+            new FakeDiagnostics(), barStore: barStore);
+        runtime.CommitStart();
+
+        await poller.PollAsync(default);
+
+        Assert.NotEmpty(recorder.Lines("2026-09-09", "NVDA"));
+    }
+
+    [Fact]
+    public async Task BenchmarkPollingNeverAppearsInSignalsOrWatchlist()
+    {
+        var store = new FakeStore();
+        store.Watch.Add(new("NVDA", "NVIDIA"));
+        var market = new FakeMarket(OpenSession, Bars(30), (100, Now));
+        var recorder = new RecordingBarStore();
+        var barStore = new BarStoreService(recorder, new FixedTimeProvider(Now));
+        var options = new ConfluenceOptions { Enabled = true, BenchmarkSymbol = "QQQ" };
+        var benchmark = new BenchmarkPollingService(market, barStore, options, new FakeDiagnostics());
+        var runtime = new MonitorRuntimeState();
+        var poller = new MonitorPollingService(store, market, new FakeStream(), runtime, new FixedTimeProvider(Now),
+            new FakeDiagnostics(), barStore: barStore, benchmark: benchmark);
+        runtime.CommitStart();
+
+        await poller.PollAsync(default);
+
+        Assert.NotEmpty(recorder.Lines("2026-09-09", "QQQ"));
+        Assert.DoesNotContain("QQQ", poller.Signals.Keys);
+    }
+
+    [Fact]
+    public async Task BenchmarkPollFailureIsIsolatedAsADiagnosticAndDoesNotBreakWatchlistPolling()
+    {
+        var store = new FakeStore();
+        store.Watch.Add(new("NVDA", "NVIDIA"));
+        var market = new FakeMarket(OpenSession, Bars(30), (100, Now));
+        var options = new ConfluenceOptions { Enabled = true, BenchmarkSymbol = "QQQ" };
+        var diagnostics = new FakeDiagnostics();
+        var benchmark = new BenchmarkPollingService(new ThrowingBenchmarkGateway(market), new BarStoreService(new RecordingBarStore(), new FixedTimeProvider(Now)), options, diagnostics);
+        var runtime = new MonitorRuntimeState();
+        var poller = new MonitorPollingService(store, market, new FakeStream(), runtime, new FixedTimeProvider(Now),
+            diagnostics, benchmark: benchmark);
+        runtime.CommitStart();
+
+        await poller.PollAsync(default);
+
+        Assert.NotEmpty(poller.Signals);
+    }
+
+    sealed class ThrowingBenchmarkGateway(FakeMarket inner) : IMarketDataGateway
+    {
+        public Task<MarketSession> Session(DateTimeOffset now, CancellationToken ct) => inner.Session(now, ct);
+        public Task<IReadOnlyList<Candle>> Candles(string symbol, CancellationToken ct) => throw new HttpRequestException("qqq down");
+        public Task<(double Price, DateTimeOffset At)> Price(string symbol, CancellationToken ct) => inner.Price(symbol, ct);
+        public Task<IReadOnlyList<Candle>> DailyCandles(string symbol, CancellationToken ct) => inner.DailyCandles(symbol, ct);
+        public Task<IReadOnlyList<WatchItem>> Stocks(string symbols, CancellationToken ct) => inner.Stocks(symbols, ct);
+        public Task<string> GetAccessTokenAsync(CancellationToken ct) => inner.GetAccessTokenAsync(ct);
+        public Task<IReadOnlyList<TossTrade>> Trades(string symbol, int count, CancellationToken ct) => inner.Trades(symbol, count, ct);
+        public Task<IReadOnlyList<StockInfo>> StockInfos(string symbols, CancellationToken ct) => inner.StockInfos(symbols, ct);
+        public Task<IReadOnlyList<TossAccount>> Accounts(CancellationToken ct) => inner.Accounts(ct);
+        public Task<IReadOnlyList<TossCommission>> Commissions(int accountSeq, CancellationToken ct) => inner.Commissions(accountSeq, ct);
+        public Task<TossOrderPage> ClosedOrders(int accountSeq, DateOnly? from, DateOnly? to, string? cursor, int limit, CancellationToken ct) => inner.ClosedOrders(accountSeq, from, to, cursor, limit, ct);
+        public Task<IReadOnlyList<TossHolding>> Holdings(int accountSeq, CancellationToken ct) => inner.Holdings(accountSeq, ct);
+    }
+
+    sealed class RecordingBarStore : IBarStore
+    {
+        readonly Dictionary<(string, string), List<string>> _files = new();
+        public IReadOnlyList<string> Lines(string day, string symbol) =>
+            _files.TryGetValue((day, symbol.ToUpperInvariant()), out var l) ? l : [];
+        public Task<string?> LastLineAsync(string day, string symbol, CancellationToken ct)
+        {
+            var l = Lines(day, symbol);
+            return Task.FromResult(l.Count == 0 ? null : l[^1]);
+        }
+        public Task AppendAsync(string day, string symbol, string line, CancellationToken ct)
+        {
+            var key = (day, symbol.ToUpperInvariant());
+            if (!_files.TryGetValue(key, out var l)) _files[key] = l = [];
+            l.Add(line);
+            return Task.CompletedTask;
+        }
+        public Task<IReadOnlyList<string>> ListDaysAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(_files.Keys.Select(x => x.Item1).Distinct().ToArray());
+        public Task<IReadOnlyList<string>> ListSymbolsAsync(string day, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(_files.Keys.Where(x => x.Item1 == day).Select(x => x.Item2).ToArray());
+        public Task<int> CountLinesAsync(string day, string symbol, CancellationToken ct) => Task.FromResult(Lines(day, symbol).Count);
+        public Task DeleteDayAsync(string day, CancellationToken ct)
+        {
+            foreach (var key in _files.Keys.Where(x => x.Item1 == day).ToArray()) _files.Remove(key);
+            return Task.CompletedTask;
+        }
+    }
+
     static SimTrade OpenTrade(string symbol, DateTimeOffset entered, DateTimeOffset end)
         => new("id", symbol, "SETUP", entered, 100, 110, 95, null, null, "OPEN", null, null, null, 100,
             LastEvaluatedBarAt: null, SessionEnd: end, LastPriceAt: entered);

@@ -35,6 +35,10 @@ builder.Services.AddSingleton<FeeRateCheckService>();
 // 이슈 #131: 실계좌 체결(읽기 전용) 수집과 v5 대조 보고서. 주문 생성·정정·취소는 호출하지 않는다.
 builder.Services.AddSingleton<IRealFillStore, RealFillStore>();
 builder.Services.AddSingleton<RealFillsService>(); builder.Services.AddSingleton<RealVsV5QueryService>();
+// 이슈 #165: 컨플루언스 측정 파이프라인(K4)의 저장 봉 — 완료 1분봉 로컬 저장 + QQQ 벤치마크 폴링.
+builder.Services.AddSingleton(_ => { var c = new ConfluenceOptions(); builder.Configuration.GetSection("Confluence").Bind(c); return c; });
+builder.Services.AddSingleton<IBarStore, BarStore>();
+builder.Services.AddSingleton<BarStoreService>(); builder.Services.AddSingleton<BenchmarkPollingService>();
 // 이슈 #151: 뉴스 감성(선택 기능). News:Enabled 기본 false이며 false면 피드·Ollama를 호출하지 않는다.
 builder.Services.AddSingleton(_ => { var news = new NewsOptions(); builder.Configuration.GetSection("News").Bind(news); return news; });
 builder.Services.AddSingleton<INewsStore, NewsStore>();
