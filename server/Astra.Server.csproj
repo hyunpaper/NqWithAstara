@@ -4,5 +4,6 @@
     <Compile Remove="tests/**/*.cs;Application/**/*.cs;Domain/**/*.cs;Models.cs;Indicators.cs;Levels.cs;SymbolAliases.cs" />
     <ProjectReference Include="Domain\Astra.Domain.csproj" />
     <ProjectReference Include="Application\Astra.Application.csproj" />
+    <EmbeddedResource Include="Infrastructure\Prompts\news-classify-v2b.txt" />
   </ItemGroup>
 </Project>

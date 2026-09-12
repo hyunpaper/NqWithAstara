@@ -28,7 +28,16 @@ public static class NewsSymbols
     public const string Market = "MARKET";
 }
 
-/// <summary>매칭·분류 입력으로 쓰는 기사 최소 형태(#151). Headline은 피드가 붙인 AI 헤드라인이다.</summary>
+/// <summary>분류 프롬프트 버전(#171). 저장 레코드·health에 그대로 노출한다.</summary>
+public static class NewsPromptVersions
+{
+    public const string V2b = "v2b";
+}
+
+/// <summary>
+/// 매칭·분류 입력으로 쓰는 기사 최소 형태(#151). Headline은 피드가 붙인 AI 헤드라인이다.
+/// <see cref="GroupId"/>가 같은 신규 기사는 사건 그룹으로 묶여 대표 1건만 분류된다(#171).
+/// </summary>
 public sealed record NewsArticle(
     string Id,
     string Title,
@@ -37,7 +46,8 @@ public sealed record NewsArticle(
     DateTimeOffset CreatedAt,
     IReadOnlyList<string> Tickers,
     string Headline = "",
-    bool HeadlineOnly = false);
+    bool HeadlineOnly = false,
+    string? GroupId = null);
 
 /// <summary>분류 입력으로 무엇을 썼는지(#151). 판정 근거를 사후에 되짚기 위해 레코드에 남긴다.</summary>
 public static class NewsInputKinds

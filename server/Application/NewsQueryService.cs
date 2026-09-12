@@ -54,6 +54,7 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         classified = state.Classified,
         storageLimited = state.StorageLimited,
         ollama = state.OllamaOk ? "ok" : "down",
+        promptVersion = NewsPromptVersions.V2b,
     };
 
     static object Project(NewsRecord record) => new
@@ -72,6 +73,8 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         latencyMs = record.LatencyMs,
         classifiedAt = record.ClassifiedAt,
         inputKind = record.InputKind,
+        promptVersion = record.PromptVersion,
+        classifiedFrom = record.ClassifiedFrom,
     };
 
     static object Project(NewsSentimentScore score) => new
