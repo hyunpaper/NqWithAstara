@@ -5,8 +5,8 @@ namespace Astra.Server.Application;
 public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway toss, IRealtimeMarketStream stream,
     MonitorRuntimeState runtime, TimeProvider clock, IMonitorDiagnostics diagnostics,
     StructureAnalysisService? structure = null, StructureLiquidityFeed? liquidity = null,
-    StructureAlertPublisher? alerts = null, TradeTapeFallbackService? tradeTape = null,
-    SymbolMetadataService? metadata = null, FeeRateCheckService? feeCheck = null) : IMonitorSignals
+    StructureAlertPublisher? alerts = null, SymbolMetadataService? metadata = null,
+    FeeRateCheckService? feeCheck = null, TradeTapeFallbackService? tradeTape = null) : IMonitorSignals
 {
     public bool Running => runtime.Snapshot().Running; public long Generation => runtime.Snapshot().Generation;
     public string ConnectionStatus => runtime.Snapshot().ConnectionStatus; public string ConnectionMessage => runtime.Snapshot().ConnectionMessage;
