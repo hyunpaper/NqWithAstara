@@ -6,7 +6,8 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
     MonitorRuntimeState runtime, TimeProvider clock, IMonitorDiagnostics diagnostics,
     StructureAnalysisService? structure = null, StructureLiquidityFeed? liquidity = null,
     StructureAlertPublisher? alerts = null, SymbolMetadataService? metadata = null,
-    FeeRateCheckService? feeCheck = null, TradeTapeFallbackService? tradeTape = null) : IMonitorSignals
+    FeeRateCheckService? feeCheck = null, TradeTapeFallbackService? tradeTape = null,
+    RealFillsService? realFills = null) : IMonitorSignals
 {
     public bool Running => runtime.Snapshot().Running; public long Generation => runtime.Snapshot().Generation;
     public string ConnectionStatus => runtime.Snapshot().ConnectionStatus; public string ConnectionMessage => runtime.Snapshot().ConnectionMessage;
@@ -29,6 +30,11 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
             if (!market.IsOpen || market.End is { } end && clock.GetLocalNow() >= end)
             {
                 await ReconcileExpiredTrades(gen, ct);
+                // 이슈 #131: 이미 끝난 세션의 실체결만 하루 한 번 수집한다(읽기 전용·실패 무해).
+                // 개장 전에도 IsOpen=false이므로 종료 시각을 지난 경우로 좁힌다 — 빈 수집으로 래치를 태우지 않는다.
+                if (realFills is not null && market.Start is { } endedSession && market.End is { } endedAt
+                    && clock.GetLocalNow() >= endedAt)
+                    await realFills.CollectOnSessionEndAsync(MarketRules.TradingDate(endedSession), ct);
                 runtime.TryCommit(gen, () => { Signals.Clear(); _setups.Clear(); _breakouts.Clear(); _daily.Clear(); structure?.Clear(); alerts?.Clear(); metadata?.Clear(); });
                 runtime.TryCommit(gen, s => s with { ConnectionStatus = "connected", ConnectionMessage = "미국 정규장 외에는 신호를 생성하지 않습니다.", UpdatedAt = clock.GetUtcNow() }); return;
             }

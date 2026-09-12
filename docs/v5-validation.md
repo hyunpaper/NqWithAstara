@@ -275,6 +275,60 @@ fixture는 전부 코드로 생성한다(**운영 실데이터는 커밋하지 �
 
 ---
 
+## 5A. 실매매 대조 (#131)
+
+사용자의 실계좌 체결은 v5 밖에서 만들어진 **외부 기준**이다. 엔진 성과의 증거가 아니라
+"엔진이 내 매매와 어디서 갈렸는가"를 재는 축으로만 쓴다.
+
+### 5A.1 수집 — 읽기 전용
+
+`GET /orders?status=CLOSED`만 호출한다. **주문 생성·정정·취소 API는 어떤 경로에서도 호출하지 않는다.**
+세션 종료(종료 시각 경과) 후 그 거래일에 대해 자동 1회, 그리고
+`POST /api/validation/real-fills/refresh?date=YYYY-MM-DD`로 수동 수집한다.
+커서로 전량 순회하며(페이지 100건, ORDER_HISTORY 5/s를 넘지 않도록 페이지 간 간격),
+`status=FILLED`이고 체결 정보가 있는 주문만 남긴다. 실패는 진단 로그로만 남고 진입·청산을 막지 않는다.
+
+### 5A.2 저장 계약 — `App_Data/real-fills/YYYY-MM-DD.json`
+
+| 필드 | 의미 |
+|---|---|
+| `recordVersion` | `real-fills.1` |
+| `tradingDate` | New York 거래일 |
+| `collectedAt` | 수집 시각 |
+| `fills[].symbol` | 종목 |
+| `fills[].side` | `BUY` / `SELL` |
+| `fills[].filledAt` | 체결 시각 |
+| `fills[].averageFilledPrice` | 평균 체결가 |
+| `fills[].filledQuantity` | 체결 수량 |
+| `fills[].commission` | 수수료 |
+| `fills[].orderType` | 주문 유형 |
+
+**저장하지 않는 것**: 계좌번호(`accountSeq`)·주문 식별자(`orderId`)·체결 금액 합계(`filledAmount`)·잔고.
+게이트웨이가 이 필드를 채워 와도 저장 단계에서 떨어진다(`RealFillsServiceTests`가 고정한다).
+`App_Data/`는 gitignore 대상이라 실데이터는 저장소에 들어가지 않는다.
+
+### 5A.3 대조 규칙 (`RealFillComparer`, Domain 순수 함수)
+
+- **창**: 같은 심볼, 체결 시각 ±5분. 경계는 **양끝 포함**이다.
+- **MATCHED**: 실매수 창 안에 v5 `READY` 또는 `ENTERED` 후보가 있었다. 대표 후보는 `ENTERED` → `READY` 순,
+  같은 상태면 시각이 가까운 것, 그래도 같으면 `eventId` ordinal 최소.
+- **USER_ONLY**: 실매수 창 안에 후보가 없거나 `REJECTED`뿐이다. 대표가 `REJECTED`면 그 거절 코드를 함께 남긴다.
+- **ENGINE_ONLY**: v5 `ENTERED` 이벤트인데 같은 창에 실매수가 없다. 같은 `eventId`의 반복 관측은 첫 관측 한 건으로 접힌다.
+- **가격 괴리**: `(체결가 − entryReference) / atr1m`. ATR이 없거나 0 이하면 **null**이며 0으로 바꾸지 않는다.
+- **실매도**: 그 시점 열려 있던 v5 거래(`enteredAt ≤ 체결시각 ≤ exitAt`, 열린 거래는 `exitAt` 없음)의
+  `ABOVE_TARGET` / `BETWEEN` / `BELOW_STOP` 위치만 본다. 열린 거래가 없으면 null이다.
+- 매칭률의 분모는 **실매수 건수**다. 실매도는 분모에 들어가지 않으며, 실매수가 0건이면 매칭률은 null이다(0%가 아니다).
+
+### 5A.4 조회 — `GET /api/validation/real-vs-v5?date=YYYY-MM-DD`
+
+조회는 Toss를 호출하지 않는다. 저장된 실체결 파일·그날 관측 jsonl(#28과 같은 리더)·`simtrades.json`만 읽는다.
+응답은 `tradingDate`, `fillsCollected`, `collectedAt`, `observationLines`, `observationFileFound`,
+`report`(매칭률·세 분류 건수·괴리 중앙값/사분위·`topUserOnlyRejections` 상위 5개·`rows`), `limitations`다.
+`limitations`의 `REAL_FILLS_NOT_COLLECTED`(실체결 미수집)·`REAL_FILLS_NO_OBSERVATIONS`(그날 관측 파일 없음)는
+"대조 불가"를 뜻하며 0건 성과로 읽지 않는다.
+
+---
+
 ## 6. 하지 않는 것
 
 - 운영 진입/청산·점수 공식·호가 결측 정책 변경 — 이 경로는 읽기 전용이다.

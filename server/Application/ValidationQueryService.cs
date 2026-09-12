@@ -1,5 +1,3 @@
-using System.Text;
-using System.Text.Json;
 using Astra.Server.Domain;
 using Astra.Server.Domain.Structure;
 using Astra.Server.Domain.Validation;
@@ -45,9 +43,10 @@ public sealed class ValidationQueryService(ILocalStore store, IStructureObservat
     /// <summary>거래 저장소 보존 상한(<see cref="SimulationEngine"/>). 거래 부재가 "진입한 적 없음"의 증거가 아니다.</summary>
     public const int TradeRecordLimit = 500;
 
-    static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
-
     readonly StructurePolicy _policy = policy ?? StructurePolicy.Default;
+
+    /// <summary>관측 jsonl 해석은 #131과 공유하는 리더 하나만 쓴다(파싱 중복 금지).</summary>
+    readonly ObservationLogReader _reader = new(observations);
 
     /// <summary>이 보고서가 의존하는 저장 계약. 문서(docs/v5-validation.md)와 같은 문장을 응답에도 남긴다.</summary>
     public static readonly string[] Contract =
@@ -114,28 +113,23 @@ public sealed class ValidationQueryService(ILocalStore store, IStructureObservat
         long bytes = 0;
         var days = 0;
 
-        for (var date = from; date <= to; date = date.AddDays(1))
+        foreach (var day in await _reader.ReadRangeAsync(from, to, ct))
         {
-            ct.ThrowIfCancellationRequested();
             days++;
-            var file = StructureObservationWriter.FileName(date);
-            var content = await observations.ReadLinesAsync(file, ct);
-            if (content.Count == 0)
+            if (!day.Found)
             {
-                missing.Add(date.ToString("yyyy-MM-dd"));
-                files.Add(new ValidationFileAudit(file, date, false, 0, 0, 0, false));
+                missing.Add(day.TradingDate.ToString("yyyy-MM-dd"));
+                files.Add(new ValidationFileAudit(day.File, day.TradingDate, false, 0, 0, 0, false));
                 continue;
             }
 
-            var fileLines = 0;
+            var fileLines = day.Lines.Count;
             var fileFailures = 0;
             long fileBytes = 0;
-            foreach (var line in content)
+            foreach (var line in day.Lines)
             {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-                fileLines++;
-                fileBytes += Encoding.UTF8.GetByteCount(line) + 1;
-                var row = Parse(line);
+                fileBytes += line.Bytes;
+                var row = line.Record is null ? null : Row(line.Record);
                 if (row is null) fileFailures++;
                 else rows.Add(row);
             }
@@ -144,7 +138,7 @@ public sealed class ValidationQueryService(ILocalStore store, IStructureObservat
             failures += fileFailures;
             bytes += fileBytes;
             // 상한에 닿은 날은 그날의 후보 전수가 아니다(§16: 상한 초과 시 더 저장하지 않는다).
-            files.Add(new ValidationFileAudit(file, date, true, fileLines, fileFailures, fileBytes,
+            files.Add(new ValidationFileAudit(day.File, day.TradingDate, true, fileLines, fileFailures, fileBytes,
                 fileBytes >= _policy.ObservationDailyByteLimit * 95 / 100));
         }
 
@@ -157,29 +151,21 @@ public sealed class ValidationQueryService(ILocalStore store, IStructureObservat
     /// 저장된 관측 레코드를 Domain 입력 행으로 옮긴다. 손상된 줄은 버리되 삭제하지 않고 실패 건수로 남긴다(§16).
     /// 계획이 없는 후보의 비용 필드는 null로 둔다 — false(=정상)로 바꾸면 결측이 사라진다.
     /// </summary>
-    static ObservationRow? Parse(string line)
+    static ObservationRow Row(StructureObservationRecord record)
     {
-        try
-        {
-            var record = JsonSerializer.Deserialize<StructureObservationRecord>(line, Json);
-            if (record is null || string.IsNullOrEmpty(record.ObservationId) || string.IsNullOrEmpty(record.Symbol))
-                return null;
-            var candidates = (record.Candidates ?? [])
-                .Where(x => x is not null && !string.IsNullOrEmpty(x.EventId))
-                .Select(x => new ObservationCandidateRow(x.EventId, x.Kind ?? string.Empty, x.ZoneId ?? string.Empty,
-                    x.State ?? string.Empty, x.EntryQuality, x.TriggerBarStart, x.TriggerConfirmedAt, x.ExpiresAt,
-                    x.Plan?.MissingLiquidity, x.Plan?.ValidSpread, x.Plan?.EligibilityCostModelVersion,
-                    x.Plan?.RealizedFillCostModelVersion, x.Plan?.NetR ?? x.NetR,
-                    (IReadOnlyList<string>)(x.RejectionCodes ?? []), x.Notes ?? []))
-                .ToArray();
-            return new ObservationRow(record.ObservationId, record.RecordVersion ?? string.Empty, record.Symbol,
-                record.ObservedAt, record.SessionStart, record.AnalysisAsOf, record.QuoteAt,
-                record.LastCompletedBarStart, record.EngineVersion ?? string.Empty, record.PolicyHash ?? string.Empty,
-                record.Mode ?? string.Empty, record.Detail ?? string.Empty, record.Status ?? string.Empty,
-                record.Trend?.State, record.Warnings ?? [], candidates);
-        }
-        catch (JsonException) { return null; }
-        catch (NotSupportedException) { return null; }
+        var candidates = (record.Candidates ?? [])
+            .Where(x => x is not null && !string.IsNullOrEmpty(x.EventId))
+            .Select(x => new ObservationCandidateRow(x.EventId, x.Kind ?? string.Empty, x.ZoneId ?? string.Empty,
+                x.State ?? string.Empty, x.EntryQuality, x.TriggerBarStart, x.TriggerConfirmedAt, x.ExpiresAt,
+                x.Plan?.MissingLiquidity, x.Plan?.ValidSpread, x.Plan?.EligibilityCostModelVersion,
+                x.Plan?.RealizedFillCostModelVersion, x.Plan?.NetR ?? x.NetR,
+                (IReadOnlyList<string>)(x.RejectionCodes ?? []), x.Notes ?? []))
+            .ToArray();
+        return new ObservationRow(record.ObservationId, record.RecordVersion ?? string.Empty, record.Symbol,
+            record.ObservedAt, record.SessionStart, record.AnalysisAsOf, record.QuoteAt,
+            record.LastCompletedBarStart, record.EngineVersion ?? string.Empty, record.PolicyHash ?? string.Empty,
+            record.Mode ?? string.Empty, record.Detail ?? string.Empty, record.Status ?? string.Empty,
+            record.Trend?.State, record.Warnings ?? [], candidates);
     }
 
     /// <summary>후보 행 기준 필드 결측 감사. 결측을 0으로 바꾸지 않고 비율을 그대로 보고한다.</summary>
