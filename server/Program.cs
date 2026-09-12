@@ -1,8 +1,18 @@
 ﻿using Astra.Server;
 using Astra.Server.Api;
 using Astra.Server.Application;
+using Astra.Server.Application.Backtest;
+using Astra.Server.Backtest;
 using Astra.Server.Domain.Confluence;
 using Astra.Server.Infrastructure;
+
+// 이슈 #169: 측정 서브커맨드. 서버를 띄우지 않고 저장 봉만 재생해 가중치를 산출하고 종료한다.
+if (args is [ConfluenceMeasureCommand.Name, ..])
+{
+    Environment.ExitCode = await ConfluenceMeasureCommand.RunAsync(args, Console.Out, TimeProvider.System,
+        CancellationToken.None);
+    return;
+}
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseUrls(Environment.GetEnvironmentVariable("ASTRA_URLS") ?? "http://127.0.0.1:5188");
@@ -42,7 +52,17 @@ builder.Services.AddSingleton<IBarStore, BarStore>();
 builder.Services.AddSingleton<BarStoreService>(); builder.Services.AddSingleton<BenchmarkPollingService>();
 builder.Services.AddSingleton<IBenchmarkBarSource>(x => x.GetRequiredService<BenchmarkPollingService>());
 // 이슈 #167: 컨플루언스 기법 신호·합산. 가중치는 전부 1.0(미검증)에서 시작하고 K4가 파일로 채운다.
-builder.Services.AddSingleton(_ => ConfluencePolicy.Default); builder.Services.AddSingleton(_ => ConfluenceWeights.Default);
+builder.Services.AddSingleton(_ => ConfluencePolicy.Default);
+// 이슈 #169: 측정 결과 가중치 파일을 기동 시 1회만 읽는다. 없거나 깨졌으면 전부 1.0으로 남는다.
+builder.Services.AddSingleton(x =>
+{
+    var document = ConfluenceWeightsStore.Load(x.GetRequiredService<IWebHostEnvironment>().ContentRootPath,
+        out var error);
+    if (error is not null)
+        x.GetRequiredService<ILoggerFactory>().CreateLogger("Confluence").LogWarning("{Message}", error);
+    return document;
+});
+builder.Services.AddSingleton(x => x.GetRequiredService<ConfluenceWeightsDocument>().ToWeights());
 builder.Services.AddSingleton<ConfluenceService>();
 // 이슈 #151: 뉴스 감성(선택 기능). News:Enabled 기본 false이며 false면 피드·Ollama를 호출하지 않는다.
 builder.Services.AddSingleton(_ => { var news = new NewsOptions(); builder.Configuration.GetSection("News").Bind(news); return news; });
