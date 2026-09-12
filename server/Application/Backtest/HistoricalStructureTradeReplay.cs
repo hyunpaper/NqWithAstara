@@ -28,11 +28,13 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                 var market = new MarketSession(true, "과거 replay", null, sessionStart, sessionEnd);
                 var previousZones = ImmutableArray<PriceZone>.Empty;
                 var retired = ImmutableArray<string>.Empty;
+                var processedBars = 0;
 
                 for (var index = 0; index < bars.Length && bars[index].Timestamp.AddMinutes(1) < sessionEnd; index++)
                 {
                     var current = bars[index];
                     result[symbol] = SimulationEngine.ReplayBars(result[symbol], symbol, [current]);
+                    processedBars = index + 1;
                     var now = current.Timestamp.AddMinutes(1);
                     var prefix = bars.Take(index + 1).ToArray();
                     var build = StructureSnapshotFactory.Create(symbol, market, prefix, daily[symbol], current.Close,
@@ -64,14 +66,15 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                             trend.State.ToString(), trend.SignedTrend, candidate.EntryQuality,
                             snapshot.AnalysisAsOf, snapshot.QuoteAt);
                         var entered = StructuralSimulation.Enter(result[symbol], new StructuralEntryRequest(symbol,
-                            candidate.TriggerBarStart, candidate.TriggerConfirmedAt, snapshot.SessionEnd, context,
+                            candidate.TriggerBarStart, EntryTime(candidate.TriggerConfirmedAt, snapshot.AnalysisAsOf),
+                            snapshot.SessionEnd, context,
                             build.Bars.Bars.Select(x => x.Start).ToArray(), snapshot.SessionStart,
                             candidate.Plan!.TargetZoneSnapshot.Aliases), policy);
                         result[symbol] = entered.Trades;
                     }
                 }
 
-                result[symbol] = SimulationEngine.ReplayBars(result[symbol], symbol, bars);
+                result[symbol] = ReplayPendingBars(result[symbol], symbol, bars, processedBars);
                 result[symbol] = SimulationEngine.CloseExpiredSessions(result[symbol], sessionEnd);
                 daily[symbol].Add(Daily(bars));
             }
@@ -79,6 +82,13 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
         return result.ToImmutableDictionary(x => x.Key, x => x.Value.ToImmutableArray(),
             StringComparer.OrdinalIgnoreCase);
     }
+
+    public static DateTimeOffset EntryTime(DateTimeOffset triggerConfirmedAt, DateTimeOffset analysisAsOf) =>
+        triggerConfirmedAt < analysisAsOf ? analysisAsOf : triggerConfirmedAt;
+
+    public static List<SimTrade> ReplayPendingBars(IReadOnlyList<SimTrade> trades, string symbol,
+        IReadOnlyList<Candle> bars, int processedBars) =>
+        SimulationEngine.ReplayBars(trades, symbol, bars.Skip(Math.Clamp(processedBars, 0, bars.Count)).ToArray());
 
     static Candle Daily(ImmutableArray<Candle> bars) => new(bars[0].Timestamp, bars[0].Open,
         bars.Max(x => x.High), bars.Min(x => x.Low), bars[^1].Close, bars.Sum(x => x.Volume));
