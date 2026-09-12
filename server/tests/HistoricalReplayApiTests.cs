@@ -61,8 +61,13 @@ public sealed class HistoricalReplayApiTests : IDisposable
         Assert.Equal("completed", result.GetProperty("status").GetString());
         Assert.Equal("TSLA", Assert.Single(result.GetProperty("watchlist").EnumerateArray()).GetString());
         Assert.Equal("QQQ", result.GetProperty("benchmark").GetString());
-        Assert.Equal("unavailable", Assert.Single(result.GetProperty("symbols").EnumerateArray())
-            .GetProperty("tradeReplayStatus").GetString());
+        var symbol = Assert.Single(result.GetProperty("symbols").EnumerateArray());
+        Assert.Equal("partial", symbol.GetProperty("tradeReplayStatus").GetString());
+        Assert.Equal(JsonValueKind.Number, symbol.GetProperty("virtualEntries").ValueKind);
+        Assert.Equal(JsonValueKind.Number, symbol.GetProperty("wins").ValueKind);
+        Assert.Equal(JsonValueKind.Number, symbol.GetProperty("losses").ValueKind);
+        Assert.Equal(JsonValueKind.Number, symbol.GetProperty("pnlPercent").ValueKind);
+        Assert.Equal(JsonValueKind.Object, symbol.GetProperty("exits").ValueKind);
         using var latest = JsonDocument.Parse(await client.GetStringAsync("/api/replays/latest"));
         Assert.Equal(id, latest.RootElement.GetProperty("id").GetString());
         Assert.True(File.Exists(Path.Combine(_root, "App_Data", "replay-runs.json")));

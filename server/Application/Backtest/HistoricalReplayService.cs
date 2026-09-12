@@ -99,10 +99,12 @@ public sealed class HistoricalReplayService
                 queued.Benchmark, queued.From, queued.To, CancellationToken.None);
             var measurement = await new ConfluenceReplay(_barStores.Create(Path.Combine(replayRoot, "bars")),
                 _confluencePolicy).RunAsync(queued.From, queued.To, 10, queued.Benchmark, CancellationToken.None);
-            var symbols = queued.Watchlist.Select(symbol => new HistoricalReplaySymbolResult(symbol,
+            var replayStore = _barStores.Create(Path.Combine(replayRoot, "bars"));
+            var replayed = await new HistoricalStructureTradeReplay(replayStore, _structurePolicy).RunAsync(
+                queued.From, queued.To, queued.Watchlist, CancellationToken.None);
+            var symbols = queued.Watchlist.Select(symbol => Result(symbol,
                 measurement.BySymbol.TryGetValue(symbol, out var techniques) ? techniques.Sum(x => x.N) : 0,
-                null, null, null, null, null, null, "unavailable",
-                "과거 호가·체결과 시점별 v5 계획 상태가 없어 실제 v5 가상 거래를 재현할 수 없습니다."))
+                replayed.GetValueOrDefault(symbol)))
                 .ToImmutableArray();
             var quality = import.Rows.Select(x => new HistoricalReplayQuality(x.Symbol, x.ExpectedBars, x.ActualBars,
                 x.Gaps, x.Duplicates, x.MissingRate, x.BenchmarkMissing)).ToImmutableArray();
@@ -112,8 +114,7 @@ public sealed class HistoricalReplayService
                 Source = import.Source,
                 DataQuality = quality,
                 Symbols = symbols,
-                Aggregate = new HistoricalReplayAggregate(symbols.Sum(x => x.Signals), null, null, null, null,
-                    null, null)
+                Aggregate = Aggregate(symbols)
             };
             await SaveAsync(complete);
         }
@@ -124,6 +125,30 @@ public sealed class HistoricalReplayService
                 Status = "failed", CompletedAt = _clock.GetUtcNow(), FailureReason = exception.Message
             });
         }
+    }
+
+    static HistoricalReplaySymbolResult Result(string symbol, int signals, ImmutableArray<SimTrade> trades)
+    {
+        var closed = trades.Where(x => x.Status != "OPEN" && x.ExitAt.HasValue).ToArray();
+        var exits = new HistoricalReplayExitCounts(closed.Count(x => x.Status == "STOP"),
+            closed.Count(x => x.Status == "TARGET"), closed.Count(x => x.Status == "EOD"));
+        return new HistoricalReplaySymbolResult(symbol, signals, trades.Length,
+            closed.Count(x => x.PnlPercent > 0), closed.Count(x => x.PnlPercent <= 0),
+            Math.Round(closed.Sum(x => x.PnlPercent ?? 0), 2),
+            closed.Length == 0 ? 0 : Math.Round(closed.Average(x => (x.ExitAt!.Value - x.EnteredAt).TotalMinutes), 1),
+            exits, "partial", "봉 기반 v5 구조 진입과 STOP/TARGET/EOD만 재현했습니다. 과거 호가·체결 의존 입력은 unavailable입니다.");
+    }
+
+    static HistoricalReplayAggregate Aggregate(ImmutableArray<HistoricalReplaySymbolResult> symbols)
+    {
+        var exits = new HistoricalReplayExitCounts(symbols.Sum(x => x.Exits?.Stop ?? 0),
+            symbols.Sum(x => x.Exits?.Target ?? 0), symbols.Sum(x => x.Exits?.Eod ?? 0));
+        var entries = symbols.Sum(x => x.VirtualEntries ?? 0);
+        return new HistoricalReplayAggregate(symbols.Sum(x => x.Signals), entries,
+            symbols.Sum(x => x.Wins ?? 0), symbols.Sum(x => x.Losses ?? 0),
+            Math.Round(symbols.Sum(x => x.PnlPercent ?? 0), 2),
+            entries == 0 ? 0 : Math.Round(symbols.Sum(x => (x.AverageHoldingMinutes ?? 0) * (x.VirtualEntries ?? 0)) / entries, 1),
+            exits);
     }
 
     async Task SaveAsync(HistoricalReplayRun run)

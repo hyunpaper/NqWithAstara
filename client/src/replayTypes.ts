@@ -9,7 +9,7 @@ export type ReplaySymbolResult = {
   pnlPercent: number | null;
   averageHoldingMinutes: number | null;
   exits: { stop: number; target: number; eod: number } | null;
-  tradeReplayStatus: "available" | "unavailable";
+  tradeReplayStatus: "available" | "partial" | "unavailable";
   unavailableReason: string | null;
 };
 

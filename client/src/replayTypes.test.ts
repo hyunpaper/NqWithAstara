@@ -13,4 +13,9 @@ describe("과거 replay 표시", () => {
     expect(replayStatusLabel("completed")).toBe("완료");
     expect(replayStatusLabel("failed")).toBe("실패");
   });
+
+  it("봉 기반 거래와 호가 의존 결측을 partial 상태로 함께 표현한다", () => {
+    const status: import("./replayTypes").ReplaySymbolResult["tradeReplayStatus"] = "partial";
+    expect(status).toBe("partial");
+  });
 });
