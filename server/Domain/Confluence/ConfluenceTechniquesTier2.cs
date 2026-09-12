@@ -17,7 +17,8 @@ public static partial class ConfluenceTechniques
         return
         [
             Candle(input, policy),
-            MultiTimeframeAlignment(input, policy)
+            MultiTimeframeAlignment(input, policy),
+            Squeeze(input, policy)
         ];
     }
 
@@ -77,6 +78,41 @@ public static partial class ConfluenceTechniques
             ("aligned", aligned), ("timeframes", total), ("align1m", first ? 1 : 0), ("align5m", second ? 1 : 0),
             ("align15m", fifteenMinute is null ? null : fifteenMinute is true ? 1 : 0));
     }
+
+    // ── BB-in-KC 스퀴즈: 해제 직후 KC 상단 위 +0.8 / 하단 아래 −0.8, 스퀴즈 지속은 "대기"(0, c=0.5) ──
+    public static TechniqueSignal Squeeze(ConfluenceInput input, ConfluencePolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(policy);
+        var name = TechniqueNames.Squeeze;
+        if (Last(input) is not { } i || i < 1) return TechniqueSignal.WarmingUp(name);
+
+        var bands = BollingerBands.Series(input.Bars, policy.BollingerPeriod, policy.BollingerDeviations);
+        var keltner = KeltnerChannel.Series(input.Bars, input.PreviousSessionClose, policy.KeltnerEmaPeriod,
+            policy.KeltnerAtrPeriod, policy.KeltnerAtrFactor);
+        if (Inside(bands, keltner, i) is not { } now || Inside(bands, keltner, i - 1) is not { } previous)
+            return TechniqueSignal.WarmingUp(name);
+
+        var upper = keltner[i].Upper!.Value;
+        var lower = keltner[i].Lower!.Value;
+        var close = (double)input.Bars[i].Close;
+        var released = previous && !now;
+        var score = released ? close > upper ? policy.SqueezeReleaseScore
+            : close < lower ? -policy.SqueezeReleaseScore
+            : 0
+            : 0;
+        var confidence = score != 0 ? 1 : now ? policy.SqueezeActiveConfidence : policy.SqueezeIdleConfidence;
+        return TechniqueSignal.Create(name, score, confidence,
+            ("squeeze", now ? 1 : 0), ("released", released ? 1 : 0), ("keltnerUpper", upper),
+            ("keltnerLower", lower), ("bollingerUpper", bands[i].Upper), ("bollingerLower", bands[i].Lower));
+    }
+
+    /// <summary>BB(20,2)가 KC 안에 완전히 들어갔는가. 둘 중 하나라도 warmup이면 null이다.</summary>
+    static bool? Inside(ImmutableArray<BollingerPoint> bands, ImmutableArray<KeltnerPoint> keltner, int index) =>
+        bands[index].Upper is { } bandUpper && bands[index].Lower is { } bandLower &&
+        keltner[index].Upper is { } channelUpper && keltner[index].Lower is { } channelLower
+            ? bandUpper < channelUpper && bandLower > channelLower
+            : null;
 
     /// <summary>정렬 비율을 [−1,+1]로 편다 — 3시간대면 3정렬 +1 · 2정렬 +1/3 · 1정렬 −1/3 · 0정렬 −1이다.</summary>
     public static double AlignmentScore(int aligned, int total) =>

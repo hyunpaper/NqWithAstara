@@ -78,6 +78,16 @@ public sealed record ConfluencePolicy
     /// <summary>15m EMA21이 아직 warmup(15m 봉 21개=315분 전)이면 1m·5m만 보고 낮춘 confidence.</summary>
     public double MtaHigherTimeframeWarmupConfidence { get; init; } = .6;
 
+    /// <summary>켈트너 채널 — EMA(20) ± 1.5·ATR(20). 기존 ATR(14)와 별개 인스턴스다.</summary>
+    public int KeltnerEmaPeriod { get; init; } = 20;
+    public int KeltnerAtrPeriod { get; init; } = 20;
+    public double KeltnerAtrFactor { get; init; } = 1.5;
+
+    /// <summary>스퀴즈 해제 봉의 방향 점수, 스퀴즈 지속("대기")·그 외 상태의 confidence.</summary>
+    public double SqueezeReleaseScore { get; init; } = .8;
+    public double SqueezeActiveConfidence { get; init; } = .5;
+    public double SqueezeIdleConfidence { get; init; } = .3;
+
     /// <summary>
     /// C4 상관군. 같은 정보축 묶음은 군 안에서 1/n로 나눈다. `군이름:기법,기법` 형식이며 2·3군이
     /// 들어오면 이 목록만 늘어난다. 1군 채택 목록에는 각 군에 한 기법씩만 있어 실질 계수는 1.0이다.

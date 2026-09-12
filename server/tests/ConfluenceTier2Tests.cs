@@ -135,4 +135,62 @@ public sealed class ConfluenceTier2Tests
         Assert.True(ConfluenceTechniques.MultiTimeframeAlignment(Cf.Input(Cf.Ramp(100, 100, .05)), Policy).Warmup);
         Assert.True(ConfluenceTechniques.MultiTimeframeAlignment(Cf.Input([]), Policy).Warmup);
     }
+    static ImmutableArray<IndicatorBar> SqueezeThen(params double[] closes)
+    {
+        var bars = Cf.Closes(Cf.Flat(30, 100));
+        foreach (var close in closes)
+        {
+            var index = bars.Length;
+            bars = bars.Add(Cf.Ohlc(index, 100, Math.Max(100, close) + .2, Math.Min(100, close) - .2, close));
+        }
+        return bars;
+    }
+
+    [Fact]
+    public void Squeeze_scores_the_release_bar_that_closes_above_the_keltner_upper_band()
+    {
+        var signal = ConfluenceTechniques.Squeeze(Cf.Input(SqueezeThen(105)), Policy);
+
+        Assert.False(signal.Warmup);
+        Assert.Equal(Policy.SqueezeReleaseScore, signal.Score, 4);
+        Assert.Equal(1, signal.Confidence);
+        Assert.Equal(1, Cf.Evidence(signal, "released"));
+    }
+
+    [Fact]
+    public void Squeeze_scores_the_release_bar_that_closes_below_the_keltner_lower_band()
+    {
+        var signal = ConfluenceTechniques.Squeeze(Cf.Input(SqueezeThen(95)), Policy);
+
+        Assert.Equal(-Policy.SqueezeReleaseScore, signal.Score, 4);
+        Assert.Equal(1, signal.Confidence);
+    }
+
+    [Fact]
+    public void Squeeze_scores_only_the_release_bar_and_not_the_bar_after_it()
+    {
+        var signal = ConfluenceTechniques.Squeeze(Cf.Input(SqueezeThen(105, 105.2)), Policy);
+
+        Assert.Equal(0, signal.Score);
+        Assert.Equal(Policy.SqueezeIdleConfidence, signal.Confidence, 4);
+        Assert.Equal(0, Cf.Evidence(signal, "released"));
+        Assert.Equal(0, Cf.Evidence(signal, "squeeze"));
+    }
+
+    [Fact]
+    public void Squeeze_waits_with_a_lower_confidence_while_the_bands_stay_inside_the_channel()
+    {
+        var signal = ConfluenceTechniques.Squeeze(Cf.Input(Cf.Closes(Cf.Flat(30, 100))), Policy);
+
+        Assert.Equal(0, signal.Score);
+        Assert.Equal(Policy.SqueezeActiveConfidence, signal.Confidence, 4);
+        Assert.Equal(1, Cf.Evidence(signal, "squeeze"));
+    }
+
+    [Fact]
+    public void Squeeze_is_warmup_before_both_bands_exist_on_the_previous_bar()
+    {
+        Assert.True(ConfluenceTechniques.Squeeze(Cf.Input(Cf.Closes(Cf.Flat(20, 100))), Policy).Warmup);
+        Assert.True(ConfluenceTechniques.Squeeze(Cf.Input([]), Policy).Warmup);
+    }
 }
