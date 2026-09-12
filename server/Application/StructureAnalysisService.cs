@@ -92,9 +92,10 @@ public sealed record StructureAnalysisView(string Symbol, string Mode, string St
     StructureCandidateDto[] Candidates, StructureQualityDto Quality, string[] Warnings, string[] Notes);
 
 /// <summary>폴링이 넘겨주는 v5 입력. v4가 이미 사용한 원본 응답을 그대로 재사용하고 추가 조회를 하지 않는다.</summary>
+/// <param name="ExitedThisPoll">이번 poll에 이 심볼의 시뮬 거래가 종결됐다(#106 신규 진입 억제 입력).</param>
 public sealed record StructureObservationRequest(string Symbol, long Generation, MarketSession Market,
     IReadOnlyList<Candle>? OneMinuteBars, IReadOnlyList<Candle>? DailyBars, double? QuotePrice,
-    DateTimeOffset? QuoteAt, StructureLiquidity? Liquidity = null);
+    DateTimeOffset? QuoteAt, StructureLiquidity? Liquidity = null, bool ExitedThisPoll = false);
 
 /// <summary>
 /// 설계 §12. snapshot 구성 → 순수 계산(gate 밖) → 짧은 commit(gate 안, generation 재검증) → 공개 snapshot 갱신.
@@ -118,6 +119,12 @@ public sealed class StructureAnalysisService(
     public const string NoteEntryBlockedByOpenTrade = "V5_ENTRY_BLOCKED_BY_OPEN_TRADE";
     public const string NoteEntryPlanInvalid = "V5_ENTRY_PLAN_INVALID";
     public const string NoteEntryUnavailable = "V5_ENTRY_PORT_UNAVAILABLE";
+
+    /// <summary>
+    /// #106: 이번 poll에 같은 심볼의 청산이 있었다. 청산을 만든 그 틱이 곧바로 신규 진입가가 되지 않도록
+    /// 이 poll의 진입만 건너뛴다. 후보는 READY로 남고 쿨다운이 아니다.
+    /// </summary>
+    public const string NoteEntrySuppressedBySamePollExit = "V5_ENTRY_SUPPRESSED_BY_SAME_POLL_EXIT";
 
     /// <summary>§16B 가격 단위: 관측된 가격이 정책 tick의 배수가 아니다(신규 READY 금지).</summary>
     public const string NotePriceTickUnsupported = "V5_PRICE_TICK_UNSUPPORTED";
@@ -425,6 +432,10 @@ public sealed class StructureAnalysisService(
         if (_options.Mode != StructureEngineMode.Active || preferredId is null) return null;
         var chosen = candidates.FirstOrDefault(x => x.EventId == preferredId);
         if (chosen is null || chosen.Disposition != CandidateDisposition.Ready || chosen.Plan is null) return null;
+
+        // #106: 청산이 발생한 poll의 틱으로는 새로 진입하지 않는다. 후보는 READY로 남고 다음 poll이 재시도한다.
+        if (request.ExitedThisPoll)
+            return new ActiveEntryResult(candidates, false, NoteEntrySuppressedBySamePollExit);
 
         // #62 §12.5: 후보 판정 이후 흘러간 시간을 gate 안에서 다시 본다. 후보는 READY로 남고 다음 poll이 재시도한다.
         if (!Current(request, snapshot, now, newEntry: true))
