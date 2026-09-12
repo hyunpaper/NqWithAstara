@@ -265,6 +265,69 @@ public sealed class StructureD2TrendTests
         Assert.NotNull(trend.SignedTrend);
     }
 
+    // ── 구조항 스케일 (§7, #148) ──
+
+    [Fact]
+    public void TheStructureDeltaDenominatorIsTheSquareRootOfTheScaleBarsTimesAtr()
+    {
+        var bars = FromBuckets(AlignedUptrend);
+        var unscaled = Evaluate(bars, P with { StructureDirectionAtrScaleBars = 1 });
+        var scaled = Evaluate(bars);
+
+        var high = scaled.Components.Single(x => x.Name == "structureDeltaHigh");
+        var reference = unscaled.Components.Single(x => x.Name == "structureDeltaHigh");
+
+        Assert.Equal(reference.Raw!.Value / Math.Sqrt(5), high.Raw!.Value, 12);
+        Assert.Equal(Math.Tanh(high.Raw!.Value), high.Value!.Value, 12);
+    }
+
+    [Fact]
+    public void TheScaledStructureDirectionIsCloserToZeroAndLessSaturated()
+    {
+        var bars = FromBuckets(AlignedUptrend);
+        var unscaled = Evaluate(bars, P with { StructureDirectionAtrScaleBars = 1 });
+        var scaled = Evaluate(bars);
+
+        Assert.True(Math.Abs(scaled.StructureDirection!.Value) < Math.Abs(unscaled.StructureDirection!.Value),
+            $"scaled={scaled.StructureDirection} unscaled={unscaled.StructureDirection}");
+        Assert.True(Math.Abs(unscaled.StructureDirection!.Value) > .99,
+            $"unscaled={unscaled.StructureDirection}");
+        Assert.True(Math.Abs(scaled.StructureDirection!.Value) < .99,
+            $"scaled={scaled.StructureDirection}");
+    }
+
+    [Fact]
+    public void TheScaleBarsPolicyChangesThePolicyHash()
+    {
+        Assert.NotEqual(P.PolicyHash, (P with { StructureDirectionAtrScaleBars = 1 }).PolicyHash);
+        Assert.NotEqual(P.PolicyHash, (P with { TrendStateHoldBars = 1 }).PolicyHash);
+        Assert.NotEqual(P.PolicyHash, (P with { TrendExitEfficiency = .15 }).PolicyHash);
+        Assert.NotEqual(P.PolicyHash, (P with { TrendExitSignedTrend = 15 }).PolicyHash);
+    }
+
+    // ── 재시작 재현성 (§16B, #148) ──
+
+    [Fact]
+    public void ReplayingTheSameBarsFromScratchProducesTheSameStateAtEveryCutoff()
+    {
+        var bars = FromBuckets(AlignedUptrend);
+        var five = BarAggregator.Aggregate(bars, Fx.SessionStart, bars[^1].End, P);
+
+        for (var length = bars.Length - 30; length <= bars.Length; length += 5)
+        {
+            var prefix = bars.Take(length).ToImmutableArray();
+            var cutoff = prefix[^1].End;
+            var live = TrendEvaluator.Evaluate(
+                TrendRequest.Create(Fx.Symbol, Fx.SessionStart, cutoff, bars, five), P);
+
+            var replayed = Evaluate(prefix);
+            Assert.Equal(replayed.State, live.State);
+            Assert.Equal(replayed.SignedTrend, live.SignedTrend);
+            Assert.Equal(replayed.StructureDirection, live.StructureDirection);
+            Assert.Equal(replayed.Efficiency, live.Efficiency);
+        }
+    }
+
     // ── 연속성·결정성·수치 안전 ──
 
     /// <summary>§15/§19-2: 작은 입력 변화가 계단이 아니라 연속적으로 반영된다.</summary>
