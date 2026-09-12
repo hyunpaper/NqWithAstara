@@ -901,7 +901,7 @@ export default function App() {
             <span
               className={`dot ${state?.connection.status === "connected" ? "ok" : ""}`}
             />
-            {state?.connection.message || "연결 확인 중"}
+            {!state ? "연결 확인 중" : state.connection.message}
           </div>
           <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}

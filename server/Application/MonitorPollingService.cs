@@ -36,7 +36,7 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
                     && clock.GetLocalNow() >= endedAt)
                     await realFills.CollectOnSessionEndAsync(MarketRules.TradingDate(endedSession), ct);
                 runtime.TryCommit(gen, () => { Signals.Clear(); _setups.Clear(); _breakouts.Clear(); _daily.Clear(); structure?.Clear(); alerts?.Clear(); metadata?.Clear(); });
-                runtime.TryCommit(gen, s => s with { ConnectionStatus = "connected", ConnectionMessage = "미국 정규장 외에는 신호를 생성하지 않습니다.", UpdatedAt = clock.GetUtcNow() }); return;
+                runtime.TryCommit(gen, s => s with { ConnectionStatus = "connected", ConnectionMessage = "", UpdatedAt = clock.GetUtcNow() }); return;
             }
             // 이슈 #130: 폴링 서비스가 세션 진입을 감지하는 지점 — 세션당 1회 수수료 정합을 확인한다.
             if (feeCheck is not null && market.Start is { } sessionStart) await feeCheck.CheckOnSessionEntryAsync(sessionStart, ct);
