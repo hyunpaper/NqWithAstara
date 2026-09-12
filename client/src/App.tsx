@@ -30,6 +30,7 @@ import StructurePanel from "./StructurePanel";
 // <SimStructurePanel report={data.structure} /> 한 줄을 되돌리면 복원된다.
 import LiveStructureCells from "./LiveStructureCells";
 import { planV5Notifications, v4PushEnabled } from "./alertPlanner";
+import { formatViewHash, parseViewHash } from "./viewRoute";
 import type {
   StructureEventRow,
   StructureSummary,
@@ -393,7 +394,9 @@ export default function App() {
       () => localStorage.getItem("astra-theme") || "dark",
     ),
     [state, setState] = useState<State | null>(null),
-    [selected, setSelected] = useState(""),
+    [selected, setSelected] = useState(
+      () => parseViewHash(window.location.hash).symbol ?? "",
+    ),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [query, setQuery] = useState(""),
@@ -408,7 +411,10 @@ export default function App() {
     ),
     [notice, setNotice] = useState(""),
     // v5 구조 분석은 실시간 시그널 화면과 섞지 않고 별도 뷰로 분리한다(설계 §13, §19-10).
-    [view, setView] = useState<"live" | "dash" | "structure">("live"),
+    // 이슈 #128: 새로고침 후에도 화면을 유지하기 위해 URL hash에서 초기값을 읽는다.
+    [view, setView] = useState<"live" | "dash" | "structure">(
+      () => parseViewHash(window.location.hash).view,
+    ),
     // 이슈 #26: 라이브 목록 정렬 선택(모드별 유효성은 resolveSortKey가 판정). localStorage에 저장.
     [liveSortChoice, setLiveSortChoice] = useState(
       () => localStorage.getItem("astra-live-sort") || "",
@@ -481,6 +487,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("astra-alerts", alertsOn ? "on" : "off");
   }, [alertsOn]);
+  useEffect(() => {
+    const symbol = view === "structure" ? selected : undefined;
+    history.replaceState(null, "", formatViewHash(view, symbol));
+  }, [view, selected]);
   useEffect(() => {
     const restarting = previousRunning.current === false && state?.running === true;
     const suppress = !alertsSeeded.current || suppressAlertSnapshot.current || restarting;
