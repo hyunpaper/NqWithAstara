@@ -17,13 +17,13 @@ public sealed class TickFlowTape(TimeProvider clock)
     const int MaxTrades = 5000;
     static readonly TimeSpan Window = TimeSpan.FromMinutes(15);
 
-    readonly record struct Entry(DateTimeOffset At, decimal Price, decimal Volume, decimal Buy, decimal Sell);
+    readonly record struct Entry(DateTimeOffset At, decimal Price, decimal Volume, int Seq, decimal Buy, decimal Sell);
 
     sealed class SymbolTape
     {
         public readonly object Gate = new();
         public readonly Queue<Entry> Trades = new();
-        public readonly HashSet<(DateTimeOffset At, decimal Price, decimal Volume)> Seen = [];
+        public readonly HashSet<(DateTimeOffset At, decimal Price, decimal Volume, int Seq)> Seen = [];
         public decimal LastPrice;
         public int LastDirection;
         public DateTimeOffset LastAt;
@@ -44,7 +44,8 @@ public sealed class TickFlowTape(TimeProvider clock)
         }
     }
 
-    /// <summary>REST 체결 내역을 같은 틱 룰로 병합한다. 반환값은 새로 반영된 체결 수다.</summary>
+    /// <summary>REST 체결 내역을 같은 틱 룰로 병합한다. 반환값은 새로 반영된 체결 수다.
+    /// REST는 초 단위 timestamp라 같은 초·가격·수량의 별개 체결이 섞일 수 있어 배치 내 순번(§143)을 키에 더한다.</summary>
     public int MergeRestTrades(string symbol, IReadOnlyList<TossTrade> trades)
     {
         ArgumentNullException.ThrowIfNull(trades);
@@ -52,8 +53,14 @@ public sealed class TickFlowTape(TimeProvider clock)
         var merged = 0;
         lock (flow.Gate)
         {
+            var seqByKey = new Dictionary<(DateTimeOffset, decimal, decimal), int>();
             foreach (var trade in trades.OrderBy(x => x.Timestamp))
-                if (Append(flow, trade.Timestamp, trade.Price, trade.Volume)) merged++;
+            {
+                var key = (trade.Timestamp, trade.Price, trade.Volume);
+                var seq = seqByKey.GetValueOrDefault(key);
+                seqByKey[key] = seq + 1;
+                if (Append(flow, trade.Timestamp, trade.Price, trade.Volume, seq)) merged++;
+            }
             flow.LastRestAt = clock.GetUtcNow();
         }
         return merged;
@@ -122,18 +129,18 @@ public sealed class TickFlowTape(TimeProvider clock)
 
     public void Remove(string symbol) => _flows.TryRemove(symbol, out _);
 
-    bool Append(SymbolTape flow, DateTimeOffset at, decimal price, decimal volume)
+    bool Append(SymbolTape flow, DateTimeOffset at, decimal price, decimal volume, int seq = 0)
     {
         if (price <= 0 || volume < 0 || at < flow.LastAt) return false;
-        if (!flow.Seen.Add((at, price, volume))) return false;
+        if (!flow.Seen.Add((at, price, volume, seq))) return false;
         var direction = flow.LastPrice == 0 ? 0 : price > flow.LastPrice ? 1 : price < flow.LastPrice ? -1 : flow.LastDirection;
         flow.LastPrice = price; flow.LastDirection = direction; flow.LastAt = at;
-        flow.Trades.Enqueue(new(at, price, volume, direction > 0 ? volume : 0, direction < 0 ? volume : 0));
+        flow.Trades.Enqueue(new(at, price, volume, seq, direction > 0 ? volume : 0, direction < 0 ? volume : 0));
         var cutoff = clock.GetUtcNow() - Window;
         while (flow.Trades.Count > MaxTrades || (flow.Trades.Count > 0 && flow.Trades.Peek().At < cutoff))
         {
             var oldest = flow.Trades.Dequeue();
-            flow.Seen.Remove((oldest.At, oldest.Price, oldest.Volume));
+            flow.Seen.Remove((oldest.At, oldest.Price, oldest.Volume, oldest.Seq));
         }
         return true;
     }

@@ -100,6 +100,47 @@ public sealed class TradeTapeFallbackTests
     }
 
     [Fact]
+    public void SameSecondPriceVolumeDuplicatesWithinOneBatchAreBothCounted()
+    {
+        var clock = new FixedClock(Now);
+        var tape = new TickFlowTape(clock);
+        var at = Now.AddSeconds(-10);
+
+        var merged = tape.MergeRestTrades("NVDA", [Trade("NVDA", 218.25m, 1m, at), Trade("NVDA", 218.25m, 1m, at)]);
+
+        Assert.Equal(2, merged);
+    }
+
+    [Fact]
+    public void RefetchingSameBatchAddsNothing()
+    {
+        var clock = new FixedClock(Now);
+        var tape = new TickFlowTape(clock);
+        var at = Now.AddSeconds(-10);
+        TossTrade[] trades = [Trade("NVDA", 218.25m, 1m, at), Trade("NVDA", 218.25m, 1m, at)];
+
+        tape.MergeRestTrades("NVDA", trades);
+        var merged = tape.MergeRestTrades("NVDA", trades);
+
+        Assert.Equal(0, merged);
+    }
+
+    [Fact]
+    public void RefetchWithAnAdditionalThirdDuplicateAddsOnlyOne()
+    {
+        var clock = new FixedClock(Now);
+        var tape = new TickFlowTape(clock);
+        var at = Now.AddSeconds(-10);
+
+        tape.MergeRestTrades("NVDA", [Trade("NVDA", 218.25m, 1m, at), Trade("NVDA", 218.25m, 1m, at)]);
+        var merged = tape.MergeRestTrades(
+            "NVDA",
+            [Trade("NVDA", 218.25m, 1m, at), Trade("NVDA", 218.25m, 1m, at), Trade("NVDA", 218.25m, 1m, at)]);
+
+        Assert.Equal(1, merged);
+    }
+
+    [Fact]
     public void BlockTradeCountUsesMedianTimesFactorAsExclusiveThreshold()
     {
         var clock = new FixedClock(Now);
