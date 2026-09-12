@@ -30,10 +30,11 @@ public sealed record NewsClassificationRequest(string Title, string Body, IReadO
 
 /// <summary>
 /// 분류 응답(#151 §3). <see cref="Available"/>가 false면 로컬 LLM에 닿지 못한 것이며,
-/// 이 경우 호출자는 기사를 소비하지 않고 다음 주기로 미룬다.
+/// 이 경우 호출자는 기사를 소비하지 않고 다음 주기로 미룬다. <see cref="PromptVersion"/>은 저장
+/// 레코드·health에 그대로 노출한다(#171).
 /// </summary>
 public sealed record NewsClassificationResult(
-    NewsClassification? Classification, string Model, long LatencyMs, bool Available);
+    NewsClassification? Classification, string Model, long LatencyMs, bool Available, string PromptVersion = "");
 
 /// <summary>로컬 LLM 분류기 포트(#151 §3).</summary>
 public interface INewsClassifier

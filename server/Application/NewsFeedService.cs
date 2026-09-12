@@ -259,7 +259,8 @@ public sealed class NewsFeedService(
             result.Model,
             result.LatencyMs,
             clock.GetUtcNow(),
-            inputKind);
+            inputKind,
+            result.PromptVersion);
     }
 
     async Task SaveAsync(NewsRecord record, CancellationToken ct)

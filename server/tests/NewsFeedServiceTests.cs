@@ -355,4 +355,19 @@ public sealed class NewsFeedServiceTests
 
         Assert.Equal("90", Assert.Single(harness.State.Recent()).Id);
     }
+
+    [Fact]
+    public async Task SavedRecordCarriesThePromptVersion()
+    {
+        var harness = new Harness();
+        harness.Classifier.Respond = _ => new NewsClassificationResult(
+            new NewsClassification(["NVDA"], NewsSentiments.Positive, 3, "회복"), "qwen", 10, true, "v2b");
+        harness.Page(1, Item("100", "기준"));
+        await harness.PollAsync();
+
+        harness.Page(1, Item("101", "가"), Item("100", "기준"));
+        await harness.PollAsync();
+
+        Assert.Equal("v2b", Assert.Single(harness.Saved()).PromptVersion);
+    }
 }
