@@ -68,7 +68,7 @@ realizedFillCostModelVersion, netR}`.
 | `warmupCount` | warmup 상태인 기법 수 | — |
 | `policyHash` | `ConfluencePolicy`의 canonical JSON SHA-256. `StructurePolicy.policyHash`와 **별개** | — |
 | `weightsVersion` | 가중치 집합의 버전. 파일이 없으면 `uniform.1`(전부 1.0, 미검증), K4 측정 파일이 있으면 `w-<yyyyMMdd>-<hash8>`(§5B) | — |
-| `techniques[]` | 기법별 `{name, score, confidence, weight, warmup, contributing, correlationGroup, evidence}` | 기법 자체는 항상 10개가 실린다 |
+| `techniques[]` | 기법별 `{name, score, confidence, weight, warmup, contributing, correlationGroup, evidence}` | 기법 자체는 항상 16개가 실린다 |
 
 기법별 `score`∈[−1,+1](롱 전용이므로 음수는 "롱에 불리")과 `confidence`∈[0,1] 정의는 설계 C3 표 그대로다.
 
@@ -85,9 +85,25 @@ realizedFillCostModelVersion, netR}`.
 | `RS_QQQ` | tanh((당일 수익률 − QQQ 당일 수익률)/ATR%) | 벤치마크 봉이 ±60초 동기면 1.0 / 아니면 **0** |
 | `OBI` | (Bid−Ask)/(Bid+Ask) 최근 3 poll 평균 | 호가가 있으면 1.0 / 결측이면 **0** |
 
+2군 6개(#170)도 같은 계약이다 — 완료 봉만 보고, 표준 파라미터는 고정이며, 가중치는 전부 1.0(미검증)이다.
+
+| 기법(`name`) | score | confidence |
+|---|---|---|
+| `CANDLE` | 마지막 완료 봉이 직전 5봉 저점을 갱신했을 때만 강세 장악형 +0.6 / 망치 +0.5 / 핀바 +0.4, 아니면 0 | 몸통 ≥ 0.3·ATR이면 1.0 / 아니면 0.5 |
+| `MTA_ALIGN` | 1m·5m·15m 중 EMA9>EMA21인 시간대 비율을 (비율−0.5)×2로 편다(3시간대면 +1 / +1/3 / −1/3 / −1) | 15m EMA21이 있으면 1.0 / 15m warmup이면 1m·5m만 보고 **0.6** |
+| `SQUEEZE` | 직전 봉이 BB(20,2)⊂KC(EMA20±1.5·ATR20)이고 현재 봉이 아니면 종가가 KC 상단 위 +0.8 · 하단 아래 −0.8, 그 외 0 | 방향이 잡힌 해제 봉 1.0 / 스퀴즈 지속("대기") 0.5 / 그 외 0.3 |
+| `VOL_BREAKOUT` | 목표가 = 정규장 첫 완료봉 시가 + 전일 레인지 × K(0.5). 종가 ≥ 목표가면 (종가−목표가)/ATR을 1에서 자르고, 미달이면 (종가−목표가)/전일 레인지를 −1..0으로 자른다 | 첫봉 시가 > 전 3거래일 종가 평균이면 1.0 / 아니면 0.5 |
+| `RVOL_DAILY` | tanh(일 단위 RVOL−1) × sign(마지막 종가 − 세션 첫봉 시가). 분모는 최근 20거래일의 같은 경과분까지 누적 거래량 평균 | 20거래일 표본이 있으면 1.0 / 없으면 warmup |
+| `LR_DELTA` | 최근 15분 체결을 호가 중간값 기준(같으면 틱룰)으로 나눠 (매수−매도)/(매수+매도) | 체결 표본 ≥20이면 1.0 / 미만이면 warmup / 창에 체결이 없으면 **0** |
+
+캔들 패턴은 TA-Lib `CDLENGULFING`·`CDLHAMMER` 정의를 그대로 쓴다(참조 벡터 테스트로 고정). 핀바는 TA-Lib에
+없어 "아래꼬리 ≥ 전체 범위 2/3"의 수기 정의다. `VOL_BREAKOUT`은 원 전략(래리 윌리엄스 일봉 스윙)을 장중
+1분봉 위에서 재정의한 판이라 원 전략의 검증 결과를 물려받지 않으며, K=0.5는 성과로 탐색하지 않은 미검증 상수다.
+
 `warmup`이거나 `confidence = 0`인 기법은 합산의 분자·분모 양쪽에서 빠진다. 상관군(`oscillator`,
-`volatilityBand`, `range`)은 군 안의 기여 기법 수 n으로 가중치를 1/n 한다 — 1군 목록에는 각 군에 한 기법씩만
-있어 현재 실질 계수는 1.0이다. 가중치는 전부 1.0(미검증)에서 시작하며 K4 측정(§5B)이 `verified`로 판정한 기법만 바뀐다(C1 §16A).
+`volatilityBand`, `range`, `trend`, `volume`, `flow`)은 군 안의 기여 기법 수 n으로 가중치를 1/n 한다 —
+2군 편입으로 `volatilityBand`(BB_PERCENT_B·SQUEEZE) · `range`(ORB15·VOL_BREAKOUT) · `trend`(ADX_DMI·MTA_ALIGN) ·
+`volume`(RVOL·RVOL_DAILY) · `flow`(OBI·LR_DELTA)는 둘 다 기여하면 각 0.5가 된다. `CANDLE`은 단독이다. 가중치는 전부 1.0(미검증)에서 시작하며 K4 측정(§5B)이 `verified`로 판정한 기법만 바뀐다(C1 §16A).
 
 조회 API는 두 곳이다. `GET /api/confluence/{symbol}`은 최신 점수와 기법별 값을, `/api/structure/{symbol}`은
 additive `confluence: {score, warmupCount, weightsVersion}` 요약을 돌려준다. 두 경로 모두 **조회가 계산을
