@@ -94,6 +94,61 @@ public sealed class ConfluenceApplicationTests
     }
 
     [Fact]
+    public async Task StateSummaryRowCarriesTheCachedConfluenceScore()
+    {
+        var clock = new MovableClock(D3.At(NowMinute));
+        var runtime = new MonitorRuntimeState();
+        var observations = new MemoryObservationStore();
+        var store = Watched();
+        var confluence = Service(store, clock, new FakeBenchmark(D3.Candles(Bars)));
+        var service = D3.Service(StructureEngineMode.Shadow, observations, runtime, clock, store, confluence);
+        await service.ObserveAsync(D3.Request(D3.StartedRuntime(runtime), Bars), default);
+
+        var row = JsonDocument.Parse(JsonSerializer.Serialize(service.Summary([D3.Symbol]),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))).RootElement.GetProperty("symbols")[0];
+
+        Assert.True(confluence.TryGet(D3.Symbol, out var cached));
+        var block = row.GetProperty("confluence");
+        Assert.Equal(JsonValueKind.Object, block.ValueKind);
+        Assert.Equal(cached.Score, block.GetProperty("score").GetDouble());
+        Assert.Equal(cached.WarmupCount, block.GetProperty("warmupCount").GetInt32());
+        Assert.Equal(cached.WeightsVersion, block.GetProperty("weightsVersion").GetString());
+        Assert.Equal(cached.BarEnd, block.GetProperty("barEnd").GetDateTimeOffset());
+    }
+
+    [Fact]
+    public void StateSummaryRowConfluenceIsNullWithoutACachedScore()
+    {
+        var clock = new MovableClock(D3.At(NowMinute));
+        var runtime = new MonitorRuntimeState();
+        var observations = new MemoryObservationStore();
+        var store = Watched();
+        var confluence = Service(store, clock, new FakeBenchmark(D3.Candles(Bars)));
+        var service = D3.Service(StructureEngineMode.Shadow, observations, runtime, clock, store, confluence);
+
+        var row = JsonDocument.Parse(JsonSerializer.Serialize(service.Summary([D3.Symbol]),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))).RootElement.GetProperty("symbols")[0];
+
+        Assert.False(confluence.TryGet(D3.Symbol, out _));
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("confluence").ValueKind);
+    }
+
+    [Fact]
+    public async Task StateSummaryRowConfluenceIsNullWhenTheLayerIsNotWired()
+    {
+        var clock = new MovableClock(D3.At(NowMinute));
+        var runtime = new MonitorRuntimeState();
+        var observations = new MemoryObservationStore();
+        var service = D3.Service(StructureEngineMode.Shadow, observations, runtime, clock);
+        await service.ObserveAsync(D3.Request(D3.StartedRuntime(runtime), Bars), default);
+
+        var row = JsonDocument.Parse(JsonSerializer.Serialize(service.Summary([D3.Symbol]),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))).RootElement.GetProperty("symbols")[0];
+
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("confluence").ValueKind);
+    }
+
+    [Fact]
     public async Task QueryReturnsTheLatestScoreWithEveryTechnique()
     {
         var clock = new MovableClock(D3.At(NowMinute));
