@@ -12,6 +12,9 @@ public enum TrendState { Unknown, Up, Down, Range, Transition }
 /// <summary>추세 구성요소의 원값과 변환값(§9.4의 저장 규칙을 추세에도 적용).</summary>
 public sealed record TrendComponent(string Name, string Family, double? Raw, double? Value);
 
+/// <summary>완료 봉 한 개의 §7 상태 판정 입력. 추세를 낼 수 없는 봉은 Available=false다(§7, #148).</summary>
+public readonly record struct TrendStateSample(bool Available, double SignedTrend, double Efficiency, bool Opposed);
+
 /// <summary>추세 평가 입력. Domain은 현재 시각을 다시 읽지 않고 cutoff를 명시적으로 받는다(§4).</summary>
 public sealed record TrendRequest(string Symbol, DateTimeOffset SessionStart, DateTimeOffset AnalysisCutoff,
     ImmutableArray<StructureBar> OneMinuteBars, ImmutableArray<StructureBar> FiveMinuteBars)
@@ -243,22 +246,19 @@ public static class TrendEvaluator
             blockersForTrend.ToImmutableArray(), blockersForReady.ToImmutableArray());
     }
 
-    /// <summary>봉 하나의 상태 판정 입력. 결측 봉은 <see cref="Available"/>=false다(§7, #148).</summary>
-    readonly record struct BarSample(bool Available, double SignedTrend, double Efficiency, bool Opposed);
-
     /// <summary>
     /// §7 상태 히스테리시스(#148). 세션 완료 봉 시계열을 순차 적용하는 순수 함수이며 상태를 저장하지 않는다(§16B 재현성).
     /// UP/DOWN 진입·이탈은 각각 <see cref="StructurePolicy.TrendStateHoldBars"/> 연속 봉을 요구하고 TRANSITION은 즉시다.
     /// </summary>
-    static TrendState State(ImmutableArray<StructureBar> bars, ImmutableArray<double?> atrSeries,
-        ImmutableArray<double?> ema9, ImmutableArray<double?> ema21, ImmutableArray<ConfirmedPivot> pivots,
-        StructurePolicy policy)
+    public static TrendState StateSequence(IEnumerable<TrendStateSample> samples, StructurePolicy policy)
     {
+        ArgumentNullException.ThrowIfNull(samples);
+        ArgumentNullException.ThrowIfNull(policy);
         var hold = Math.Max(1, policy.TrendStateHoldBars);
         var state = TrendState.Unknown;
         int entryRun = 0, entryDirection = 0, exitRun = 0;
 
-        foreach (var sample in Samples(bars, atrSeries, ema9, ema21, pivots, policy))
+        foreach (var sample in samples)
         {
             if (!sample.Available)
             {
@@ -267,8 +267,9 @@ public static class TrendEvaluator
                 continue;
             }
 
-            // 두 family 부호 충돌은 안전 신호이므로 지연하지 않는다(§7).
-            if (sample.Opposed)
+            // 두 family 부호 충돌은 안전 신호이므로 지연하지 않는다(§7). 다만 기존 판정과 같이
+            // efficiency 하한을 못 넘긴 봉은 추세 label 대상이 아니므로 충돌해도 TRANSITION이 아니다.
+            if (sample.Opposed && sample.Efficiency >= policy.TrendEfficiencyThreshold)
             {
                 state = TrendState.Transition;
                 entryRun = entryDirection = exitRun = 0;
@@ -292,7 +293,8 @@ public static class TrendEvaluator
             if (sample.Efficiency < policy.TrendExitEfficiency || magnitude < policy.TrendExitSignedTrend)
             {
                 exitRun++;
-                if (state is TrendState.Up or TrendState.Down && exitRun >= hold) state = TrendState.Range;
+                if (state is TrendState.Up or TrendState.Down or TrendState.Transition && exitRun >= hold)
+                    state = TrendState.Range;
             }
             else exitRun = 0;
         }
@@ -300,13 +302,19 @@ public static class TrendEvaluator
         return state;
     }
 
+    static TrendState State(ImmutableArray<StructureBar> bars, ImmutableArray<double?> atrSeries,
+        ImmutableArray<double?> ema9, ImmutableArray<double?> ema21, ImmutableArray<ConfirmedPivot> pivots,
+        StructurePolicy policy) =>
+        StateSequence(Samples(bars, atrSeries, ema9, ema21, pivots, policy), policy);
+
     /// <summary>§7 봉별 (signedTrend, efficiency, 부호충돌). 피벗은 확정 시각으로 걸러 봉 시점의 구조만 본다(§7, #148).</summary>
-    static ImmutableArray<BarSample> Samples(ImmutableArray<StructureBar> bars, ImmutableArray<double?> atrSeries,
+    static ImmutableArray<TrendStateSample> Samples(ImmutableArray<StructureBar> bars,
+        ImmutableArray<double?> atrSeries,
         ImmutableArray<double?> ema9, ImmutableArray<double?> ema21, ImmutableArray<ConfirmedPivot> pivots,
         StructurePolicy policy)
     {
-        if (bars.Length == 0) return ImmutableArray<BarSample>.Empty;
-        var samples = ImmutableArray.CreateBuilder<BarSample>(bars.Length);
+        if (bars.Length == 0) return ImmutableArray<TrendStateSample>.Empty;
+        var samples = ImmutableArray.CreateBuilder<TrendStateSample>(bars.Length);
         var consecutive = 0;
         for (var i = 0; i < bars.Length; i++)
         {
@@ -318,14 +326,14 @@ public static class TrendEvaluator
             var price = PriceDirection(prefix, i, atr, ema9, ema21, policy).Direction;
             if (consecutive < policy.Minimum1mBars || price is null || efficiency is null)
             {
-                samples.Add(new BarSample(false, 0, 0, false));
+                samples.Add(new TrendStateSample(false, 0, 0, false));
                 continue;
             }
 
             var (structure, _, _) = StructureFamily(pivots, atr, bars[i].End, policy);
             var signed = structure is { } value ? 100 * (price.Value + value) / 2 : 100 * price.Value;
             var opposed = structure is { } opposing && Math.Sign(price.Value) * Math.Sign(opposing) < 0;
-            samples.Add(new BarSample(double.IsFinite(signed), signed, efficiency.Value, opposed));
+            samples.Add(new TrendStateSample(double.IsFinite(signed), signed, efficiency.Value, opposed));
         }
         return samples.MoveToImmutable();
     }
