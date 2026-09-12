@@ -1,23 +1,34 @@
 using System.Diagnostics;
 using System.Net.Http.Json;
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Astra.Server.Application;
 using Astra.Server.Domain.News;
 
 namespace Astra.Server.Infrastructure;
 
 /// <summary>
-/// 로컬 Ollama 감성 분류기(#151 §3). 타임아웃·파싱 실패는 unclassified로 남기고,
+/// 로컬 Ollama 감성 분류기(#151 §3, #171 프롬프트 v2b). 타임아웃·파싱 실패는 unclassified로 남기고,
 /// 연결 자체가 안 되면 Available=false로 알려 호출자가 기사를 소비하지 않게 한다.
 /// </summary>
 public sealed class OllamaNewsClassifier : INewsClassifier
 {
     public const int BodyLimit = 1500;
 
+    /// <summary>현재 채택된 분류 프롬프트 버전(#171). <see cref="NewsPromptVersions.V2b"/>의 별칭이다.</summary>
+    public const string PromptVersion = NewsPromptVersions.V2b;
+
+    const string PromptResourceName = "news-classify-v2b.txt";
+
     public static readonly TimeSpan Timeout = TimeSpan.FromSeconds(20);
 
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+
+    static readonly Lazy<string> PromptTemplate = new(LoadPromptTemplate);
+
+    static readonly Regex Placeholder = new("\\{tickers\\}|\\{title\\}|\\{body\\}", RegexOptions.Compiled);
 
     readonly NewsOptions _options;
     readonly HttpClient _http;
@@ -39,45 +50,48 @@ public sealed class OllamaNewsClassifier : INewsClassifier
         try
         {
             using var response = await _http.PostAsJsonAsync(url, payload, Json, ct);
-            if (!response.IsSuccessStatusCode) return new NewsClassificationResult(null, _options.Model, stopwatch.ElapsedMilliseconds, false);
+            if (!response.IsSuccessStatusCode) return new NewsClassificationResult(null, _options.Model, stopwatch.ElapsedMilliseconds, false, PromptVersion);
             var body = await response.Content.ReadFromJsonAsync<GenerateResponse>(Json, ct);
             stopwatch.Stop();
             return new NewsClassificationResult(
-                NewsClassificationParser.TryParse(body?.Response), _options.Model, stopwatch.ElapsedMilliseconds, true);
+                NewsClassificationParser.TryParse(body?.Response), _options.Model, stopwatch.ElapsedMilliseconds, true, PromptVersion);
         }
         catch (TaskCanceledException) when (!ct.IsCancellationRequested)
         {
             // 타임아웃은 모델이 살아 있다는 뜻이므로 기사를 unclassified로 확정한다.
-            return new NewsClassificationResult(null, _options.Model, stopwatch.ElapsedMilliseconds, true);
+            return new NewsClassificationResult(null, _options.Model, stopwatch.ElapsedMilliseconds, true, PromptVersion);
         }
         catch (HttpRequestException)
         {
-            return new NewsClassificationResult(null, _options.Model, stopwatch.ElapsedMilliseconds, false);
+            return new NewsClassificationResult(null, _options.Model, stopwatch.ElapsedMilliseconds, false, PromptVersion);
         }
         catch (JsonException)
         {
-            return new NewsClassificationResult(null, _options.Model, stopwatch.ElapsedMilliseconds, true);
+            return new NewsClassificationResult(null, _options.Model, stopwatch.ElapsedMilliseconds, true, PromptVersion);
         }
     }
 
-    /// <summary>영문 지시 + 한국어 기사 원문. 종목을 못 고르면 MARKET으로 답하게 한다.</summary>
+    /// <summary>v2b 리소스 템플릿에 기사 원문을 채운다(#171). 종목을 못 고르면 MARKET으로 답하게 한다.</summary>
     public static string BuildPrompt(NewsClassificationRequest request)
     {
         var body = request.Body.Length > BodyLimit ? request.Body[..BodyLimit] : request.Body;
         var tickers = request.Tickers.Count > 0 ? string.Join(", ", request.Tickers) : "(none)";
-        return $$"""
-            You classify financial news for a stock dashboard. The article is written in Korean.
-            Reply with ONE JSON object and nothing else:
-            {"symbols":["TICKER"],"sentiment":"positive|negative|neutral","strength":1,"reason":"<=20 words"}
-            Rules:
-            - symbols: uppercase US-listed tickers the article is about. Prefer the feed tickers when given.
-            - If the article is macro or market-wide (war, central banks, oil, indices, economic data) and names no listed company, answer exactly ["MARKET"].
-            - sentiment: the likely effect on those symbols. strength: 1 (minor) to 5 (major).
-            - reason: at most 20 words, written in Korean.
-            Feed tickers: {{tickers}}
-            Title: {{request.Title}}
-            Body: {{body}}
-            """;
+        return Placeholder.Replace(PromptTemplate.Value, match => match.Value switch
+        {
+            "{tickers}" => tickers,
+            "{title}" => request.Title,
+            "{body}" => body,
+            _ => match.Value,
+        });
+    }
+
+    static string LoadPromptTemplate()
+    {
+        var assembly = Assembly.GetExecutingAssembly();
+        var name = assembly.GetManifestResourceNames().Single(n => n.EndsWith(PromptResourceName, StringComparison.Ordinal));
+        using var stream = assembly.GetManifestResourceStream(name)!;
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     sealed record GenerateRequest(

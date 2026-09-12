@@ -42,7 +42,8 @@ public sealed class SaveTickerNewsFeed : INewsFeed
                 x.CreatedAt ?? DateTimeOffset.MinValue,
                 x.Tickers?.Where(t => !string.IsNullOrWhiteSpace(t.Symbol)).Select(t => t.Symbol!.ToUpperInvariant()).Distinct(StringComparer.Ordinal).ToArray() ?? [],
                 x.GroupSummary?.IsAiHeadline == true ? x.GroupSummary.Headline ?? "" : "",
-                x.IsHeadlineOnly ?? false))
+                x.IsHeadlineOnly ?? false,
+                x.NewsGroupId?.ToString(CultureInfo.InvariantCulture)))
             .ToArray();
     }
 
@@ -83,7 +84,8 @@ public sealed class SaveTickerNewsFeed : INewsFeed
         [property: JsonPropertyName("created_at")] DateTimeOffset? CreatedAt,
         List<TickerTag>? Tickers,
         [property: JsonPropertyName("group_summary")] GroupSummary? GroupSummary,
-        [property: JsonPropertyName("is_headline_only")] bool? IsHeadlineOnly);
+        [property: JsonPropertyName("is_headline_only")] bool? IsHeadlineOnly,
+        [property: JsonPropertyName("news_group_id")] long? NewsGroupId);
 
     sealed record GroupSummary(
         string? Headline,

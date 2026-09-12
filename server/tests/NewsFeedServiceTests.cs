@@ -41,6 +41,9 @@ public sealed class NewsFeedServiceTests
     static NewsFeedItem Item(string id, string title, params string[] tickers)
         => NewsBuilder.Item(id, title, Start, tickers);
 
+    static NewsFeedItem Grouped(string id, string title, DateTimeOffset at, string groupId, params string[] tickers)
+        => NewsBuilder.Grouped(id, title, at, groupId, tickers);
+
     [Fact]
     public async Task FirstPollStoresBaselineWithoutClassifying()
     {
@@ -354,5 +357,94 @@ public sealed class NewsFeedServiceTests
         await harness.PollAsync();
 
         Assert.Equal("90", Assert.Single(harness.State.Recent()).Id);
+    }
+
+    [Fact]
+    public async Task SavedRecordCarriesThePromptVersion()
+    {
+        var harness = new Harness();
+        harness.Classifier.Respond = _ => new NewsClassificationResult(
+            new NewsClassification(["NVDA"], NewsSentiments.Positive, 3, "회복"), "qwen", 10, true, "v2b");
+        harness.Page(1, Item("100", "기준"));
+        await harness.PollAsync();
+
+        harness.Page(1, Item("101", "가"), Item("100", "기준"));
+        await harness.PollAsync();
+
+        Assert.Equal("v2b", Assert.Single(harness.Saved()).PromptVersion);
+    }
+
+    [Fact]
+    public async Task OnlyTheNewestGroupMemberIsClassified()
+    {
+        var harness = new Harness();
+        harness.Page(1, Item("100", "기준"));
+        await harness.PollAsync();
+
+        harness.Page(1,
+            Grouped("103", "속보 3보", Start.AddMinutes(3), "grp"),
+            Grouped("102", "속보 2보", Start.AddMinutes(2), "grp"),
+            Grouped("101", "속보 1보", Start.AddMinutes(1), "grp"),
+            Item("100", "기준"));
+        await harness.PollAsync();
+
+        Assert.Equal("속보 3보", Assert.Single(harness.Classifier.Requests).Title);
+        Assert.Equal(3, harness.Saved().Count);
+    }
+
+    [Fact]
+    public async Task GroupFollowersCopyTheRepresentativeClassificationWithZeroLatency()
+    {
+        var harness = new Harness();
+        harness.Classifier.Respond = _ => new NewsClassificationResult(
+            new NewsClassification(["MARKET"], NewsSentiments.Negative, 3, "경보 발령"), "qwen", 850, true, "v2b");
+        harness.Page(1, Item("100", "기준"));
+        await harness.PollAsync();
+
+        harness.Page(1,
+            Grouped("102", "리야드 조기 경보 발령 2보", Start.AddMinutes(2), "grp"),
+            Grouped("101", "리야드 조기 경보 발령", Start.AddMinutes(1), "grp"),
+            Item("100", "기준"));
+        await harness.PollAsync();
+
+        var saved = harness.Saved().ToDictionary(x => x.Id);
+        Assert.Null(saved["102"].ClassifiedFrom);
+        Assert.Equal("102", saved["101"].ClassifiedFrom);
+        Assert.Equal(NewsSentiments.Negative, saved["101"].Sentiment);
+        Assert.Equal(3, saved["101"].Strength);
+        Assert.Equal(0, saved["101"].LatencyMs);
+    }
+
+    [Fact]
+    public async Task GroupFollowerStillGetsItsOwnFeedTagsForced()
+    {
+        var harness = new Harness();
+        harness.Classifier.Respond = _ => new NewsClassificationResult(
+            new NewsClassification(["MARKET"], NewsSentiments.Negative, 3, "경보 발령"), "qwen", 10, true, "v2b");
+        harness.Page(1, Item("100", "기준"));
+        await harness.PollAsync();
+
+        harness.Page(1,
+            Grouped("102", "리야드 조기 경보 발령 2보", Start.AddMinutes(2), "grp"),
+            Grouped("101", "포드 리콜 속보", Start.AddMinutes(1), "grp", "f"),
+            Item("100", "기준"));
+        await harness.PollAsync();
+
+        var saved = harness.Saved().ToDictionary(x => x.Id);
+        Assert.Equal(["F"], saved["101"].Symbols);
+    }
+
+    [Fact]
+    public async Task UngroupedArticlesWithoutAGroupIdAreClassifiedIndividually()
+    {
+        var harness = new Harness();
+        harness.Page(1, Item("100", "기준"));
+        await harness.PollAsync();
+
+        harness.Page(1, Item("102", "가"), Item("101", "나"), Item("100", "기준"));
+        await harness.PollAsync();
+
+        Assert.Equal(2, harness.Classifier.Requests.Count);
+        Assert.All(harness.Saved(), x => Assert.Null(x.ClassifiedFrom));
     }
 }
