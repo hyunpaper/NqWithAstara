@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { absoluteTimeKst, inputKindLabel, relativeTimeKo, scoreBadge, sentimentBadge } from "./newsFormat";
+import {
+  absoluteTimeKst,
+  inputKindLabel,
+  relativeTimeKo,
+  scoreBadge,
+  scoreBadgeTitle,
+  sentimentBadge,
+} from "./newsFormat";
 
 describe("scoreBadge", () => {
   it("+2 이상은 호재(positive)다", () => {
@@ -19,6 +26,24 @@ describe("scoreBadge", () => {
     expect(scoreBadge(null)).toBeNull();
     expect(scoreBadge(undefined)).toBeNull();
     expect(scoreBadge(NaN)).toBeNull();
+  });
+});
+
+describe("scoreBadgeTitle", () => {
+  const now = new Date("2026-09-12T10:00:00Z").getTime();
+  it("건수·경과분을 함께 표기한다", () => {
+    expect(scoreBadgeTitle(4, "2026-09-12T09:55:00Z", now)).toBe("4건 · 최근 5분");
+  });
+  it("건수가 없으면 기본 문구다", () => {
+    expect(scoreBadgeTitle(null, null, now)).toBe("뉴스 감성");
+    expect(scoreBadgeTitle(0, "2026-09-12T09:55:00Z", now)).toBe("뉴스 감성");
+  });
+  it("건수는 있는데 시각이 없으면 경과분을 생략한다", () => {
+    expect(scoreBadgeTitle(3, null, now)).toBe("3건");
+    expect(scoreBadgeTitle(3, "garbage", now)).toBe("3건");
+  });
+  it("미래 시각은 경과분 0으로 표기한다(음수 방지)", () => {
+    expect(scoreBadgeTitle(1, "2026-09-12T10:05:00Z", now)).toBe("1건 · 최근 0분");
   });
 });
 

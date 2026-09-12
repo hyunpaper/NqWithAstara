@@ -80,5 +80,6 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         score = score.Score,
         count = score.Count,
         latestAt = score.LatestAt,
+        weight = score.Weight,
     };
 }
