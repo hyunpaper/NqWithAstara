@@ -6,7 +6,7 @@ Toss Open API 실시간 신호·시뮬레이션 엔진 (.NET 9). 컨벤션 원�
 - `Api/` — HTTP 엔드포인트(검증·응답 매핑만)
 - `Application/` — 유스케이스·폴링·조회 서비스 (`Astra.Application.csproj`)
 - `Domain/` — 구조 엔진·시뮬레이션·공용 모델 (`Astra.Domain.csproj`)
-  - `Structure/`·`Indicators/` v5 구조 엔진, `Confluence/` 크로스에셋 확증(K2)
+  - `Structure/`·`Indicators/` v5 구조 엔진, `Confluence/` 다중 분석법 컨플루언스 점수(K2, 관측·표시 전용)
   - `Legacy/` v4 지표·레벨(청산 경로 전용)
 - `Infrastructure/` — Toss 게이트웨이(`Toss/`)·영속화·뉴스/관측 스토어
 - `Hosting/` — MonitorService·NewsService 등 hosted-service 어댑터
