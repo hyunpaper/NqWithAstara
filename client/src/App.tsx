@@ -1327,13 +1327,6 @@ export default function App() {
                     />
                   )}
                 </div>
-                <div className="events">
-                  <h3>예정 이벤트</h3>
-                  <p>
-                    경제지표와 기업 일정 분석은 다음 버전에서 제공됩니다.
-                    확인되지 않은 예측치는 표시하지 않습니다.
-                  </p>
-                </div>
               </>
             ) : selectedWatch ? (
               <PendingStock
@@ -1469,7 +1462,6 @@ function Dashboard() {
               tone={
                 s.winRate == null ? undefined : s.winRate >= 50 ? "up" : "down"
               }
-              help={`손익 유효 ${s.validClosed ?? s.closed}건 중 ${s.wins}건 수익`}
             />
             <MetricTile
               label="평균 손익"
@@ -1477,7 +1469,6 @@ function Dashboard() {
               tone={
                 s.avgPnl == null ? undefined : s.avgPnl >= 0 ? "up" : "down"
               }
-              help="청산 건 기준"
             />
             <MetricTile
               label="건별 수익률 합계"
@@ -1485,9 +1476,8 @@ function Dashboard() {
               tone={
                 s.totalPnl == null ? undefined : s.totalPnl >= 0 ? "up" : "down"
               }
-              help="포트폴리오 누적 수익률이 아닌 각 거래 수익률의 합"
             />
-            {!!s.estimatedExits && <MetricTile label="추정 청산" value={`${s.estimatedExits}건`} help="재시작 복구 시 마지막 관측 가격으로 추정한 청산" />}
+            {!!s.estimatedExits && <MetricTile label="추정 청산" value={`${s.estimatedExits}건`} />}
           </div>
         </div>
       </section>
