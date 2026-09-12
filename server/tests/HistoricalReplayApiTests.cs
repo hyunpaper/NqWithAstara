@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -152,6 +153,27 @@ public sealed class HistoricalReplayApiTests : IDisposable
         using var client = _factory.CreateClient();
         var response = await client.PostAsync("/api/replays/unknown/cancel", null);
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CancelMarksPersistedQueuedReplayAsCanceled()
+    {
+        var store = _factory.Services.GetRequiredService<ILocalStore>();
+        var queued = new HistoricalReplayRun("queued-run", new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 8),
+            ImmutableArray.Create("TSLA"), "QQQ", "mock", "policy", "weights", "queued",
+            DateTimeOffset.Parse("2026-09-13T00:00:00Z"), null, null, [], null, [], "historical-virtual", "가상 결과");
+        await store.Write("replay-runs.json", new List<HistoricalReplayRun> { queued });
+        var directory = Path.Combine(_root, "App_Data", "replays", queued.Id);
+        Directory.CreateDirectory(directory);
+        await File.WriteAllTextAsync(Path.Combine(directory, "partial.json"), "중간 결과");
+        using var client = _factory.CreateClient();
+
+        var response = await client.PostAsync($"/api/replays/{queued.Id}/cancel", null);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("canceled", body.RootElement.GetProperty("status").GetString());
+        Assert.False(Directory.Exists(directory));
     }
 
     sealed class FakeHistoricalSource : IHistoricalBarSource
