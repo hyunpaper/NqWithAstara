@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <PropertyGroup><TargetFramework>net9.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings><InvariantGlobalization>false</InvariantGlobalization></PropertyGroup>
   <ItemGroup>
-    <Compile Remove="tests/**/*.cs;Application/**/*.cs;Domain/**/*.cs;Models.cs;Indicators.cs;Levels.cs;SymbolAliases.cs" />
+    <Compile Remove="tests/**/*.cs;Application/**/*.cs;Domain/**/*.cs" />
     <ProjectReference Include="Domain\Astra.Domain.csproj" />
     <ProjectReference Include="Application\Astra.Application.csproj" />
     <EmbeddedResource Include="Infrastructure\Prompts\news-classify-v2b.txt" />
