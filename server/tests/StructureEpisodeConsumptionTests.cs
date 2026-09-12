@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Astra.Server.Application;
 using Astra.Server.Domain.Structure;
 using Xunit;
 
@@ -49,5 +50,87 @@ public sealed class StructureEpisodeConsumptionTests
         Assert.Equal(pullback.Planning.InvalidationZone?.Upper, rebound.Planning.InvalidationZone?.Upper);
         Assert.Equal(pullback.Plan?.Stop, rebound.Plan?.Stop);
         Assert.Equal(pullback.Plan?.InvalidationAnchor, rebound.Plan?.InvalidationAnchor);
+    }
+
+    static StructuralLatch Fresh() => StructuralLatch.Empty(Fx.Symbol, Fx.SessionStart, P.PolicyHash);
+
+    static EntryCandidate Ready(SetupKind kind) =>
+        Detect().Candidates.Single(x => x.Kind == kind && x.Disposition == CandidateDisposition.Ready);
+
+    static StructuralLatch Commit(StructuralLatch latch, EntryCandidate candidate, bool consumeOnReady,
+        IEnumerable<string>? entryBlocked = null) =>
+        StructuralLifecycle.Commit(latch, Fx.At(TriggerMinute), [candidate], [], null, null, entryBlocked,
+            consumeOnReady);
+
+    static EntryCandidate Apply(StructuralLatch latch, EntryCandidate candidate) =>
+        Assert.Single(StructuralLifecycle.ApplyLatch(latch, [candidate], allowNewTrigger: true, P));
+
+    static EntryCandidate NextTrigger(EntryCandidate candidate) => candidate with
+    {
+        EventId = candidate.EventId + "-next",
+        DuplicateGuardKey = candidate.DuplicateGuardKey + "-next"
+    };
+
+    [Fact]
+    public void ActiveEnteredPullbackBlocksTheSameEpisodeRebound()
+    {
+        var latch = Commit(Fresh(), Ready(SetupKind.Pullback) with { Disposition = CandidateDisposition.Entered },
+            consumeOnReady: false);
+
+        var rebound = Apply(latch, NextTrigger(Ready(SetupKind.Rebound)));
+        Assert.Equal(CandidateDisposition.Rejected, rebound.Disposition);
+        Assert.Contains(StructuralLifecycle.CodeEpisodeConsumed, rebound.RejectionCodes);
+    }
+
+    [Fact]
+    public void ActiveReadyWithoutEntryDoesNotConsumeTheEpisode()
+    {
+        var latch = Commit(Fresh(), Ready(SetupKind.Pullback), consumeOnReady: false);
+
+        Assert.Equal(CandidateDisposition.Ready, Apply(latch, NextTrigger(Ready(SetupKind.Rebound))).Disposition);
+    }
+
+    [Fact]
+    public void ShadowReadyPullbackBlocksTheSameEpisodeReboundLikeActiveEntry()
+    {
+        var latch = Commit(Fresh(), Ready(SetupKind.Pullback), consumeOnReady: true);
+
+        var rebound = Apply(latch, NextTrigger(Ready(SetupKind.Rebound)));
+        Assert.Equal(CandidateDisposition.Rejected, rebound.Disposition);
+        Assert.Contains(StructuralLifecycle.CodeEpisodeConsumed, rebound.RejectionCodes);
+    }
+
+    [Fact]
+    public void EntryBlockedReadyCandidateDoesNotConsumeTheEpisode()
+    {
+        var pullback = Ready(SetupKind.Pullback);
+        var active = Commit(Fresh(), pullback, consumeOnReady: false, entryBlocked: [pullback.EventId]);
+        var shadow = Commit(Fresh(), pullback, consumeOnReady: true, entryBlocked: [pullback.EventId]);
+
+        Assert.Equal(CandidateDisposition.Ready, Apply(active, NextTrigger(Ready(SetupKind.Rebound))).Disposition);
+        Assert.Equal(CandidateDisposition.Ready, Apply(shadow, NextTrigger(Ready(SetupKind.Rebound))).Disposition);
+    }
+
+    [Fact]
+    public void ADifferentZoneOrEpisodeStaysArmed()
+    {
+        var latch = Commit(Fresh(), Ready(SetupKind.Pullback), consumeOnReady: true);
+        var rebound = NextTrigger(Ready(SetupKind.Rebound));
+
+        Assert.Equal(CandidateDisposition.Ready, Apply(latch, rebound with { ZoneId = "another-zone" }).Disposition);
+        Assert.Equal(CandidateDisposition.Ready,
+            Apply(latch, rebound with { EpisodeStartAt = Fx.At(28) }).Disposition);
+    }
+
+    [Fact]
+    public void ConsumedEpisodeSurvivesALatchStorageRoundTrip()
+    {
+        var latch = Commit(Fresh(), Ready(SetupKind.Pullback) with { Disposition = CandidateDisposition.Entered },
+            consumeOnReady: false);
+        var restored = StructureLatchStorage.Parse(StructureLatchStorage.Serialize([latch])).Single();
+
+        var rebound = Apply(restored, NextTrigger(Ready(SetupKind.Rebound)));
+        Assert.Equal(CandidateDisposition.Rejected, rebound.Disposition);
+        Assert.Contains(StructuralLifecycle.CodeEpisodeConsumed, rebound.RejectionCodes);
     }
 }
