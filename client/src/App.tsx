@@ -48,6 +48,7 @@ import {
 } from "./structureSort";
 import type { StructureCohortReport, TradeStructure } from "./dashboardTypes";
 import { tradeEntryTooltip } from "./dashboardTypes";
+import { turnoverText } from "./metricsFormat";
 
 type Bar = { time: string; close: number; ema?: number; vwap?: number };
 type Indicators = {
@@ -219,6 +220,8 @@ type Metrics = {
   flow5m: TickFlow | null;
   flow10m: TickFlow | null;
   updatedAt: string;
+  /** 이슈 #132: 당일 누적 거래량 / 상장주식수(%). 메타가 없는 구버전 서버·종목에서는 없다. */
+  turnoverPercent?: number | null;
 };
 const api = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   const r = await fetch(url, init);
@@ -1816,6 +1819,11 @@ function MetricsCard({
               help={
                 d ? `세션 ${d.sessionElapsedPercent.toFixed(0)}% 경과` : undefined
               }
+            />
+            <MetricTile
+              label="회전율"
+              value={turnoverText(metrics?.turnoverPercent)}
+              help="당일 누적 거래량 / 상장주식수"
             />
           </div>
           <p className="metrics-note">
