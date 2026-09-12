@@ -103,16 +103,19 @@ public sealed record ConfluencePolicy
     public int LeeReadyMinimumTrades { get; init; } = 20;
 
     /// <summary>
-    /// C4 상관군. 같은 정보축 묶음은 군 안에서 1/n로 나눈다. `군이름:기법,기법` 형식이며 2·3군이
-    /// 들어오면 이 목록만 늘어난다. 1군 채택 목록에는 각 군에 한 기법씩만 있어 실질 계수는 1.0이다.
+    /// C4 상관군. 같은 정보축 묶음은 군 안에서 1/n로 나눈다. `군이름:기법,기법` 형식이며 3군이
+    /// 들어오면 이 목록만 늘어난다. 2군 편입으로 밴드·레인지·추세·거래량·체결흐름 군이 각 2기법이 됐다.
     /// </summary>
     public ImmutableArray<string> CorrelationGroups { get; init; } = DefaultCorrelationGroups;
 
     static readonly ImmutableArray<string> DefaultCorrelationGroups =
     [
         "oscillator:RSI,STOCH,WILLIAMS_R",
-        "volatilityBand:BB_PERCENT_B,KELTNER",
-        "range:DONCHIAN,ORB15"
+        "volatilityBand:BB_PERCENT_B,KELTNER,SQUEEZE",
+        "range:DONCHIAN,ORB15,VOL_BREAKOUT",
+        "trend:ADX_DMI,MTA_ALIGN",
+        "volume:RVOL,RVOL_DAILY",
+        "flow:OBI,LR_DELTA"
     ];
 
     public static readonly ConfluencePolicy Default = new();

@@ -31,11 +31,23 @@ public sealed class ConfluencePolicyTests
             ConfluencePolicy.Default with { AtrChannelAtrFactor = 3 },
             ConfluencePolicy.Default with { IndicatorVariants = "ema:ema-seed" },
             ConfluencePolicy.Default with { CorrelationGroups = ["oscillator:RSI"] },
-            ConfluencePolicy.Default with { Version = "confluence.2" }
+            ConfluencePolicy.Default with { Version = "confluence.2" },
+            ConfluencePolicy.Default with { VolatilityBreakoutK = .6 },
+            ConfluencePolicy.Default with { KeltnerAtrFactor = 2 },
+            ConfluencePolicy.Default with { CandleEngulfingScore = .7 },
+            ConfluencePolicy.Default with { LeeReadyMinimumTrades = 30 }
         };
         var hashes = variants.Select(x => x.PolicyHash).ToArray();
         Assert.DoesNotContain(baseline, hashes);
         Assert.Equal(hashes.Length, hashes.Distinct().Count());
+    }
+
+    /// <summary>2군 편입으로 바뀐 confluence.1 기본 해시 (C3-2, #170).</summary>
+    [Fact]
+    public void DefaultPolicyHashIsPinnedToTheDesignValues()
+    {
+        Assert.Equal("9369046ba1f7312094ded40e41dd4b6f6acca9f2dd58d026b07eef52551f9cff",
+            ConfluencePolicy.Default.PolicyHash);
     }
 
     [Fact]
@@ -73,6 +85,20 @@ public sealed class ConfluencePolicyTests
         Assert.Equal(20, p.RelativeVolumeLookbackBars);
         Assert.Equal("ema:sma-seed;rsi:wilder;bb:population-sigma;vwap:hlc3-vw-sigma;adx:talib-seed",
             p.IndicatorVariants);
+        Assert.Equal(.5, p.VolatilityBreakoutK);
+        Assert.Equal(3, p.VolatilityBreakoutFilterDays);
+        Assert.Equal(20, p.KeltnerEmaPeriod);
+        Assert.Equal(20, p.KeltnerAtrPeriod);
+        Assert.Equal(1.5, p.KeltnerAtrFactor);
+        Assert.Equal(.8, p.SqueezeReleaseScore);
+        Assert.Equal(9, p.MtaEmaFastPeriod);
+        Assert.Equal(21, p.MtaEmaSlowPeriod);
+        Assert.Equal(.6, p.MtaHigherTimeframeWarmupConfidence);
+        Assert.Equal(5, p.CandlePriorLowLookbackBars);
+        Assert.Equal(.3, p.CandleBodyAtrRatio);
+        Assert.Equal(20, p.DailyRelativeVolumeLookbackSessions);
+        Assert.Equal(15, p.LeeReadyWindowMinutes);
+        Assert.Equal(20, p.LeeReadyMinimumTrades);
     }
 
     [Fact]
@@ -81,7 +107,16 @@ public sealed class ConfluencePolicyTests
         var p = ConfluencePolicy.Default;
         Assert.Equal("oscillator", p.CorrelationGroupOf(TechniqueNames.Rsi));
         Assert.Equal("volatilityBand", p.CorrelationGroupOf(TechniqueNames.BollingerPercentB));
+        Assert.Equal("volatilityBand", p.CorrelationGroupOf(TechniqueNames.Squeeze));
         Assert.Equal("range", p.CorrelationGroupOf(TechniqueNames.OpeningRange));
+        Assert.Equal("range", p.CorrelationGroupOf(TechniqueNames.VolatilityBreakout));
+        Assert.Equal("trend", p.CorrelationGroupOf(TechniqueNames.AdxDmi));
+        Assert.Equal("trend", p.CorrelationGroupOf(TechniqueNames.MultiTimeframeAlignment));
+        Assert.Equal("volume", p.CorrelationGroupOf(TechniqueNames.RelativeVolume));
+        Assert.Equal("volume", p.CorrelationGroupOf(TechniqueNames.RelativeVolumeDaily));
+        Assert.Equal("flow", p.CorrelationGroupOf(TechniqueNames.OrderBookImbalance));
+        Assert.Equal("flow", p.CorrelationGroupOf(TechniqueNames.LeeReadyDelta));
+        Assert.Null(p.CorrelationGroupOf(TechniqueNames.Candle));
         Assert.Null(p.CorrelationGroupOf(TechniqueNames.Macd));
         Assert.Null(p.CorrelationGroupOf("UNKNOWN"));
     }

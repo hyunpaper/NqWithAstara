@@ -71,13 +71,26 @@ public sealed class ConfluenceAggregatorTests
     }
 
     [Fact]
-    public void TheFirstCohortLeavesEveryCorrelationGroupWithASingleMember()
+    public void EveryCorrelationGroupSplitsTheWeightAcrossItsMembers()
     {
         var score = Aggregate(TechniqueNames.All.Select(x => Cf.Signal(x, 1.0, 1.0)).ToArray());
-        Assert.All(score.Contributing, x => Assert.Equal(1.0, x.Weight));
+        double Weight(string name) => score.Contributing.Single(x => x.Name == name).Weight;
+
+        Assert.Equal(1.0, Weight(TechniqueNames.Rsi));
+        Assert.Equal(1.0, Weight(TechniqueNames.Macd));
+        Assert.Equal(1.0, Weight(TechniqueNames.Candle));
+        foreach (var name in new[]
+                 {
+                     TechniqueNames.BollingerPercentB, TechniqueNames.Squeeze, TechniqueNames.OpeningRange,
+                     TechniqueNames.VolatilityBreakout, TechniqueNames.AdxDmi,
+                     TechniqueNames.MultiTimeframeAlignment, TechniqueNames.RelativeVolume,
+                     TechniqueNames.RelativeVolumeDaily, TechniqueNames.OrderBookImbalance,
+                     TechniqueNames.LeeReadyDelta
+                 })
+            Assert.Equal(.5, Weight(name));
         Assert.Equal("oscillator", score.Contributing.Single(x => x.Name == TechniqueNames.Rsi).CorrelationGroup);
-        Assert.Equal("range", score.Contributing.Single(x => x.Name == TechniqueNames.OpeningRange).CorrelationGroup);
         Assert.Null(score.Contributing.Single(x => x.Name == TechniqueNames.Macd).CorrelationGroup);
+        Assert.Equal(1.0, score.Score);
     }
 
     [Fact]
@@ -129,5 +142,44 @@ public sealed class ConfluenceAggregatorTests
         Assert.Equal(TechniqueNames.All, score.Contributing.Select(x => x.Name));
         Assert.Contains(score.Contributing, x => !x.Contributing);
         Assert.NotNull(score.Score);
+    }
+    [Fact]
+    public void EvaluateCoversTheTenFirstTierAndSixSecondTierTechniques()
+    {
+        var input = Cf.Input(Cf.Ramp(40, 100, .2), relativeVolume: 1.5);
+
+        var signals = ConfluenceTechniques.Evaluate(input, Policy);
+
+        Assert.Equal(16, TechniqueNames.All.Length);
+        Assert.Equal(TechniqueNames.All, signals.Select(x => x.Name));
+        Assert.Contains(TechniqueNames.Candle, signals.Select(x => x.Name));
+        Assert.Contains(TechniqueNames.LeeReadyDelta, signals.Select(x => x.Name));
+    }
+
+    [Fact]
+    public void CorrelationGroupsSplitTheWeightAcrossContributingMembers()
+    {
+        var score = Aggregate([
+            Cf.Signal(TechniqueNames.AdxDmi, 1.0, 1.0),
+            Cf.Signal(TechniqueNames.MultiTimeframeAlignment, 1.0, 1.0),
+            Cf.Signal(TechniqueNames.Candle, 1.0, 1.0)
+        ]);
+
+        Assert.Equal(.5, score.Contributing.Single(x => x.Name == TechniqueNames.AdxDmi).Weight);
+        Assert.Equal(.5, score.Contributing.Single(x => x.Name == TechniqueNames.MultiTimeframeAlignment).Weight);
+        Assert.Equal(1, score.Contributing.Single(x => x.Name == TechniqueNames.Candle).Weight);
+        Assert.Equal("trend", score.Contributing.First(x => x.Name == TechniqueNames.AdxDmi).CorrelationGroup);
+        Assert.Null(score.Contributing.Single(x => x.Name == TechniqueNames.Candle).CorrelationGroup);
+    }
+
+    [Fact]
+    public void ACorrelationGroupWithOneContributingMemberKeepsTheFullWeight()
+    {
+        var score = Aggregate([
+            Cf.Signal(TechniqueNames.OrderBookImbalance, 1.0, 1.0),
+            Cf.Signal(TechniqueNames.LeeReadyDelta, 0, 0)
+        ]);
+
+        Assert.Equal(1, score.Contributing.Single(x => x.Name == TechniqueNames.OrderBookImbalance).Weight);
     }
 }
