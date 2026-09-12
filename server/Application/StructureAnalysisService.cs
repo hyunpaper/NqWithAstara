@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using Astra.Server.Domain.Structure;
 
@@ -120,7 +120,8 @@ public sealed class StructureAnalysisService(
     StructurePolicy? policy = null,
     IStructuralTradeEntries? tradeEntries = null,
     StructureAlertPublisher? alerts = null,
-    SymbolMetadataService? metadata = null)
+    SymbolMetadataService? metadata = null,
+    ConfluenceService? confluence = null)
 {
     public const string LatchFile = "structure-lifecycle.json";
     public const string EntryOwnerV4 = "v4";
@@ -192,7 +193,7 @@ public sealed class StructureAnalysisService(
     bool ConsumeEpisodeOnReady => _options.Mode != StructureEngineMode.Active;
 
     /// <summary>세션 종료·모니터링 중지 시 메모리를 정리한다(§16 "메모리도 세션 종료 시 정리한다").</summary>
-    public void Clear() { _cache.Clear(); _published.Clear(); _latches.Clear(); _failed.Clear(); _tickUnknowns.Clear(); }
+    public void Clear() { _cache.Clear(); _published.Clear(); _latches.Clear(); _failed.Clear(); _tickUnknowns.Clear(); confluence?.Clear(); }
 
     public void Remove(string symbol)
     {
@@ -201,6 +202,7 @@ public sealed class StructureAnalysisService(
         _latches.TryRemove(symbol, out _);
         _failed.TryRemove(symbol, out _);
         _tickUnknowns.TryRemove(symbol, out _);
+        confluence?.Remove(symbol);
     }
 
     public bool TryGetPublished(string symbol, out StructureAnalysisView view) =>
@@ -234,6 +236,9 @@ public sealed class StructureAnalysisService(
         var build = StructureSnapshotFactory.Create(request.Symbol, request.Market, request.OneMinuteBars,
             request.DailyBars, request.QuotePrice, request.QuoteAt, now, request.Generation, _policy,
             request.Liquidity);
+
+        // C3 OBI는 "최근 3 poll 평균"이라 완료 봉이 없는 poll의 호가도 남겨야 한다(#167).
+        confluence?.ObserveQuote(request.Symbol, request.Market.Start, request.Liquidity);
 
         if (build.Snapshot is null || build.LastCompletedBarStart is null || build.LastCompletedBarEnd is null)
         {
@@ -353,6 +358,11 @@ public sealed class StructureAnalysisService(
             snapshot.QuotePrice, now);
         var preferred = CandidateSelection.SelectPreferred(candidates)?.EventId;
 
+        // C1 컨플루언스 층(#167): 구조 판정과 분리된 additive 계산이다. 여기서 나온 값은 아래 관측 full
+        // 레코드와 조회 응답에만 실리고 후보·계획·진입 어느 경로에도 입력되지 않는다.
+        var confluenceDto = ConfluenceService.Dto(confluence?.Evaluate(snapshot.Symbol, snapshot.SessionStart,
+            build.Bars.Bars, request.DailyBars));
+
         var quality = StructureSnapshotFactory.Complete(build.Quality, trend, displayLayer.Profile,
             displayLayer.Warnings.Concat(candidateLayer.Warnings), detection.SpreadReasons);
 
@@ -382,7 +392,7 @@ public sealed class StructureAnalysisService(
             snapshot.SessionStart, snapshot.AnalysisAsOf, snapshot.QuoteAt, lastBarStart, PolicyHash, EngineVersion,
             ModeName, EntryOwner, full ? "full" : "summary", build.Status, summary, preferred, observedTrendDto,
             full ? qualityDto : null, full ? zoneDtos : null, candidateDtos,
-            warnings.ToArray(), notes.ToArray());
+            warnings.ToArray(), notes.ToArray(), full ? confluenceDto : null);
 
         // ── gate 안 짧은 commit: generation/session 재검증 후 저장, 저장 성공 뒤에만 래치·공개 snapshot 갱신 ──
         using (await runtime.EnterControlAsync(ct))
@@ -420,7 +430,8 @@ public sealed class StructureAnalysisService(
                 {
                     Detail = full ? "full" : "summary", CandidateSummary = summary, PreferredCandidateId = preferred,
                     Candidates = candidateDtos, Zones = full ? zoneDtos : null, Quality = full ? qualityDto : null,
-                    ObservationId = observationId, Warnings = warnings.ToArray(), Notes = notes.ToArray()
+                    ObservationId = observationId, Warnings = warnings.ToArray(), Notes = notes.ToArray(),
+                    Confluence = full ? confluenceDto : null
                 };
             }
 
@@ -804,7 +815,8 @@ public sealed class StructureAnalysisService(
 
     StructureQueryResponse Response(string symbol, string status, DateTimeOffset now, string? message,
         StructureAnalysisView? view) =>
-        new(symbol, ModeName, status, EntryOwner, EngineVersion, PolicyHash, message, view, now);
+        new(symbol, ModeName, status, EntryOwner, EngineVersion, PolicyHash, message, view, now,
+            confluence?.Summary(symbol));
 
     /// <summary>§12: `GET /api/state`에 붙는 additive 요약. 기존 score/action의 v4 의미를 덮어쓰지 않는다.</summary>
     public object Summary(IEnumerable<string> symbols)
@@ -874,7 +886,7 @@ public sealed class StructureAnalysisService(
 
 public sealed record StructureQueryResponse(string Symbol, string Mode, string Status, string EntryOwner,
     string EngineVersion, string PolicyHash, string? Message, StructureAnalysisView? Analysis,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt, ConfluenceSummaryDto? Confluence = null);
 
 /// <summary>Domain 계산 결과를 공개 DTO로 옮긴다. NaN/Infinity는 결측으로 바꾸고 0으로 대체하지 않는다(§11).</summary>
 public static class StructureViewMapper

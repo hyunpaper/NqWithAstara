@@ -100,8 +100,15 @@ public sealed class BarStoreService(IBarStore store, TimeProvider clock)
 /// 조회 실패는 진단 로그로만 남긴다.
 /// </summary>
 public sealed class BenchmarkPollingService(IMarketDataGateway toss, BarStoreService bars, ConfluenceOptions options,
-    IMonitorDiagnostics diagnostics)
+    IMonitorDiagnostics diagnostics) : IBenchmarkBarSource
 {
+    volatile IReadOnlyList<Candle> _latest = [];
+
+    public string Symbol => options.BenchmarkSymbol;
+
+    /// <summary>마지막 poll의 완료 벤치마크 봉. RS 기법(#167)이 시각 동기 검사를 하고 읽는다.</summary>
+    public IReadOnlyList<Candle> Bars => _latest;
+
     public async Task PollAsync(MarketSession market, CancellationToken ct)
     {
         if (!options.Enabled || string.IsNullOrWhiteSpace(options.BenchmarkSymbol)) return;
@@ -110,6 +117,7 @@ public sealed class BenchmarkPollingService(IMarketDataGateway toss, BarStoreSer
             var candles = await toss.Candles(options.BenchmarkSymbol, ct);
             var quote = await toss.Price(options.BenchmarkSymbol, ct);
             var completed = MarketRules.CompletedRegularBars(candles, market, quote.At);
+            _latest = completed;
             await bars.SaveNewBarsAsync(options.BenchmarkSymbol, completed, ct);
         }
         catch (Exception ex) { diagnostics.MarketDataFailed(options.BenchmarkSymbol, "benchmark-poll", ex); }

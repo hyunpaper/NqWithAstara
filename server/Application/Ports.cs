@@ -53,6 +53,13 @@ public interface IBarStore
     Task DeleteDayAsync(string day, CancellationToken ct);
 }
 
+/// <summary>RS 기법(#167 C3)이 읽는 당일 벤치마크 완료 봉. 새 외부 호출을 만들지 않고 기존 폴링 결과만 노출한다.</summary>
+public interface IBenchmarkBarSource
+{
+    string Symbol { get; }
+    IReadOnlyList<Candle> Bars { get; }
+}
+
 public interface IMonitorSignals
 {
     bool TryGet(string symbol, out SignalView signal);

@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using Astra.Server.Domain;
 namespace Astra.Server.Application;
 
@@ -54,6 +54,9 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
                 .DistinctBy(x => x.Symbol, StringComparer.OrdinalIgnoreCase).ToArray();
             // #132: 종목 메타는 신규 심볼이 생길 때만 배치 1회 조회한다(STOCK 5/s). 실패는 결측으로 둔다.
             if (metadata is not null) await metadata.EnsureAsync(items.Select(x => x.Symbol), ct);
+            // #167 RS 기법은 벤치마크 봉이 평가 봉과 ±60초 안에서 동기화돼야 한다. 종목 루프보다 먼저 받아
+            // 같은 완료 봉 시각을 공유한다(#165 저장 동작은 그대로다).
+            if (benchmark is not null) await benchmark.PollAsync(market, ct);
             var ok = 0; var warmup = 0; var invalid = 0; var failed = 0;
             await Parallel.ForEachAsync(items, new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct }, async (item, token) =>
             {
@@ -64,7 +67,6 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
                 else if (outcome == PollOutcome.Failed) Interlocked.Increment(ref failed);
             });
             CommitConnection(gen, items.Length, ok, warmup, invalid, failed);
-            if (benchmark is not null) await benchmark.PollAsync(market, ct);
         }
         catch (Exception ex) { runtime.TryCommit(gen, () => Signals.Clear()); runtime.TryCommit(gen, s => s with { ConnectionStatus = "error", ConnectionMessage = ex.Message, UpdatedAt = clock.GetUtcNow() }); diagnostics.PollFailed("market", ex); }
     }
