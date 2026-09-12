@@ -39,6 +39,13 @@ public sealed record StructurePolicy
     /// 재무장 단위와 같은 세션 내 구조 관찰 단위이며, 성과를 통해 탐색한 값이 아니다.
     /// </summary>
     public int TriggerEpisodeMaxAgeMinutes { get; init; } = 30;
+
+    /// <summary>
+    /// §10 손절 후 재진입 제한. 같은 심볼의 최신 STOP 청산이 일어난 완료 봉을 0번째로 세어, 이후 완료 봉이
+    /// 이 개수만큼 쌓이기 전에는 다시 진입하지 않는다. 보수적 운영 정책 상수이며 구조에서 도출하거나
+    /// 성과로 검증한 값이 아니다.
+    /// </summary>
+    public int StopReentryCooldownBars { get; init; } = 3;
     public long ObservationDailyByteLimit { get; init; } = 20L * 1024 * 1024;
 
     /// <summary>
