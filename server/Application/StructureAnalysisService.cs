@@ -129,7 +129,7 @@ public sealed class StructureAnalysisService(
     /// <summary>§16B 가격 단위: 관측된 가격이 정책 tick의 배수가 아니다(신규 READY 금지).</summary>
     public const string NotePriceTickUnsupported = "V5_PRICE_TICK_UNSUPPORTED";
 
-    /// <summary>§16B 가격 단위: tick을 판정할 가격 근거가 없다. 모르면 허용이 아니라 차단이다.</summary>
+    /// <summary>§16B 가격 단위: 호가 근거가 없어 tick을 판정할 수 없다. 신규 READY는 계속 허용한다.</summary>
     public const string NotePriceTickUnknown = "V5_PRICE_TICK_UNKNOWN";
 
     /// <summary>§12.5 gate 재확인에서 신규 진입이 막혔다. 뒤의 코드가 구체 사유다.</summary>
@@ -149,6 +149,7 @@ public sealed class StructureAnalysisService(
     readonly ConcurrentDictionary<string, CacheEntry> _cache = new(StringComparer.OrdinalIgnoreCase);
     readonly ConcurrentDictionary<string, StructuralLatch> _latches = new(StringComparer.OrdinalIgnoreCase);
     readonly ConcurrentDictionary<string, StructureAnalysisView> _published = new(StringComparer.OrdinalIgnoreCase);
+    readonly ConcurrentDictionary<string, TickUnknownState> _tickUnknowns = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>#64: 마지막 평가가 예외로 끝난 종목. 성공하면 즉시 사라진다.</summary>
     readonly ConcurrentDictionary<string, byte> _failed = new(StringComparer.OrdinalIgnoreCase);
     readonly SemaphoreSlim _restoreGate = new(1, 1);
@@ -166,7 +167,7 @@ public sealed class StructureAnalysisService(
     public string EntryOwner => _options.Mode == StructureEngineMode.Active ? EntryOwnerV5 : EntryOwnerV4;
 
     /// <summary>세션 종료·모니터링 중지 시 메모리를 정리한다(§16 "메모리도 세션 종료 시 정리한다").</summary>
-    public void Clear() { _cache.Clear(); _published.Clear(); _latches.Clear(); _failed.Clear(); }
+    public void Clear() { _cache.Clear(); _published.Clear(); _latches.Clear(); _failed.Clear(); _tickUnknowns.Clear(); }
 
     public void Remove(string symbol)
     {
@@ -174,6 +175,7 @@ public sealed class StructureAnalysisService(
         _published.TryRemove(symbol, out _);
         _latches.TryRemove(symbol, out _);
         _failed.TryRemove(symbol, out _);
+        _tickUnknowns.TryRemove(symbol, out _);
     }
 
     public bool TryGetPublished(string symbol, out StructureAnalysisView view) =>
@@ -217,6 +219,9 @@ public sealed class StructureAnalysisService(
         var snapshot = build.Snapshot;
         var lastBarStart = build.LastCompletedBarStart.Value;
         var lastBarEnd = build.LastCompletedBarEnd.Value;
+        var tickNote = PriceTickNote(snapshot.OptionalLiquidity, _policy);
+        var tickSupported = !string.Equals(tickNote, NotePriceTickUnsupported, StringComparison.Ordinal);
+        var tickUnknownWarning = false;
 
         await RestoreAsync(ct);
         var latch = Latch(request.Symbol, snapshot.SessionStart);
@@ -233,31 +238,36 @@ public sealed class StructureAnalysisService(
             var refreshed = StructuralLifecycle.ApplyLive(cached.Candidates, snapshot.QuotePrice, now);
             var liveSignature = Signature(refreshed);
             var transitioned = !string.Equals(liveSignature, Signature(cached.Candidates), StringComparison.Ordinal);
-            if (!transitioned && cached.Generation == request.Generation) return;
-
-            var preferredId = CandidateSelection.SelectPreferred(refreshed)?.EventId;
-            var liveCandidateDtos = refreshed.Select(StructureViewMapper.Candidate).ToArray();
-            var liveSummary = (refreshed.Length == 0
-                ? CandidateDisposition.Wait
-                : CandidateSelection.Summarize(refreshed)).ToString().ToUpperInvariant();
 
             using (await runtime.EnterControlAsync(ct))
             {
                 if (!Current(request, snapshot, clock.GetLocalNow())) return;
+                tickUnknownWarning = TickUnknownWarning(request.Symbol, snapshot.SessionStart, tickNote);
+                var (tickNotes, tickWarnings) = WithTickDiagnostics(cached.Notes, cached.Warnings, tickNote,
+                    tickSupported, tickUnknownWarning);
+                var tickDiagnosticsChanged = !tickNotes.SequenceEqual(cached.Notes) ||
+                                             !tickWarnings.SequenceEqual(cached.Warnings);
+                if (!transitioned && !tickDiagnosticsChanged && cached.Generation == request.Generation) return;
+
+                var preferredId = CandidateSelection.SelectPreferred(refreshed)?.EventId;
+                var liveCandidateDtos = refreshed.Select(StructureViewMapper.Candidate).ToArray();
+                var liveSummary = (refreshed.Length == 0
+                    ? CandidateDisposition.Wait
+                    : CandidateSelection.Summarize(refreshed)).ToString().ToUpperInvariant();
 
                 var liveWarnings = ImmutableArray<string>.Empty;
-                if (transitioned)
+                if (transitioned || tickDiagnosticsChanged)
                 {
-                    // #64 §16/§16B: 같은 봉 안의 상태 전이(READY→INVALIDATED/EXPIRED)도 관측에 남긴다.
-                    // 기록은 이벤트 서명이 바뀐 poll에서만 일어나고 ID가 그 서명을 포함하므로 주기 반복은
-                    // 그대로 중복 폐기된다. 상태는 종결 방향으로만 움직여 봉당 기록 수는 후보 수로 제한된다.
+                    // 같은 봉 안에서도 후보 상태 또는 tick 진단 상태가 바뀌면 관측에 남긴다.
+                    // 두 상태가 모두 같으면 ID도 같아 주기 반복은 중복 폐기된다.
                     var liveRecord = new StructureObservationRecord(
-                        StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash, liveSignature),
+                        StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash,
+                            ObservationSignature(liveSignature, tickNotes, tickWarnings)),
                         RecordVersion, snapshot.Symbol, now, snapshot.SessionStart, snapshot.AnalysisAsOf,
                         snapshot.QuoteAt, lastBarStart, PolicyHash, EngineVersion, ModeName, EntryOwner,
                         DetailTransition, build.Status, liveSummary, preferredId,
                         cached.Trend is null ? null : StructureViewMapper.Trend(cached.Trend), null, null,
-                        liveCandidateDtos, cached.Warnings.ToArray(), cached.Notes.ToArray());
+                        liveCandidateDtos, tickWarnings.ToArray(), tickNotes.ToArray());
                     var liveWrite = await observations.AppendAsync(liveRecord, ct);
                     if (!Current(request, snapshot, clock.GetLocalNow())) return;
                     liveWarnings = StructureObservationWriter.StorageWarnings(liveWrite);
@@ -270,11 +280,12 @@ public sealed class StructureAnalysisService(
                 }
 
                 var liveView = View(request, build, snapshot, lastBarStart, cached.Trend, cached.Zones, refreshed,
-                    cached.Quality, cached.Notes, cached.Warnings, preferredId, now, liveWarnings,
+                    cached.Quality, tickNotes, tickWarnings, preferredId, now, liveWarnings,
                     candidateDtos: liveCandidateDtos, summary: liveSummary);
                 _cache[request.Symbol] = cached with
                 {
-                    Candidates = refreshed, Generation = request.Generation, View = liveView
+                    Candidates = refreshed, Generation = request.Generation, Notes = tickNotes, Warnings = tickWarnings,
+                    View = liveView
                 };
                 _published[request.Symbol] = liveView;
             }
@@ -300,11 +311,6 @@ public sealed class StructureAnalysisService(
         var blockers = build.Quality.BlockersForCandidate.Concat(gate.Blockers)
             .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToImmutableArray();
 
-        // #61 §16B: tick 지원 여부는 Application이 판정해서 넘긴다. Domain 기본값(허용)에 의존하지 않는다.
-        // #93: 차단은 UNSUPPORTED(격자를 벗어난 호가)뿐이고 UNKNOWN(호가 결측)은 관측 note로만 남긴다.
-        var tickNote = PriceTickNote(snapshot.OptionalLiquidity, _policy);
-        var tickSupported = !string.Equals(tickNote, NotePriceTickUnsupported, StringComparison.Ordinal);
-
         var detection = SetupDetector.Detect(SetupDetectionRequest.Create(snapshot.Symbol, snapshot.SessionStart,
             snapshot.SessionEnd, snapshot.AnalysisAsOf, now, build.Bars.Bars, candidateLayer.Zones,
             candidateLayer.Episodes, trend, candidateLayer.Atr1m, snapshot.QuotePrice, snapshot.QuoteAt,
@@ -326,11 +332,9 @@ public sealed class StructureAnalysisService(
 
         var warnings = new SortedSet<string>(build.Warnings, StringComparer.Ordinal);
         foreach (var blocker in detection.ReadyBlockers) warnings.Add(blocker);
-        if (tickNote is not null) notes.Add(tickNote);
-        if (!tickSupported) warnings.Add(tickNote!);
 
         var signature = StructuralLifecycle.EventSignature(candidates, preferred);
-        // #64: 관측 ID는 (봉, 이벤트 서명) 쌍이다. 같은 봉의 같은 상태는 그대로 중복 폐기되고 전이만 새 ID를 얻는다.
+        // full 관측 ID는 완료 봉과 후보 서명으로 만든다. 같은 봉을 재시작해 재평가해도 중복 기록하지 않는다.
         var observationId = StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash, signature);
         var full = !string.Equals(signature, latch.LastEventSignature, StringComparison.Ordinal);
 
@@ -354,6 +358,10 @@ public sealed class StructureAnalysisService(
             // #62 §12.5: 계산·파일 I/O·gate 경합 뒤의 실제 commit 시각이다. 진입 재확인은 이 시각으로 한다.
             var gateNow = clock.GetLocalNow();
             if (!Current(request, snapshot, gateNow)) return;
+            tickUnknownWarning = TickUnknownWarning(request.Symbol, snapshot.SessionStart, tickNote);
+            if (tickNote is not null) notes.Add(tickNote);
+            if (!tickSupported || tickUnknownWarning) warnings.Add(tickNote!);
+            record = record with { Warnings = warnings.ToArray(), Notes = notes.ToArray() };
 
             // ── D6 active 진입(§18): READY 대표 후보 1개만 실제 시뮬 거래로 커밋한다. 거래 저장이 성공한 뒤에만
             // 후보를 ENTERED로 바꾸고 래치에 tombstone을 남기며, 실패하면 관측·래치도 갱신하지 않아 다음 poll이
@@ -373,11 +381,12 @@ public sealed class StructureAnalysisService(
                     full = !string.Equals(signature, latch.LastEventSignature, StringComparison.Ordinal);
                     summary = CandidateSelection.Summarize(candidates).ToString().ToUpperInvariant();
                 }
+                observationId = StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash, signature);
                 record = record with
                 {
                     Detail = full ? "full" : "summary", CandidateSummary = summary, PreferredCandidateId = preferred,
                     Candidates = candidateDtos, Zones = full ? zoneDtos : null, Quality = full ? qualityDto : null,
-                    Notes = notes.ToArray()
+                    ObservationId = observationId, Warnings = warnings.ToArray(), Notes = notes.ToArray()
                 };
             }
 
@@ -595,6 +604,39 @@ public sealed class StructureAnalysisService(
         return observed == 0 ? NotePriceTickUnknown : null;
     }
 
+    bool TickUnknownWarning(string symbol, DateTimeOffset sessionStart, string? tickNote)
+    {
+        if (!string.Equals(tickNote, NotePriceTickUnknown, StringComparison.Ordinal))
+        {
+            _tickUnknowns.TryRemove(symbol, out _);
+            return false;
+        }
+
+        var state = _tickUnknowns.AddOrUpdate(symbol,
+            _ => new TickUnknownState(sessionStart, 1),
+            (_, previous) => previous.SessionStart == sessionStart
+                ? previous with { ConsecutivePolls = previous.ConsecutivePolls + 1 }
+                : new TickUnknownState(sessionStart, 1));
+        return state.ConsecutivePolls >= Math.Max(1, _policy.PriceTickUnknownWarningPolls);
+    }
+
+    static (ImmutableArray<string> Notes, ImmutableArray<string> Warnings) WithTickDiagnostics(
+        IEnumerable<string> notes, IEnumerable<string> warnings, string? tickNote, bool tickSupported,
+        bool tickUnknownWarning)
+    {
+        var nextNotes = new SortedSet<string>(notes.Where(x => !IsTickDiagnostic(x)), StringComparer.Ordinal);
+        var nextWarnings = new SortedSet<string>(warnings.Where(x => !IsTickDiagnostic(x)), StringComparer.Ordinal);
+        if (tickNote is not null) nextNotes.Add(tickNote);
+        if (!tickSupported || tickUnknownWarning) nextWarnings.Add(tickNote!);
+        return (nextNotes.ToImmutableArray(), nextWarnings.ToImmutableArray());
+    }
+
+    static bool IsTickDiagnostic(string code) => string.Equals(code, NotePriceTickUnsupported, StringComparison.Ordinal) ||
+        string.Equals(code, NotePriceTickUnknown, StringComparison.Ordinal);
+
+    static string ObservationSignature(string eventSignature, IEnumerable<string> notes, IEnumerable<string> warnings) =>
+        $"{eventSignature}|notes={string.Join(',', notes.Order(StringComparer.Ordinal))}|warnings={string.Join(',', warnings.Order(StringComparer.Ordinal))}";
+
     StructureLayer BuildLayer(StructureSnapshot snapshot, DateTimeOffset cutoff, StructureSnapshotBuild build,
         ImmutableArray<PriceZone> previousZones, IEnumerable<string> retired)
     {
@@ -786,6 +828,8 @@ public sealed class StructureAnalysisService(
         public ImmutableArray<PriceZone> Zones => Layer.Zones;
         public ImmutableArray<TouchEpisode> Episodes => Layer.Episodes;
     }
+
+    sealed record TickUnknownState(DateTimeOffset SessionStart, int ConsecutivePolls);
 }
 
 public sealed record StructureQueryResponse(string Symbol, string Mode, string Status, string EntryOwner,
