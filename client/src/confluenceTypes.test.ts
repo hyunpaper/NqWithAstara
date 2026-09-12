@@ -76,9 +76,20 @@ describe("normalizeTechnique", () => {
 });
 
 describe("normalizeConfluenceSummary", () => {
-  it("score·warmupCount·weightsVersion만 남긴다", () => {
-    const s = normalizeConfluenceSummary({ score: -0.1, warmupCount: 3, weightsVersion: "uniform.1", extra: 1 });
-    expect(s).toEqual({ score: -0.1, warmupCount: 3, weightsVersion: "uniform.1" });
+  it("score·warmupCount·weightsVersion·barEnd만 남긴다", () => {
+    const s = normalizeConfluenceSummary({
+      score: -0.1,
+      warmupCount: 3,
+      weightsVersion: "uniform.1",
+      barEnd: "2026-09-12T00:31:00Z",
+      extra: 1,
+    });
+    expect(s).toEqual({
+      score: -0.1,
+      warmupCount: 3,
+      weightsVersion: "uniform.1",
+      barEnd: "2026-09-12T00:31:00Z",
+    });
   });
 
   it("결측이면 null이다", () => {

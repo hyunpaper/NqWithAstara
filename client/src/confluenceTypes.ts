@@ -24,11 +24,15 @@ export type ConfluenceResponse = {
   updatedAt: string | null;
 };
 
-/** `/api/structure/{symbol}`에 additive로 실리는 요약(score·warmupCount·weightsVersion만). */
+/**
+ * `/api/structure/{symbol}`·`/api/state`의 `structureSummary` 행에 additive로 실리는 요약.
+ * barEnd는 이슈 #181에서 `structureSummary` 쪽에 추가됐다 — 캐시가 없으면 전체가 null이다.
+ */
 export type ConfluenceSummary = {
   score: number | null;
   warmupCount: number;
   weightsVersion: string | null;
+  barEnd: string | null;
 };
 
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
@@ -85,5 +89,6 @@ export const normalizeConfluenceSummary = (raw: unknown): ConfluenceSummary | nu
     score: num(r.score),
     warmupCount: num(r.warmupCount) ?? 0,
     weightsVersion: str(r.weightsVersion),
+    barEnd: str(r.barEnd),
   };
 };

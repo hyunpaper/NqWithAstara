@@ -8,6 +8,8 @@
 // enum류(status/state/role/kind/code)는 문자열 union으로 좁히지 않고 `string`으로 받는다.
 // D3가 값을 추가해도 화면이 깨지지 않게 하고, 모르는 값은 "원문 그대로 + 미등록" 으로 표기한다.
 
+import type { ConfluenceSummary } from "./confluenceTypes";
+
 export type StructureTrend = {
   state?: string | null;
   signedTrend?: number | null;
@@ -210,6 +212,8 @@ export type StructureSummaryRow = {
   analysisAsOf?: string | null;
   quoteAt?: string | null;
   warnings?: string[] | null;
+  /** 이슈 #181: ConfluenceService 캐시를 읽기만 한 additive 요약. 캐시 없음/warmup이면 null이다. */
+  confluence?: ConfluenceSummary | null;
 };
 
 /**
@@ -389,6 +393,19 @@ export const signedTrendText = (
   const arrow = signedTrend > 0 ? "▲" : signedTrend < 0 ? "▼" : "—";
   const sign = signedTrend > 0 ? "+" : signedTrend < 0 ? "−" : "";
   return `${arrow} ${sign}${Math.abs(signedTrend).toFixed(1)} ${trendStateLabel(state)}`;
+};
+
+/**
+ * 이슈 #181: 사이드바 미니 배지 점수 우선순위. 선택 종목의 K3 폴링 최신값(pin)이 있으면 그걸 쓰고,
+ * 없으면(다른 종목 행이거나 아직 폴링 전) `structureSummary` 캐시 요약값으로 채운다.
+ */
+export const sidebarConfluenceScore = (
+  pin: { symbol: string; score: number | null } | null | undefined,
+  symbol: string,
+  row: StructureSummaryRow | null | undefined,
+): number | null => {
+  if (pin && pin.symbol === symbol && pin.score != null) return pin.score;
+  return row?.confluence?.score ?? null;
 };
 
 /** EntryQuality 표기: 대표 후보가 없거나 값이 결측이면 "미평가" 고정 — null을 0으로 만들지 않는다(§2-4). */
