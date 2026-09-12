@@ -214,13 +214,6 @@ type SimData = {
   byKind: { kind: string; stats: SimStats }[];
   analysis: SimAnalysis | null;
   trades: SimTradeRow[];
-  byVersion?: {
-    version: string;
-    label: string;
-    stats: SimStats;
-    analysis: SimAnalysis | null;
-    byKind?: { kind: string; stats: SimStats }[];
-  }[];
   /** 이슈 #27: v5 동결 근거 기준 코호트 집계(additive). 구버전 서버에는 없을 수 있다. */
   structure?: StructureCohortReport | null;
 };
@@ -1408,7 +1401,6 @@ function DashTabs({ tab, onChange }: { tab: "sim" | "real"; onChange: (next: "si
 }
 function Dashboard() {
   const [data, setData] = useState<SimData | null>(null);
-  const [version, setVersion] = useState("all");
   const [tab, setTab] = useState<"sim" | "real">("sim");
   const [loadError, setLoadError] = useState("");
   useVisiblePolling(async () => {
@@ -1436,19 +1428,17 @@ function Dashboard() {
       </div>
     );
   if (!data) return loadError ? <div className="error"><WifiOff size={16} /><span>{loadError} 10초 후 다시 시도합니다.</span></div> : <Loading />;
-  const cohort = data.byVersion?.find((x) => x.version === version);
-  const s = cohort?.stats ?? data.summary;
-  const analysis = cohort?.analysis ?? (version === "all" ? data.analysis : null);
-  const byKind = cohort?.byKind ?? data.byKind;
-  const trades = version === "all" ? data.trades : data.trades.filter((t) => (t.logic?.trim() || "legacy") === version);
+  const s = data.summary;
+  const analysis = data.analysis;
+  const byKind = data.byKind;
+  const trades = data.trades;
   return (
     <div className="dash">
       <DashTabs tab={tab} onChange={setTab} />
       <section className="panel metrics-panel">
         <div className="panel-head">
           <div>
-            {/* 이슈 #29: 반복 구현 설명 제거 — 비용 기준은 각 지표의 help에 남아 있다. */}
-            <h2>{cohort ? `${cohort.label} 코호트` : "전체 성과 요약"}</h2>
+            <h2>전체 성과 요약</h2>
           </div>
           <LayoutDashboard size={18} />
         </div>
@@ -1482,17 +1472,6 @@ function Dashboard() {
         </div>
       </section>
       {!!s.missingPnl && <div className="sample-warning">청산 {s.closed}건 중 손익이 없는 {s.missingPnl}건은 승률·평균·합계 계산에서 제외했습니다.</div>}
-      {!!data.byVersion?.length && (
-        <div className="cohort-picker">
-          <label htmlFor="logic-version">로직 버전</label>
-          <select id="logic-version" value={version} onChange={(e) => setVersion(e.target.value)}>
-            <option value="all">전체 버전 혼합</option>
-            {data.byVersion.map((v) => <option key={v.version} value={v.version}>{v.label} · 청산 {v.stats.closed}건</option>)}
-          </select>
-          <span>버전별 규칙이 달라 성과는 같은 코호트 안에서 비교하세요.</span>
-        </div>
-      )}
-      {cohort && s.closed < 10 && !analysis?.sampleWarning && <div className="sample-warning">청산 {s.closed}건의 작은 표본입니다. 현재 수치는 잠정 관찰값이며 규칙 변경 근거로 확정하기 어렵습니다.</div>}
       {analysis?.sampleWarning && <div className="sample-warning">{analysis.sampleWarning}</div>}
       {analysis && (
         <section className="panel metrics-panel">
@@ -1570,9 +1549,7 @@ function Dashboard() {
       <section className="panel metrics-panel">
         <div className="panel-head">
           <div>
-            <h2>{cohort ? `${cohort.label} · 신호별 성과` : "전체 버전 · 신호별 성과"}</h2>
-            {/* 이슈 #29: 편집성 설명 대신 어느 범위의 값인지만 남긴다. */}
-            <p>{cohort ? "선택한 로직 버전 기준" : "전체 버전 혼합"}</p>
+            <h2>신호별 성과</h2>
           </div>
         </div>
         <div className="table-wrap">
