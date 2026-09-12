@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using Astra.Server;
 using Astra.Server.Application;
 using Astra.Server.Domain.Structure;
@@ -36,9 +36,11 @@ static class D3
     }
 
     public static StructureAnalysisService Service(StructureEngineMode mode, MemoryObservationStore observations,
-        MonitorRuntimeState runtime, TimeProvider clock, ILocalStore? store = null) =>
+        MonitorRuntimeState runtime, TimeProvider clock, ILocalStore? store = null,
+        ConfluenceService? confluence = null) =>
         new(store ?? new RecordingStore(), new StructureObservationWriter(observations, StructurePolicy.Default),
-            runtime, clock, new SilentDiagnostics(), new StructureEngineOptions(mode), StructurePolicy.Default);
+            runtime, clock, new SilentDiagnostics(), new StructureEngineOptions(mode), StructurePolicy.Default,
+            confluence: confluence);
 
     public static long StartedRuntime(MonitorRuntimeState runtime, MarketSession? session = null)
     {
