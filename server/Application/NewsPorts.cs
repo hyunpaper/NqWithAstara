@@ -2,7 +2,10 @@ using Astra.Server.Domain.News;
 
 namespace Astra.Server.Application;
 
-/// <summary>피드 목록 한 건(#151 §1). 상세는 매칭 기사에 한해 따로 받는다.</summary>
+/// <summary>
+/// 피드 목록 한 건(#151 §1). 상세는 매칭 기사에 한해 따로 받는다. <see cref="GroupId"/>가 같은
+/// 기사들은 사건 그룹으로 묶여 대표 1건만 분류된다(#171).
+/// </summary>
 public sealed record NewsFeedItem(
     string Id,
     string Title,
@@ -11,7 +14,8 @@ public sealed record NewsFeedItem(
     DateTimeOffset CreatedAt,
     IReadOnlyList<string> Tickers,
     string Headline = "",
-    bool HeadlineOnly = false);
+    bool HeadlineOnly = false,
+    string? GroupId = null);
 
 /// <summary>기사 상세(#151). AI 요약이 있으면 본문 대신 그것을 분류 입력으로 쓴다.</summary>
 public sealed record NewsDetail(string Summary, string Body);

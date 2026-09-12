@@ -32,6 +32,9 @@ public sealed class NewsFeedService(
     readonly HashSet<string> _queued = new(StringComparer.Ordinal);
     readonly Queue<DateTimeOffset> _classifications = new();
 
+    /// <summary>대표 기사 id -> 같은 사건 그룹의 나머지 기사(#171). 대표가 분류되면 함께 저장한다.</summary>
+    readonly Dictionary<string, List<QueuedArticle>> _pendingFollowers = new(StringComparer.Ordinal);
+
     NewsFeedState? _state;
     bool _stateLoaded;
     bool _restored;
@@ -118,14 +121,50 @@ public sealed class NewsFeedService(
         if (known is null || fresh.Count == 0) return budget;
 
         state.SeenArticles(fresh.Count);
-        foreach (var item in fresh.OrderBy(x => ParseId(x.Id)))
+        var articles = fresh.OrderBy(x => ParseId(x.Id))
+            .Select(item => new NewsArticle(item.Id, item.Title, item.Summary, item.Source, item.CreatedAt,
+                item.Tickers, item.Headline, item.HeadlineOnly, item.GroupId))
+            .ToArray();
+
+        var followerIds = GroupFollowerArticles(articles, watchlist);
+        foreach (var article in articles)
         {
-            var article = new NewsArticle(item.Id, item.Title, item.Summary, item.Source, item.CreatedAt,
-                item.Tickers, item.Headline, item.HeadlineOnly);
+            if (followerIds.Contains(article.Id)) continue;
             Enqueue(article, NewsMatcher.Match(article, watchlist).Symbols);
         }
         state.QueueDepth(QueueDepth);
         return budget;
+    }
+
+    /// <summary>
+    /// 사건 그룹 단위 1회 분류(#171 §3). <see cref="NewsArticle.GroupId"/>가 같은 신규 기사 중
+    /// 그룹 내 최신 <see cref="NewsArticle.CreatedAt"/> 1건만 대표로 큐에 넣고, 나머지는
+    /// <see cref="_pendingFollowers"/>에 쌓아 두었다가 대표가 분류되면 결과를 복사해 저장한다.
+    /// </summary>
+    HashSet<string> GroupFollowerArticles(IReadOnlyList<NewsArticle> articles, IReadOnlyList<NewsWatchSymbol> watchlist)
+    {
+        var followerIds = new HashSet<string>(StringComparer.Ordinal);
+        var groups = articles
+            .Where(a => !string.IsNullOrWhiteSpace(a.GroupId))
+            .GroupBy(a => a.GroupId!, StringComparer.Ordinal);
+
+        foreach (var group in groups)
+        {
+            var members = group.ToArray();
+            if (members.Length < 2) continue;
+
+            var representative = members
+                .OrderByDescending(a => a.CreatedAt)
+                .ThenByDescending(a => ParseId(a.Id))
+                .First();
+            var followers = members.Where(a => a.Id != representative.Id).ToArray();
+            foreach (var follower in followers) followerIds.Add(follower.Id);
+
+            _pendingFollowers[representative.Id] = followers
+                .Select(a => new QueuedArticle(a, NewsMatcher.Match(a, watchlist).Symbols))
+                .ToList();
+        }
+        return followerIds;
     }
 
     /// <summary>큐 상한 초과 시 비매칭 기사부터 버린다(사용자 요구: 매칭 우선).</summary>
@@ -145,6 +184,7 @@ public sealed class NewsFeedService(
                 if (victim is null) break;
                 if (_other.First is not null) _other.RemoveFirst(); else _matched.RemoveFirst();
                 _queued.Remove(victim.Value.Article.Id);
+                _pendingFollowers.Remove(victim.Value.Article.Id);
                 dropped++;
             }
             if (dropped > 0) state.Drop(dropped);
@@ -232,11 +272,26 @@ public sealed class NewsFeedService(
             state.Ollama(true);
             _classifications.Enqueue(clock.GetUtcNow());
             await SaveAsync(Compose(entry, result, inputKind), ct);
+            await SaveGroupFollowersAsync(entry.Article.Id, result, ct);
         }
         state.QueueDepth(QueueDepth);
     }
 
-    NewsRecord Compose(QueuedArticle entry, NewsClassificationResult result, string inputKind)
+    /// <summary>대표가 분류되면 같은 그룹의 나머지 기사에 결과를 복사해 저장한다(#171 §3).</summary>
+    async Task SaveGroupFollowersAsync(string representativeId, NewsClassificationResult result, CancellationToken ct)
+    {
+        if (!_pendingFollowers.Remove(representativeId, out var followers)) return;
+        var copied = result with { LatencyMs = 0 };
+        foreach (var follower in followers)
+        {
+            var inputKind = follower.Article.HeadlineOnly || string.IsNullOrWhiteSpace(follower.Article.Summary)
+                ? NewsInputKinds.Headline
+                : NewsInputKinds.Body;
+            await SaveAsync(Compose(follower, copied, inputKind, representativeId), ct);
+        }
+    }
+
+    NewsRecord Compose(QueuedArticle entry, NewsClassificationResult result, string inputKind, string? classifiedFrom = null)
     {
         var classification = result.Classification;
         // 피드 `tickers` 태그가 있으면 그것을 심볼로 쓰고, 없을 때만 LLM 판정을 쓴다.
@@ -260,7 +315,8 @@ public sealed class NewsFeedService(
             result.LatencyMs,
             clock.GetUtcNow(),
             inputKind,
-            result.PromptVersion);
+            result.PromptVersion,
+            classifiedFrom);
     }
 
     async Task SaveAsync(NewsRecord record, CancellationToken ct)

@@ -28,7 +28,10 @@ public sealed class NewsOptions
     public int RecentCapacity { get; set; } = 300;
 }
 
-/// <summary>저장·조회 공용 기사 레코드(#151 §5).</summary>
+/// <summary>
+/// 저장·조회 공용 기사 레코드(#151 §5). <see cref="ClassifiedFrom"/>은 사건 그룹 대표의 판정을
+/// 복사해 저장한 팔로워 기사에만 대표 기사 id로 채워진다(#171). 그룹이 없거나 자신이 대표면 null이다.
+/// </summary>
 public sealed record NewsRecord(
     string Id,
     string Title,
@@ -44,7 +47,8 @@ public sealed record NewsRecord(
     long LatencyMs,
     DateTimeOffset ClassifiedAt,
     string InputKind = NewsInputKinds.Body,
-    string PromptVersion = "");
+    string PromptVersion = "",
+    string? ClassifiedFrom = null);
 
 /// <summary>health·조회가 함께 보는 뉴스 런타임 상태(#151 §6). 스레드 안전하다.</summary>
 public sealed class NewsRuntimeState

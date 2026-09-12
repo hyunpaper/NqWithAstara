@@ -74,6 +74,7 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         classifiedAt = record.ClassifiedAt,
         inputKind = record.InputKind,
         promptVersion = record.PromptVersion,
+        classifiedFrom = record.ClassifiedFrom,
     };
 
     static object Project(NewsSentimentScore score) => new

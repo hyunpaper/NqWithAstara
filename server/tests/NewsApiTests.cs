@@ -153,6 +153,18 @@ public sealed class NewsQueryServiceTests
 
         Assert.Equal("v2b", first.GetProperty("promptVersion").GetString());
     }
+
+    [Fact]
+    public void ArticlesExposeClassifiedFrom()
+    {
+        var (query, state, options) = Build();
+        state.Add(Record("1", NewsSentiments.Negative, 3, Now, "MARKET") with { ClassifiedFrom = "2" },
+            options.RecentCapacity);
+
+        var first = Serialize(query.Articles(null, null)).GetProperty("articles")[0];
+
+        Assert.Equal("2", first.GetProperty("classifiedFrom").GetString());
+    }
 }
 
 public sealed class NewsHostContractTests(AstraHostFixture host) : IClassFixture<AstraHostFixture>
