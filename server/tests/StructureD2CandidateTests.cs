@@ -141,6 +141,40 @@ public sealed class StructureD2CandidateTests
         }
     }
 
+    /// <summary>히스테리시스로 UP이 유지되는 efficiency 1봉 딥에서는 PULLBACK 가설이 그대로 생성된다(§7, #148).</summary>
+    [Fact]
+    public void PullbackSurvivesTheOneBarEfficiencyDipThatUsedToDropTheUpLabel()
+    {
+        var state = TrendEvaluator.StateSequence(
+            new TrendStateSample[] { new(true, 60, .29, false), new(true, 60, .29, false),
+                new(true, 63, .18, false) }, P);
+
+        Assert.Equal(TrendState.Up, state);
+
+        var result = SetupDetector.Detect(Request(PullbackBars(), PullbackZones(), PullbackEpisodes(),
+            D2.Trend(state, 63)), P);
+
+        Assert.Contains(result.Candidates, x => x.Kind == SetupKind.Pullback);
+        Assert.DoesNotContain(SetupDetector.NotePullbackTrendState, result.Warnings);
+    }
+
+    /// <summary>이탈 조건이 2봉 연속이면 RANGE가 되고 PULLBACK은 상태 사유로 차단된다(§7, #148).</summary>
+    [Fact]
+    public void PullbackIsBlockedOnceTheExitConditionHoldsForTwoBars()
+    {
+        var state = TrendEvaluator.StateSequence(
+            new TrendStateSample[] { new(true, 60, .29, false), new(true, 60, .29, false),
+                new(true, 63, .18, false), new(true, 63, .05, false) }, P);
+
+        Assert.Equal(TrendState.Range, state);
+
+        var result = SetupDetector.Detect(Request(PullbackBars(), PullbackZones(), PullbackEpisodes(),
+            D2.Trend(state, 63)), P);
+
+        Assert.DoesNotContain(result.Candidates, x => x.Kind == SetupKind.Pullback);
+        Assert.Contains(SetupDetector.NotePullbackTrendState, result.Warnings);
+    }
+
     [Fact]
     public void PullbackNeedsAConfirmedTouchEpisodeOnTheSupport()
     {

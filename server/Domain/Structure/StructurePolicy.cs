@@ -113,6 +113,18 @@ public sealed record StructurePolicy
     public double TrendStateThreshold { get; init; } = 25;
     public double TrendEfficiencyThreshold { get; init; } = .25;
 
+    /// <summary>§7 UP/DOWN 진입·이탈에 요구하는 연속 완료 봉 수. TRANSITION은 여기서 제외된다(§7, #148).</summary>
+    public int TrendStateHoldBars { get; init; } = 2;
+
+    /// <summary>§7 UP/DOWN 이탈용 efficiency 임계값. 진입용 <see cref="TrendEfficiencyThreshold"/>보다 낮다(§7, #148).</summary>
+    public double TrendExitEfficiency { get; init; } = .20;
+
+    /// <summary>§7 UP/DOWN 이탈용 |signedTrend| 임계값. 진입용 <see cref="TrendStateThreshold"/>보다 낮다(§7, #148).</summary>
+    public double TrendExitSignedTrend { get; init; } = 20;
+
+    /// <summary>§7 structureDirection 분모의 봉 수. 분모는 sqrt(이 값)·ATR1m이다(§7, #148).</summary>
+    public int StructureDirectionAtrScaleBars { get; init; } = 5;
+
     // ── 일봉 컨텍스트 (§6.1, §16B) ──
     public int DailyLookbackSessions { get; init; } = 20;
 
