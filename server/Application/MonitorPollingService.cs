@@ -5,7 +5,8 @@ namespace Astra.Server.Application;
 public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway toss, IRealtimeMarketStream stream,
     MonitorRuntimeState runtime, TimeProvider clock, IMonitorDiagnostics diagnostics,
     StructureAnalysisService? structure = null, StructureLiquidityFeed? liquidity = null,
-    StructureAlertPublisher? alerts = null, FeeRateCheckService? feeCheck = null) : IMonitorSignals
+    StructureAlertPublisher? alerts = null, SymbolMetadataService? metadata = null,
+    FeeRateCheckService? feeCheck = null) : IMonitorSignals
 {
     public bool Running => runtime.Snapshot().Running; public long Generation => runtime.Snapshot().Generation;
     public string ConnectionStatus => runtime.Snapshot().ConnectionStatus; public string ConnectionMessage => runtime.Snapshot().ConnectionMessage;
@@ -16,8 +17,8 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
     readonly ConcurrentDictionary<string, BreakoutLatch> _breakouts = new(StringComparer.OrdinalIgnoreCase);
     public bool TryGet(string symbol, out SignalView signal) => Signals.TryGetValue(symbol, out signal!);
     // 이슈 #67: 일봉 캐시도 다른 종목 캐시와 같은 규칙으로 정리한다 — 삭제된 종목·세션 경계를 넘겨 재사용하지 않는다.
-    public void Remove(string symbol) { Signals.TryRemove(symbol, out _); _setups.TryRemove(symbol, out _); _breakouts.TryRemove(symbol, out _); _daily.TryRemove(symbol, out _); structure?.Remove(symbol); }
-    public void Clear() { Signals.Clear(); _setups.Clear(); _breakouts.Clear(); _daily.Clear(); structure?.Clear(); alerts?.Clear(); }
+    public void Remove(string symbol) { Signals.TryRemove(symbol, out _); _setups.TryRemove(symbol, out _); _breakouts.TryRemove(symbol, out _); _daily.TryRemove(symbol, out _); structure?.Remove(symbol); metadata?.Remove(symbol); }
+    public void Clear() { Signals.Clear(); _setups.Clear(); _breakouts.Clear(); _daily.Clear(); structure?.Clear(); alerts?.Clear(); metadata?.Clear(); }
 
     public async Task PollAsync(CancellationToken ct)
     {
@@ -28,7 +29,7 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
             if (!market.IsOpen || market.End is { } end && clock.GetLocalNow() >= end)
             {
                 await ReconcileExpiredTrades(gen, ct);
-                runtime.TryCommit(gen, () => { Signals.Clear(); _setups.Clear(); _breakouts.Clear(); _daily.Clear(); structure?.Clear(); alerts?.Clear(); });
+                runtime.TryCommit(gen, () => { Signals.Clear(); _setups.Clear(); _breakouts.Clear(); _daily.Clear(); structure?.Clear(); alerts?.Clear(); metadata?.Clear(); });
                 runtime.TryCommit(gen, s => s with { ConnectionStatus = "connected", ConnectionMessage = "미국 정규장 외에는 신호를 생성하지 않습니다.", UpdatedAt = clock.GetUtcNow() }); return;
             }
             // 이슈 #130: 폴링 서비스가 세션 진입을 감지하는 지점 — 세션당 1회 수수료 정합을 확인한다.
@@ -44,6 +45,8 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
             var watched = watch.ToDictionary(x => x.Symbol, StringComparer.OrdinalIgnoreCase);
             var items = watch.Concat(oldTrades.Where(x => x.Status == "OPEN" && !watched.ContainsKey(x.Symbol)).Select(x => new WatchItem(x.Symbol, x.Symbol)))
                 .DistinctBy(x => x.Symbol, StringComparer.OrdinalIgnoreCase).ToArray();
+            // #132: 종목 메타는 신규 심볼이 생길 때만 배치 1회 조회한다(STOCK 5/s). 실패는 결측으로 둔다.
+            if (metadata is not null) await metadata.EnsureAsync(items.Select(x => x.Symbol), ct);
             var ok = 0; var warmup = 0; var invalid = 0; var failed = 0;
             await Parallel.ForEachAsync(items, new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct }, async (item, token) =>
             {

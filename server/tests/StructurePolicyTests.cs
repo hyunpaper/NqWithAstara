@@ -42,8 +42,8 @@ public sealed class StructurePolicyTests
     public void CanonicalJsonIsKeySortedAndFreeOfRuntimeContext()
     {
         var json = StructurePolicy.Default.CanonicalJson;
-        var keys = json.Trim('{', '}').Split(",\"")
-            .Select(x => x.TrimStart('"').Split("\":")[0]).ToArray();
+        var keys = System.Text.RegularExpressions.Regex.Matches(json, "[{,]\"(\\w+)\":")
+            .Select(x => x.Groups[1].Value).ToArray();
         Assert.Equal(keys.OrderBy(x => x, StringComparer.Ordinal).ToArray(), keys);
         Assert.DoesNotContain("PolicyHash", keys);
         Assert.DoesNotContain("CanonicalJson", keys);
