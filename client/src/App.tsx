@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { useVisiblePolling } from "./useVisiblePolling";
 import LiquidityPanel from "./LiquidityPanel";
+import FeeWarningBadge from "./FeeWarningBadge";
 import StructurePanel from "./StructurePanel";
 // 이슈 #84: v5 코호트 섹션(SimStructurePanel)은 대시보드 렌더링에서 제거했다.
 // data.structure/서버 집계(SimulationCohorts.cs)는 유지되며, 아래 import와
@@ -111,6 +112,11 @@ type State = {
    * FE는 seq seed + Notification tag로 소비만 한다. 구버전 서버에는 없다.
    */
   structureEvents?: StructureEventRow[] | null;
+  /**
+   * 이슈 #130: 실계좌 US 왕복 수수료와 StructurePolicy.RoundTripFeePercent 불일치·만료 임박 경고.
+   * 구버전 서버에는 없을 수 있으므로 optional로 둔다.
+   */
+  warnings?: string[] | null;
 };
 type SearchResult = { symbol: string; name: string };
 type DailyMetrics = {
@@ -885,6 +891,7 @@ export default function App() {
             </div>
           </div>
           <div className="header-actions">
+            <FeeWarningBadge warnings={state?.warnings} />
             <div className={`market ${state?.market.isOpen ? "open" : ""}`}>
               <span />
               {state?.market.label || "시장 상태 확인 중"}
