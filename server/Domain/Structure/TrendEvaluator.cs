@@ -169,7 +169,8 @@ public static class TrendEvaluator
         // §7 구조 family: 확정 피벗의 최신 delta. 5분 피벗은 우측 확인에 10분이 필요하다(§5.3).
         var pivots5m = PivotDetector.Detect(request.Symbol, request.SessionStart, BarTimeframe.FiveMinute,
             bars5m, request.AnalysisCutoff, policy);
-        var (structureDirection, deltaHigh, deltaLow) = StructureFamily(pivots5m, atr);
+        var (structureDirection, deltaHigh, deltaLow) = StructureFamily(pivots5m, atr,
+            bars.Length == 0 ? request.AnalysisCutoff : bars[^1].End, policy);
 
         // §16B "30개 연속 완료 1m 봉": 개수만이 아니라 cutoff 직전까지 끊기지 않은 구간을 요구한다.
         var enoughBars = TrailingConsecutiveBars(bars) >= policy.Minimum1mBars;
@@ -179,53 +180,19 @@ public static class TrendEvaluator
         if (vwap is null) { warnings.Add(WarningVwapUnavailable); missing.Add("vwap"); }
         if (efficiency is null) { warnings.Add(WarningEfficiencyUnavailable); missing.Add("efficiency"); }
 
-        double? emaDirection = null, slopeDirection = null, vwapDirection = null, priceDirection = null;
-        double? emaRaw = null, slopeRaw = null, vwapRaw = null;
         var usableAtr = atr is { } a && double.IsFinite(a) && a > 0 ? a : (double?)null;
-
-        if (usableAtr is { } atrValue && bars.Length > 0)
-        {
-            if (ema9[^1] is { } fast && ema21[^1] is { } slow)
-            {
-                emaRaw = (fast - slow) / atrValue;
-                emaDirection = Math.Tanh(emaRaw.Value);
-            }
-            else missing.Add("emaDirection");
-
-            var slopeIndex = bars.Length - 1 - policy.TrendSlopeLookbackBars;
-            if (slopeIndex >= 0 && ema21[^1] is { } now && ema21[slopeIndex] is { } before)
-            {
-                slopeRaw = (now - before) / (policy.TrendSlopeLookbackBars * atrValue);
-                slopeDirection = Math.Tanh(slopeRaw.Value);
-            }
-            else missing.Add("slopeDirection");
-
-            if (vwap is { } vwapValue)
-            {
-                var denominator = Math.Max(Math.Max(vwapSd ?? 0, atrValue), policy.IndicatorFloor);
-                vwapRaw = ((double)bars[^1].Close - vwapValue) / denominator;
-                vwapDirection = Math.Tanh(vwapRaw.Value);
-            }
-            else missing.Add("vwapDirection");
-        }
-        else
-        {
-            missing.Add("emaDirection");
-            missing.Add("slopeDirection");
-            missing.Add("vwapDirection");
-        }
-
-        // §7 가격 파생 세 항목은 서로 상관돼 있으므로 하나의 family로 묶는다.
-        if (emaDirection is { } e && slopeDirection is { } s && vwapDirection is { } v)
-        {
-            var mean = (e + s + v) / 3;
-            if (double.IsFinite(mean)) priceDirection = mean;
-        }
+        var price = bars.Length == 0
+            ? new PriceFamily(null, null, null, null, null, null, null, vwap, vwapSd)
+            : PriceDirection(bars, bars.Length - 1, usableAtr, ema9, ema21, policy);
+        if (price.EmaValue is null) missing.Add("emaDirection");
+        if (price.SlopeValue is null) missing.Add("slopeDirection");
+        if (price.VwapValue is null) missing.Add("vwapDirection");
+        var priceDirection = price.Direction;
 
         var components = ImmutableArray.Create(
-            new TrendComponent("emaDirection", "price", emaRaw, emaDirection),
-            new TrendComponent("slopeDirection", "price", slopeRaw, slopeDirection),
-            new TrendComponent("vwapDirection", "price", vwapRaw, vwapDirection),
+            new TrendComponent("emaDirection", "price", price.EmaRaw, price.EmaValue),
+            new TrendComponent("slopeDirection", "price", price.SlopeRaw, price.SlopeValue),
+            new TrendComponent("vwapDirection", "price", price.VwapRaw, price.VwapValue),
             // 두 delta는 별개 원값이라 합으로 뭉개지 않는다(§9.4, #65). structureDirection은 두 tanh의 평균이라
             // 되돌릴 수 있는 단일 원값이 없으므로 Raw는 결측이고, 원값은 아래 두 구성요소가 그대로 보존한다.
             new TrendComponent("structureDirection", "structure", null, structureDirection),
@@ -268,7 +235,7 @@ public static class TrendEvaluator
             blockersForReady.Add(BlockerMissing5mStructure);
         }
 
-        var state = State(signed, priceDirection.Value, structureDirection, efficiency.Value, policy);
+        var state = State(bars, atrSeries, ema9, ema21, pivots5m, policy);
 
         return new TrendAssessment(state, signed, priceDirection, structureDirection, efficiency, atr,
             ema9[^1], ema21[^1], vwap, vwapSd, structureMissing, bars.Length, request.AnalysisCutoff, components,
@@ -276,36 +243,165 @@ public static class TrendEvaluator
             blockersForTrend.ToImmutableArray(), blockersForReady.ToImmutableArray());
     }
 
+    /// <summary>봉 하나의 상태 판정 입력. 결측 봉은 <see cref="Available"/>=false다(§7, #148).</summary>
+    readonly record struct BarSample(bool Available, double SignedTrend, double Efficiency, bool Opposed);
+
     /// <summary>
-    /// §16B: efficiency&lt;임계값이면 RANGE. 그 외 임계값을 만족하고 두 family 부호가 반대가 아닐 때만 UP/DOWN이며
-    /// 나머지는 TRANSITION이다. 부호는 수학적 sign이고 0은 반대 부호가 아니다.
+    /// §7 상태 히스테리시스(#148). 세션 완료 봉 시계열을 순차 적용하는 순수 함수이며 상태를 저장하지 않는다(§16B 재현성).
+    /// UP/DOWN 진입·이탈은 각각 <see cref="StructurePolicy.TrendStateHoldBars"/> 연속 봉을 요구하고 TRANSITION은 즉시다.
     /// </summary>
-    static TrendState State(double signedTrend, double priceDirection, double? structureDirection, double efficiency,
+    static TrendState State(ImmutableArray<StructureBar> bars, ImmutableArray<double?> atrSeries,
+        ImmutableArray<double?> ema9, ImmutableArray<double?> ema21, ImmutableArray<ConfirmedPivot> pivots,
         StructurePolicy policy)
     {
-        if (efficiency < policy.TrendEfficiencyThreshold) return TrendState.Range;
-        var opposed = structureDirection is { } structure &&
-                      Math.Sign(priceDirection) * Math.Sign(structure) < 0;
-        if (!opposed && signedTrend >= policy.TrendStateThreshold) return TrendState.Up;
-        if (!opposed && signedTrend <= -policy.TrendStateThreshold) return TrendState.Down;
-        return TrendState.Transition;
+        var hold = Math.Max(1, policy.TrendStateHoldBars);
+        var state = TrendState.Unknown;
+        int entryRun = 0, entryDirection = 0, exitRun = 0;
+
+        foreach (var sample in Samples(bars, atrSeries, ema9, ema21, pivots, policy))
+        {
+            if (!sample.Available)
+            {
+                state = TrendState.Unknown;
+                entryRun = entryDirection = exitRun = 0;
+                continue;
+            }
+
+            // 두 family 부호 충돌은 안전 신호이므로 지연하지 않는다(§7).
+            if (sample.Opposed)
+            {
+                state = TrendState.Transition;
+                entryRun = entryDirection = exitRun = 0;
+                continue;
+            }
+
+            if (state == TrendState.Unknown) state = TrendState.Range;
+            var magnitude = Math.Abs(sample.SignedTrend);
+
+            if (magnitude >= policy.TrendStateThreshold && sample.Efficiency >= policy.TrendEfficiencyThreshold)
+            {
+                var direction = Math.Sign(sample.SignedTrend);
+                entryRun = direction == entryDirection ? entryRun + 1 : 1;
+                entryDirection = direction;
+                exitRun = 0;
+                if (entryRun >= hold && direction != 0) state = direction > 0 ? TrendState.Up : TrendState.Down;
+                continue;
+            }
+
+            entryRun = entryDirection = 0;
+            if (sample.Efficiency < policy.TrendExitEfficiency || magnitude < policy.TrendExitSignedTrend)
+            {
+                exitRun++;
+                if (state is TrendState.Up or TrendState.Down && exitRun >= hold) state = TrendState.Range;
+            }
+            else exitRun = 0;
+        }
+
+        return state;
+    }
+
+    /// <summary>§7 봉별 (signedTrend, efficiency, 부호충돌). 피벗은 확정 시각으로 걸러 봉 시점의 구조만 본다(§7, #148).</summary>
+    static ImmutableArray<BarSample> Samples(ImmutableArray<StructureBar> bars, ImmutableArray<double?> atrSeries,
+        ImmutableArray<double?> ema9, ImmutableArray<double?> ema21, ImmutableArray<ConfirmedPivot> pivots,
+        StructurePolicy policy)
+    {
+        if (bars.Length == 0) return ImmutableArray<BarSample>.Empty;
+        var samples = ImmutableArray.CreateBuilder<BarSample>(bars.Length);
+        var consecutive = 0;
+        for (var i = 0; i < bars.Length; i++)
+        {
+            consecutive = i > 0 && bars[i].Start == bars[i - 1].End ? consecutive + 1 : 1;
+            var prefix = new BarPrefix(bars, i + 1);
+            var atr = atrSeries[i] is { } candidate && double.IsFinite(candidate) && candidate > 0
+                ? candidate : (double?)null;
+            var efficiency = SessionIndicators.Efficiency(prefix, policy.EfficiencyLookbackBars);
+            var price = PriceDirection(prefix, i, atr, ema9, ema21, policy).Direction;
+            if (consecutive < policy.Minimum1mBars || price is null || efficiency is null)
+            {
+                samples.Add(new BarSample(false, 0, 0, false));
+                continue;
+            }
+
+            var (structure, _, _) = StructureFamily(pivots, atr, bars[i].End, policy);
+            var signed = structure is { } value ? 100 * (price.Value + value) / 2 : 100 * price.Value;
+            var opposed = structure is { } opposing && Math.Sign(price.Value) * Math.Sign(opposing) < 0;
+            samples.Add(new BarSample(double.IsFinite(signed), signed, efficiency.Value, opposed));
+        }
+        return samples.MoveToImmutable();
+    }
+
+    /// <summary>§7 가격 family. 상관된 ema/slope/vwap 세 항목의 평균이며 하나라도 결측이면 방향은 null이다.</summary>
+    static PriceFamily PriceDirection(IReadOnlyList<StructureBar> bars, int index, double? atr,
+        ImmutableArray<double?> ema9, ImmutableArray<double?> ema21, StructurePolicy policy)
+    {
+        var (vwap, vwapSd) = SessionIndicators.Vwap(bars);
+        if (atr is not { } atrValue || bars.Count == 0)
+            return new PriceFamily(null, null, null, null, null, null, null, vwap, vwapSd);
+
+        double? emaRaw = null, emaValue = null, slopeRaw = null, slopeValue = null, vwapRaw = null, vwapValue = null;
+        if (ema9[index] is { } fast && ema21[index] is { } slow)
+        {
+            emaRaw = (fast - slow) / atrValue;
+            emaValue = Math.Tanh(emaRaw.Value);
+        }
+
+        var slopeIndex = index - policy.TrendSlopeLookbackBars;
+        if (slopeIndex >= 0 && ema21[index] is { } now && ema21[slopeIndex] is { } before)
+        {
+            slopeRaw = (now - before) / (policy.TrendSlopeLookbackBars * atrValue);
+            slopeValue = Math.Tanh(slopeRaw.Value);
+        }
+
+        if (vwap is { } vwapLevel)
+        {
+            var denominator = Math.Max(Math.Max(vwapSd ?? 0, atrValue), policy.IndicatorFloor);
+            vwapRaw = ((double)bars[index].Close - vwapLevel) / denominator;
+            vwapValue = Math.Tanh(vwapRaw.Value);
+        }
+
+        double? direction = null;
+        if (emaValue is { } e && slopeValue is { } s && vwapValue is { } v)
+        {
+            var mean = (e + s + v) / 3;
+            if (double.IsFinite(mean)) direction = mean;
+        }
+        return new PriceFamily(direction, emaRaw, emaValue, slopeRaw, slopeValue, vwapRaw, vwapValue, vwap, vwapSd);
+    }
+
+    /// <summary>가격 family의 원값과 변환값(§9.4 저장 규칙).</summary>
+    readonly record struct PriceFamily(double? Direction, double? EmaRaw, double? EmaValue, double? SlopeRaw,
+        double? SlopeValue, double? VwapRaw, double? VwapValue, double? Vwap, double? VwapSd);
+
+    /// <summary>봉 배열의 앞 <c>count</c>개를 복사 없이 보는 뷰. 봉별 재계산이 O(n²) 할당을 만들지 않게 한다.</summary>
+    sealed class BarPrefix(ImmutableArray<StructureBar> bars, int count) : IReadOnlyList<StructureBar>
+    {
+        public int Count => count;
+        public StructureBar this[int index] => index >= 0 && index < count
+            ? bars[index] : throw new ArgumentOutOfRangeException(nameof(index));
+        public IEnumerator<StructureBar> GetEnumerator()
+        {
+            for (var i = 0; i < count; i++) yield return bars[i];
+        }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     /// <summary>
     /// §7/§16B 구조 방향. 확정된 최근 2개 high pivot과 2개 low pivot이 모두 있을 때만 계산하고
-    /// delta는 최신 확정 값-직전 확정 값을 cutoff의 ATR로 나눈다.
+    /// delta는 최신 확정 값-직전 확정 값을 sqrt(StructureDirectionAtrScaleBars)·ATR로 나눈다(#148).
     /// </summary>
     static (double? Direction, double? DeltaHigh, double? DeltaLow) StructureFamily(
-        ImmutableArray<ConfirmedPivot> pivots, double? atr)
+        ImmutableArray<ConfirmedPivot> pivots, double? atr, DateTimeOffset asOf, StructurePolicy policy)
     {
         if (atr is null || !double.IsFinite(atr.Value) || atr.Value <= 0) return (null, null, null);
-        var highs = pivots.Where(x => x.Kind == PivotKind.High)
+        var scale = Math.Sqrt(Math.Max(1, policy.StructureDirectionAtrScaleBars)) * atr.Value;
+        if (!double.IsFinite(scale) || scale <= 0) return (null, null, null);
+        var highs = pivots.Where(x => x.Kind == PivotKind.High && x.ConfirmedAt <= asOf)
             .OrderBy(x => x.ConfirmedAt).ThenBy(x => x.OccurredAt).TakeLast(2).ToArray();
-        var lows = pivots.Where(x => x.Kind == PivotKind.Low)
+        var lows = pivots.Where(x => x.Kind == PivotKind.Low && x.ConfirmedAt <= asOf)
             .OrderBy(x => x.ConfirmedAt).ThenBy(x => x.OccurredAt).TakeLast(2).ToArray();
         if (highs.Length < 2 || lows.Length < 2) return (null, null, null);
-        var deltaHigh = (double)(highs[^1].Price - highs[0].Price) / atr.Value;
-        var deltaLow = (double)(lows[^1].Price - lows[0].Price) / atr.Value;
+        var deltaHigh = (double)(highs[^1].Price - highs[0].Price) / scale;
+        var deltaLow = (double)(lows[^1].Price - lows[0].Price) / scale;
         if (!double.IsFinite(deltaHigh) || !double.IsFinite(deltaLow)) return (null, null, null);
         var direction = (Math.Tanh(deltaHigh) + Math.Tanh(deltaLow)) / 2;
         return double.IsFinite(direction) ? (direction, deltaHigh, deltaLow) : (null, deltaHigh, deltaLow);
