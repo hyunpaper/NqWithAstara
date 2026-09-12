@@ -432,11 +432,13 @@ public sealed class StructureAnalysisService(
         var chosen = candidates.FirstOrDefault(x => x.EventId == preferredId);
         if (chosen is null || chosen.Disposition != CandidateDisposition.Ready || chosen.Plan is null) return null;
 
-        // #106: 청산이 발생한 poll의 틱으로는 새로 진입하지 않는다. 후보는 READY로 남고 다음 poll이 재시도한다.
+        // #106: 청산이 발생한 poll의 틱으로는 새로 진입하지 않는다. 후보는 READY로 남고 가드 키·쿨다운 표식은
+        // 소비하지 않는다(#107 — 같은 봉 재시도는 watermark로 막히고 다음 트리거 봉부터 가능하다).
         if (request.ExitedThisPoll)
             return Blocked(candidates, chosen, NoteEntrySuppressedBySamePollExit);
 
-        // #62 §12.5: 후보 판정 이후 흘러간 시간을 gate 안에서 다시 본다. 후보는 READY로 남고 다음 poll이 재시도한다.
+        // #62 §12.5: 후보 판정 이후 흘러간 시간을 gate 안에서 다시 본다. 후보는 READY로 남고 가드 키·쿨다운 표식은
+        // 소비하지 않는다(#107 — 같은 봉 재시도는 watermark로 막히고 다음 트리거 봉부터 가능하다).
         if (!Current(request, snapshot, now, newEntry: true))
             return Blocked(candidates, chosen,
                 $"{NoteEntryGateRecheck}:{NewEntryBlocker(snapshot, now) ?? "GENERATION_OR_SESSION"}");
