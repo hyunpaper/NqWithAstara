@@ -60,6 +60,7 @@ builder.Services.AddSingleton<IReplayBarStoreFactory, ReplayBarStoreFactory>();
 builder.Services.AddSingleton<IReplayWorkspace, ReplayWorkspace>();
 builder.Services.AddSingleton<IHistoricalBarSource, TossHistoricalBarSource>();
 builder.Services.AddSingleton<HistoricalReplayService>();
+builder.Services.AddHostedService<HistoricalReplayLifetime>();
 builder.Services.AddSingleton<BarStoreService>(); builder.Services.AddSingleton<BenchmarkPollingService>();
 builder.Services.AddSingleton<IBenchmarkBarSource>(x => x.GetRequiredService<BenchmarkPollingService>());
 // 이슈 #167: 컨플루언스 기법 신호·합산. 가중치는 전부 1.0(미검증)에서 시작하고 K4가 파일로 채운다.
@@ -93,3 +94,8 @@ app.MapAstraApi();
 if (Directory.Exists(clientDist)) app.MapFallback(async context => { context.Response.ContentType = "text/html; charset=utf-8"; await context.Response.SendFileAsync(Path.Combine(clientDist, "index.html")); });
 app.Run();
 public partial class Program { }
+sealed class HistoricalReplayLifetime(HistoricalReplayService service) : IHostedService
+{
+    public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task StopAsync(CancellationToken cancellationToken) => service.StopAsync(cancellationToken);
+}
