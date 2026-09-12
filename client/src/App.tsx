@@ -24,12 +24,15 @@ import {
 } from "lucide-react";
 import { useVisiblePolling } from "./useVisiblePolling";
 import LiquidityPanel from "./LiquidityPanel";
+import FeeWarningBadge from "./FeeWarningBadge";
 import StructurePanel from "./StructurePanel";
 // 이슈 #84: v5 코호트 섹션(SimStructurePanel)은 대시보드 렌더링에서 제거했다.
 // data.structure/서버 집계(SimulationCohorts.cs)는 유지되며, 아래 import와
 // <SimStructurePanel report={data.structure} /> 한 줄을 되돌리면 복원된다.
 import LiveStructureCells from "./LiveStructureCells";
+import RealVsV5Panel from "./RealVsV5Panel";
 import { planV5Notifications, v4PushEnabled } from "./alertPlanner";
+import { formatViewHash, parseViewHash } from "./viewRoute";
 import type {
   StructureEventRow,
   StructureSummary,
@@ -47,6 +50,17 @@ import {
 } from "./structureSort";
 import type { StructureCohortReport, TradeStructure } from "./dashboardTypes";
 import { tradeEntryTooltip } from "./dashboardTypes";
+import { blockTradeLabel, flowSourceLabel } from "./tradeTape";
+import { turnoverText } from "./metricsFormat";
+import NewsPanel from "./NewsPanel";
+import {
+  findSymbolScore,
+  normalizeNewsHealth,
+  normalizeSentimentResponse,
+  shouldRenderNewsUi,
+  type NewsSentimentResponse,
+} from "./newsTypes";
+import { scoreBadge } from "./newsFormat";
 
 type Bar = { time: string; close: number; ema?: number; vwap?: number };
 type Indicators = {
@@ -110,6 +124,11 @@ type State = {
    * FE는 seq seed + Notification tag로 소비만 한다. 구버전 서버에는 없다.
    */
   structureEvents?: StructureEventRow[] | null;
+  /**
+   * 이슈 #130: 실계좌 US 왕복 수수료와 StructurePolicy.RoundTripFeePercent 불일치·만료 임박 경고.
+   * 구버전 서버에는 없을 수 있으므로 optional로 둔다.
+   */
+  warnings?: string[] | null;
 };
 type SearchResult = { symbol: string; name: string };
 type DailyMetrics = {
@@ -218,6 +237,11 @@ type Metrics = {
   flow5m: TickFlow | null;
   flow10m: TickFlow | null;
   updatedAt: string;
+  /** 이슈 #133: 체결강도 원천("ws"|"rest"|"none")과 블록 체결 건수. 구버전 서버에는 없다. */
+  flowSource?: string | null;
+  blockTradeCount?: number | null;
+  /** 이슈 #132: 당일 누적 거래량 / 상장주식수(%). 메타가 없는 구버전 서버·종목에서는 없다. */
+  turnoverPercent?: number | null;
 };
 const api = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   const r = await fetch(url, init);
@@ -393,7 +417,9 @@ export default function App() {
       () => localStorage.getItem("astra-theme") || "dark",
     ),
     [state, setState] = useState<State | null>(null),
-    [selected, setSelected] = useState(""),
+    [selected, setSelected] = useState(
+      () => parseViewHash(window.location.hash).symbol ?? "",
+    ),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [query, setQuery] = useState(""),
@@ -408,11 +434,17 @@ export default function App() {
     ),
     [notice, setNotice] = useState(""),
     // v5 구조 분석은 실시간 시그널 화면과 섞지 않고 별도 뷰로 분리한다(설계 §13, §19-10).
-    [view, setView] = useState<"live" | "dash" | "structure">("live"),
+    // 이슈 #128: 새로고침 후에도 화면을 유지하기 위해 URL hash에서 초기값을 읽는다.
+    [view, setView] = useState<"live" | "dash" | "structure">(
+      () => parseViewHash(window.location.hash).view,
+    ),
     // 이슈 #26: 라이브 목록 정렬 선택(모드별 유효성은 resolveSortKey가 판정). localStorage에 저장.
     [liveSortChoice, setLiveSortChoice] = useState(
       () => localStorage.getItem("astra-live-sort") || "",
     ),
+    // 이슈 #152: 뉴스 감성. news.enabled(health)와 sentiment 응답 enabled가 모두 true일 때만 렌더한다.
+    [newsHealthEnabled, setNewsHealthEnabled] = useState<boolean | null>(null),
+    [newsSentiment, setNewsSentiment] = useState<NewsSentimentResponse | null>(null),
     [form, setForm] = useState({ entryPrice: "", quantity: "" });
   const seenSetups = useRef<Record<string, string>>({});
   const seenBreakouts = useRef<Record<string, string>>({});
@@ -458,11 +490,26 @@ export default function App() {
       loadingState.current = false;
     }
   };
+  // 이슈 #152: 실패는 조용히 무시하고 이전 값을 유지한다(설계 §4).
+  const loadNews = async () => {
+    try {
+      const health = await api<{ news?: unknown }>("/api/health");
+      setNewsHealthEnabled(normalizeNewsHealth(health.news)?.enabled ?? false);
+    } catch {
+      /* 이전 값 유지 */
+    }
+    try {
+      setNewsSentiment(normalizeSentimentResponse(await api("/api/news/sentiment")));
+    } catch {
+      /* 이전 값 유지 */
+    }
+  };
   useEffect(() => {
     let active = true;
     let id: ReturnType<typeof setTimeout>;
     const poll = async () => {
       await load(true);
+      await loadNews();
       if (active) id = setTimeout(poll, 3000);
     };
     void poll();
@@ -481,6 +528,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("astra-alerts", alertsOn ? "on" : "off");
   }, [alertsOn]);
+  useEffect(() => {
+    const symbol = view === "structure" ? selected : undefined;
+    history.replaceState(null, "", formatViewHash(view, symbol));
+  }, [view, selected]);
   useEffect(() => {
     const restarting = previousRunning.current === false && state?.running === true;
     const suppress = !alertsSeeded.current || suppressAlertSnapshot.current || restarting;
@@ -691,6 +742,9 @@ export default function App() {
   };
   const signal = state?.signals.find((x) => x.symbol === selected);
   const selectedWatch = state?.watchlist.find((x) => x.symbol === selected);
+  // 이슈 #152: news.enabled(health) 또는 sentiment.enabled가 false면 뉴스 UI를 아무것도 그리지 않는다.
+  const newsUiEnabled = shouldRenderNewsUi(newsHealthEnabled, newsSentiment?.enabled);
+  const marketNewsBadge = newsUiEnabled ? scoreBadge(newsSentiment?.market?.score) : null;
   // ── 이슈 #26/#88: 모드별 정렬 ──
   // active/shadow = v5 계열 정렬(v5 상태/추세 강도/추세 방향/진입 품질/종목명) 중 선택.
   // off·summary 부재는 v5 분석이 없으므로 선택지 없이 종목 알파벳순으로 고정한다.
@@ -787,6 +841,10 @@ export default function App() {
         <div className="watch-list">
           {state?.watchlist.map((w) => {
             const s = state.signals.find((v) => v.symbol === w.symbol);
+            const newsScore = newsUiEnabled
+              ? findSymbolScore(newsSentiment?.symbols ?? [], w.symbol)
+              : null;
+            const newsBadge = scoreBadge(newsScore?.score);
             return (
               <div
                 className={`watch-row ${selected === w.symbol ? "active" : ""}`}
@@ -800,6 +858,18 @@ export default function App() {
                     <b>{w.symbol}</b>
                     <small>{w.name}</small>
                   </div>
+                  {newsBadge && (
+                    <span
+                      className={newsBadge.className}
+                      title={
+                        newsScore?.latestAt
+                          ? `최근 기사 ${new Date(newsScore.latestAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })} KST`
+                          : "뉴스 감성"
+                      }
+                    >
+                      {newsBadge.label}
+                    </span>
+                  )}
                   {s && (
                     <span
                       className={(s.changePercent ?? 0) >= 0 ? "up" : "down"}
@@ -875,6 +945,12 @@ export default function App() {
             </div>
           </div>
           <div className="header-actions">
+            {marketNewsBadge && (
+              <span className={marketNewsBadge.className} title="시장 분위기 · 뉴스 감성 점수">
+                시장 분위기 {marketNewsBadge.label}
+              </span>
+            )}
+            <FeeWarningBadge warnings={state?.warnings} />
             <div className={`market ${state?.market.isOpen ? "open" : ""}`}>
               <span />
               {state?.market.label || "시장 상태 확인 중"}
@@ -1311,6 +1387,7 @@ export default function App() {
           />
         )}
         {selected && <LiquidityPanel key={selected} symbol={selected} />}
+        {selected && newsUiEnabled && <NewsPanel key={selected} symbol={selected} />}
         </div>
         <footer>
           본 화면의 시그널은 기술적 조건 충족 점수이며 수익 확률이나 투자 권유가
@@ -1342,9 +1419,23 @@ const simStatusLabel = (s: string) =>
           : s === "EOD"
             ? "장마감 청산"
             : s;
+/** 이슈 #131: 대시보드 탭 전환. 시뮬 성과와 실매매 대조는 표본이 다르므로 한 화면에 섞지 않는다. */
+function DashTabs({ tab, onChange }: { tab: "sim" | "real"; onChange: (next: "sim" | "real") => void }) {
+  return (
+    <div className="cohort-picker">
+      <button className={`theme ${tab === "sim" ? "alert-toggle on" : ""}`} onClick={() => onChange("sim")}>
+        시뮬 성과
+      </button>
+      <button className={`theme ${tab === "real" ? "alert-toggle on" : ""}`} onClick={() => onChange("real")}>
+        실매매 대조
+      </button>
+    </div>
+  );
+}
 function Dashboard() {
   const [data, setData] = useState<SimData | null>(null);
   const [version, setVersion] = useState("all");
+  const [tab, setTab] = useState<"sim" | "real">("sim");
   const [loadError, setLoadError] = useState("");
   useVisiblePolling(async () => {
     try {
@@ -1363,6 +1454,13 @@ function Dashboard() {
           minute: "2-digit",
         })
       : "—";
+  if (tab === "real")
+    return (
+      <div className="dash">
+        <DashTabs tab={tab} onChange={setTab} />
+        <RealVsV5Panel />
+      </div>
+    );
   if (!data) return loadError ? <div className="error"><WifiOff size={16} /><span>{loadError} 10초 후 다시 시도합니다.</span></div> : <Loading />;
   const cohort = data.byVersion?.find((x) => x.version === version);
   const s = cohort?.stats ?? data.summary;
@@ -1371,6 +1469,7 @@ function Dashboard() {
   const trades = version === "all" ? data.trades : data.trades.filter((t) => (t.logic?.trim() || "legacy") === version);
   return (
     <div className="dash">
+      <DashTabs tab={tab} onChange={setTab} />
       <section className="panel metrics-panel">
         <div className="panel-head">
           <div>
@@ -1733,8 +1832,18 @@ function MetricsCard({
                     ? "up"
                     : "down"
               }
-              help={`최근 ${f?.windowMinutes ?? 5}분 수집 표본의 매수÷매도 추정량`}
+              help={`최근 ${f?.windowMinutes ?? 5}분 수집 표본의 매수÷매도 추정량 · 원천 ${flowSourceLabel(metrics?.flowSource)}`}
               history={past(optInt(f5?.strength), optInt(f10?.strength))}
+            />
+            <MetricTile
+              label="체결강도 원천"
+              value={flowSourceLabel(metrics?.flowSource)}
+              help="실시간 틱이 60초 이상 끊기면 체결 내역(REST)으로 보정한다"
+            />
+            <MetricTile
+              label="블록 체결"
+              value={blockTradeLabel(metrics?.blockTradeCount)}
+              help="최근 50건 중 수량이 중앙값의 10배를 넘는 체결 · 매수/매도 구분 없음(미검증 상수)"
             />
             <MetricTile
               label="매수 체결 비중"
@@ -1807,10 +1916,18 @@ function MetricsCard({
                 d ? `세션 ${d.sessionElapsedPercent.toFixed(0)}% 경과` : undefined
               }
             />
+            <MetricTile
+              label="회전율"
+              value={turnoverText(metrics?.turnoverPercent)}
+              help="당일 누적 거래량 / 상장주식수"
+            />
           </div>
           <p className="metrics-note">
-            체결강도·매수 비중은 수집된 웹소켓 틱 표본을 업틱/다운틱으로 분류한
-            값입니다(체결강도 100% 초과 = 매수 우위). 공매도 잔량 · 기관/외인
+            체결강도·매수 비중은 수집된 체결 표본을 업틱/다운틱으로 분류한
+            값입니다(체결강도 100% 초과 = 매수 우위). 웹소켓 틱이 60초 이상
+            끊기면 체결 내역(REST)으로 보정하며 원천을 함께 표시합니다. 블록
+            체결은 수량만 보는 추정치라 매수/매도 방향을 알 수 없습니다.
+            공매도 잔량 · 기관/외인
             수급 · 풋콜 비율 · 감마 데이터는 Toss Open API가 제공하지 않아
             표시하지 않습니다.
           </p>

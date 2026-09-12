@@ -34,7 +34,20 @@ public static class SimulationCohorts
     public const string MissingLiquidityKey = "MISSING_LIQUIDITY_COST";
     public const string CostOkKey = "COST_OK";
 
+    /// <summary>#111 재진입 태그 자체가 없는 거래(태그 도입 이전 데이터). 첫 진입으로 바꾸지 않는다.</summary>
+    public const string ReentryUntaggedKey = "REENTRY_UNTAGGED";
+    public const string FirstEntryKey = "FIRST_ENTRY";
+    public const string ReentryBarsUncollectedKey = "REENTRY_BARS_UNCOLLECTED";
+    public const string SameTargetZoneKey = "SAME_TARGET_ZONE";
+    public const string OtherTargetZoneKey = "OTHER_TARGET_ZONE";
+    public const string TargetZoneUncollectedKey = "TARGET_ZONE_UNCOLLECTED";
+
     const string ContextMissingLabel = "동결 컨텍스트 누락 (미수집)";
+
+    static readonly HashSet<string> UncollectedKeys = new(StringComparer.Ordinal)
+    {
+        QualityUncollectedKey, ReentryUntaggedKey, ReentryBarsUncollectedKey, TargetZoneUncollectedKey
+    };
 
     public static StructureCohortReport Build(IReadOnlyList<SimTrade> trades)
     {
@@ -53,7 +66,11 @@ public static class SimulationCohorts
                 key => key == MissingLiquidityKey ? "비용 결측 — 호가 없음 · 스프레드 0 가정" : "비용 산정 정상"),
             Group(v5, "entryQuality", "진입 품질 구간 (EntryQuality)", QualityBand, QualityLabel, QualityOrder),
             Group(v5, "trend", "진입 시점 추세", t => t.Structure!.TrendAtEntry, TrendLabel, TrendOrder),
-            Group(v5, "setup", "셋업 종류", t => t.Structure!.PlanSnapshot.Kind, SetupLabel)
+            Group(v5, "setup", "셋업 종류", t => t.Structure!.PlanSnapshot.Kind, SetupLabel),
+            Group(v5, "reentry", "재진입 간격 (직전 청산 봉 이후 완료 봉)", ReentryBand, ReentryLabel, ReentryOrder),
+            Group(v5, "reentryTargetZone", "직전 거래와 목표 구간 일치", TargetZoneBand, TargetZoneLabel,
+                TargetZoneOrder),
+            Group(v5, "reentryPrevExit", "직전 거래 청산 사유", PrevExitBand, PrevExitLabel, PrevExitOrder)
         };
         return new StructureCohortReport(Stats(v5), v5.Count(t => t.Structure is null), groups);
     }
@@ -96,6 +113,78 @@ public static class SimulationCohorts
         "UP" => 0, "TRANSITION" => 1, "RANGE" => 2, "DOWN" => 3, "UNKNOWN" => 4, _ => 5
     };
 
+    /// <summary>
+    /// #111 재진입 간격 구간. 임계값 탐색이 아니라 관측 분리이므로 좁은 구간부터 고정 경계로 나눈다.
+    /// 태그 없음(도입 이전)과 봉 수 미수집은 첫 진입과 다른 코호트로 남긴다.
+    /// </summary>
+    static string ReentryBand(SimTrade trade) => trade.Structure!.Reentry switch
+    {
+        null => ReentryUntaggedKey,
+        { PrevExitStatus: null } => FirstEntryKey,
+        { SameSymbolWithinBars: null } => ReentryBarsUncollectedKey,
+        { SameSymbolWithinBars: <= 2 } => "R0_2",
+        { SameSymbolWithinBars: <= 5 } => "R3_5",
+        _ => "R6_PLUS"
+    };
+
+    static string ReentryLabel(string key) => key switch
+    {
+        FirstEntryKey => "첫 진입 (직전 거래 없음)",
+        "R0_2" => "0 ~ 2봉 이내 재진입",
+        "R3_5" => "3 ~ 5봉 재진입",
+        "R6_PLUS" => "6봉 이상 재진입",
+        ReentryBarsUncollectedKey => "재진입이지만 봉 수 미수집",
+        _ => "재진입 태그 미수집"
+    };
+
+    static int ReentryOrder(string key) => key switch
+    {
+        FirstEntryKey => 0, "R0_2" => 1, "R3_5" => 2, "R6_PLUS" => 3, ReentryBarsUncollectedKey => 4, _ => 5
+    };
+
+    static string TargetZoneBand(SimTrade trade) => trade.Structure!.Reentry switch
+    {
+        null => ReentryUntaggedKey,
+        { PrevExitStatus: null } => FirstEntryKey,
+        { SameTargetZone: null } => TargetZoneUncollectedKey,
+        { SameTargetZone: true } => SameTargetZoneKey,
+        _ => OtherTargetZoneKey
+    };
+
+    static string TargetZoneLabel(string key) => key switch
+    {
+        FirstEntryKey => "첫 진입 (직전 거래 없음)",
+        SameTargetZoneKey => "직전 거래와 같은 목표 구간 (lineage 포함)",
+        OtherTargetZoneKey => "다른 목표 구간",
+        TargetZoneUncollectedKey => "직전 거래에 동결 계획 없음 (미수집)",
+        _ => "재진입 태그 미수집"
+    };
+
+    static int TargetZoneOrder(string key) => key switch
+    {
+        FirstEntryKey => 0, SameTargetZoneKey => 1, OtherTargetZoneKey => 2, TargetZoneUncollectedKey => 3, _ => 4
+    };
+
+    static string PrevExitBand(SimTrade trade) => trade.Structure!.Reentry switch
+    {
+        null => ReentryUntaggedKey,
+        { PrevExitStatus: null } => FirstEntryKey,
+        { PrevExitStatus: { } status } => "PREV_" + status.ToUpperInvariant()
+    };
+
+    static string PrevExitLabel(string key) => key switch
+    {
+        FirstEntryKey => "첫 진입 (직전 거래 없음)",
+        ReentryUntaggedKey => "재진입 태그 미수집",
+        "PREV_STOP" => "직전 손절 (STOP)",
+        "PREV_TARGET" => "직전 목표 도달 (TARGET)",
+        "PREV_EOD" => "직전 장 마감 청산 (EOD)",
+        "PREV_CUT" => "직전 강제 청산 (CUT)",
+        _ => key
+    };
+
+    static int PrevExitOrder(string key) => key == FirstEntryKey ? 0 : 1;
+
     static string SetupLabel(string key) => key switch
     {
         "PULLBACK" => "눌림목 (PULLBACK)", "BREAKOUT" => "돌파 (BREAKOUT)", "REBOUND" => "과매도 반등 (REBOUND)",
@@ -113,7 +202,7 @@ public static class SimulationCohorts
             .GroupBy(t => t.Structure is null ? ContextMissingKey : keyOf(t), StringComparer.Ordinal)
             .Select(g => new SimulationCohort(g.Key,
                 g.Key == ContextMissingKey ? ContextMissingLabel : labelOf(g.Key),
-                Collected: g.Key != ContextMissingKey && g.Key != QualityUncollectedKey,
+                Collected: g.Key != ContextMissingKey && !UncollectedKeys.Contains(g.Key),
                 Stats(g.ToArray())))
             .OrderBy(c => c.Key == ContextMissingKey ? 1 : 0)
             .ThenBy(c => orderOf?.Invoke(c.Key) ?? 0)

@@ -1,3 +1,5 @@
+using System.Collections;
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Reflection;
 using System.Text;
@@ -39,6 +41,13 @@ public sealed record StructurePolicy
     /// 재무장 단위와 같은 세션 내 구조 관찰 단위이며, 성과를 통해 탐색한 값이 아니다.
     /// </summary>
     public int TriggerEpisodeMaxAgeMinutes { get; init; } = 30;
+
+    /// <summary>
+    /// §10 손절 후 재진입 제한. 같은 심볼의 최신 STOP 청산이 일어난 완료 봉을 0번째로 세어, 이후 완료 봉이
+    /// 이 개수만큼 쌓이기 전에는 다시 진입하지 않는다. 보수적 운영 정책 상수이며 구조에서 도출하거나
+    /// 성과로 검증한 값이 아니다.
+    /// </summary>
+    public int StopReentryCooldownBars { get; init; } = 3;
     public long ObservationDailyByteLimit { get; init; } = 20L * 1024 * 1024;
 
     /// <summary>
@@ -51,7 +60,16 @@ public sealed record StructurePolicy
     // ── 가격 단위 (§16A 표, §16B 비용·가격 단위) ──
     public decimal PriceTick { get; init; } = .01m;
     public decimal MinimumSupportedPrice { get; init; } = 1.00m;
+    public int PriceTickUnknownWarningPolls { get; init; } = 3;
     public double RoundTripFeePercent { get; init; } = .2;
+
+    /// <summary>
+    /// §16A 종목 유형: v5 신규 진입을 허용하는 securityType 집합(#132). 레버리지 ETF·비보통주의 tick·변동성
+    /// 구조가 개별주 구조 문법(§5~§8)과 다르다는 판단이며 성과로 검증한 값이 아니다.
+    /// </summary>
+    public ImmutableArray<string> AllowedSecurityTypes { get; init; } = DefaultAllowedSecurityTypes;
+
+    static readonly ImmutableArray<string> DefaultAllowedSecurityTypes = ["STOCK", "DEPOSITARY_RECEIPT"];
 
     // ── 봉 집계 (§5.2) ──
     public int AggregationMinutes { get; init; } = 5;
@@ -94,6 +112,18 @@ public sealed record StructurePolicy
     public int RelativeVolumeLookbackBars { get; init; } = 20;
     public double TrendStateThreshold { get; init; } = 25;
     public double TrendEfficiencyThreshold { get; init; } = .25;
+
+    /// <summary>§7 UP/DOWN 진입·이탈에 요구하는 연속 완료 봉 수. TRANSITION은 여기서 제외된다(§7, #148).</summary>
+    public int TrendStateHoldBars { get; init; } = 2;
+
+    /// <summary>§7 UP/DOWN 이탈용 efficiency 임계값. 진입용 <see cref="TrendEfficiencyThreshold"/>보다 낮다(§7, #148).</summary>
+    public double TrendExitEfficiency { get; init; } = .20;
+
+    /// <summary>§7 UP/DOWN 이탈용 |signedTrend| 임계값. 진입용 <see cref="TrendStateThreshold"/>보다 낮다(§7, #148).</summary>
+    public double TrendExitSignedTrend { get; init; } = 20;
+
+    /// <summary>§7 structureDirection 분모의 봉 수. 분모는 sqrt(이 값)·ATR1m이다(§7, #148).</summary>
+    public int StructureDirectionAtrScaleBars { get; init; } = 5;
 
     // ── 일봉 컨텍스트 (§6.1, §16B) ──
     public int DailyLookbackSessions { get; init; } = 20;
@@ -181,6 +211,7 @@ public sealed record StructurePolicy
         int i => i.ToString(CultureInfo.InvariantCulture),
         long l => l.ToString(CultureInfo.InvariantCulture),
         decimal m => StructureMath.Price(m),
+        IEnumerable items => "[" + string.Join(',', items.Cast<object?>().Select(Canonical)) + "]",
         double d => double.IsFinite(d)
             ? d.ToString("R", CultureInfo.InvariantCulture)
             : throw new InvalidOperationException("Policy numbers must be finite; NaN/Infinity is never serialized."),

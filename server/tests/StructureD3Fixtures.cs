@@ -202,6 +202,15 @@ sealed class ScriptedGateway(MarketSession session, Func<Candle[]> bars, Func<(d
     { DailyCalls++; return Task.FromResult<IReadOnlyList<Candle>>(daily?.Invoke() ?? []); }
     public Task<IReadOnlyList<WatchItem>> Stocks(string symbols, CancellationToken ct) => Task.FromResult<IReadOnlyList<WatchItem>>([]);
     public Task<string> GetAccessTokenAsync(CancellationToken ct) => Task.FromResult("token");
+    public Task<IReadOnlyList<TossTrade>> Trades(string symbol, int count, CancellationToken ct) => Task.FromResult<IReadOnlyList<TossTrade>>([]);
+    public Func<string, StockInfo[]>? StockInfoSource { get; set; }
+    public List<string> StockInfoRequests { get; } = [];
+    public Task<IReadOnlyList<StockInfo>> StockInfos(string symbols, CancellationToken ct)
+    { StockInfoRequests.Add(symbols); return Task.FromResult<IReadOnlyList<StockInfo>>(StockInfoSource?.Invoke(symbols) ?? []); }
+    public Task<IReadOnlyList<TossAccount>> Accounts(CancellationToken ct) => Task.FromResult<IReadOnlyList<TossAccount>>([]);
+    public Task<IReadOnlyList<TossCommission>> Commissions(int accountSeq, CancellationToken ct) => Task.FromResult<IReadOnlyList<TossCommission>>([]);
+    public Task<TossOrderPage> ClosedOrders(int accountSeq, DateOnly? from, DateOnly? to, string? cursor, int limit, CancellationToken ct) => Task.FromResult(new TossOrderPage([], null, false));
+    public Task<IReadOnlyList<TossHolding>> Holdings(int accountSeq, CancellationToken ct) => Task.FromResult<IReadOnlyList<TossHolding>>([]);
 }
 
 sealed class QuietStream : IRealtimeMarketStream

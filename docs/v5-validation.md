@@ -40,6 +40,50 @@ Domain은 시계·저장소·HTTP에 의존하지 않는다. 평가 기준 시�
 `expiresAt`, `rejectionCodes`, `notes`, `plan.{missingLiquidity, validSpread, eligibilityCostModelVersion,
 realizedFillCostModelVersion, netR}`.
 
+#### `trend.components` (#146)
+
+`detail = "full"` 레코드에서만 `trend.components`가 실린다. `TrendEvaluator`가 이미 계산한 원값(raw)·변환값
+(value, tanh 등)을 그대로 노출하며 관측 크기를 줄이려고 `summary`·전이(`transition`) 레코드에서는 생략한다(§16,
+이슈 #44 캡 영향 없음).
+
+| 필드 | 의미 | 결측 |
+|---|---|---|
+| `emaDirection.{raw, value}` | (ema9-ema21)/atr1m, tanh 변환값 | atr1m 또는 ema 결측이면 둘 다 null |
+| `slopeDirection.{raw, value}` | ema21 lookback 기울기/atr1m, tanh 변환값 | 위와 동일 |
+| `vwapDirection.{raw, value}` | (종가-vwap)/max(vwapSd, atr1m, floor), tanh 변환값 | vwap 결측이면 둘 다 null |
+| `structureDirection.{raw, value}` | 확정 5분 피벗 delta의 tanh 평균 (raw는 항상 null, deltaHigh/deltaLow가 원값을 보존) | **5분 구조 자체가 결측이면(`trend.structureEvidenceMissing`) 필드 전체가 null** |
+| `efficiency.{raw, value}` | §16B 효율성(raw=value, 변환 없음) | 봉 부족이면 null |
+
+### 2.1.1 재진입 코호트 태그 (#111)
+
+`SimTrade.Structure.reentry`는 **진입 시점에 직전 거래를 아는 계층**(`StructuralSimulation.Enter`)이 채우는
+관측용 태그다. 진입·청산 판정에 쓰이지 않으며, 이 태그를 근거로 정책을 바꾸지 않는다 —
+B-1(동일 targetZoneId 세션 내 소비)·#47 쿨다운 키 kind 제거 판단의 **입력 데이터**일 뿐이다.
+
+| 필드 | 형 | 의미 |
+|---|---|---|
+| `reentry.sameSymbolWithinBars` | `int?` | 같은 심볼 직전 거래의 **청산 봉을 0번째**로 세어 이번 진입 트리거 봉까지 닫힌 완료 봉 수. #117 손절 쿨다운과 같은 규칙(`BarCounting.CompletedBarsSince`)이다 |
+| `reentry.prevExitStatus` | `string?` | 직전 거래의 청산 사유(STOP / TARGET / EOD / CUT …) |
+| `reentry.sameTargetZone` | `bool?` | 직전 거래와 `PlanSnapshot.TargetZoneId`가 같은 lineage인지. 진입 계획의 zone `Aliases`(병합으로 흡수된 ID)까지 포함해 비교하고, 직전 거래에 동결 계획이 없으면 `null` |
+| `reentry.prevEntryQuality` | `double?` | 직전 진입의 `EntryQualityAtEntry` |
+| `reentry.prevTrend` | `string?` | 직전 진입의 `TrendAtEntry` |
+
+결측 규칙(§3.2)을 그대로 따른다.
+
+- `reentry` 객체 자체가 없으면 **태그 도입 이전 데이터**(미수집)다. "첫 진입"으로 바꾸지 않는다.
+- **첫 진입**은 `reentry` 객체가 있고 다섯 값이 모두 `null`이다.
+- 완료 봉 근거가 없거나 직전 청산이 이전 세션이면 `sameSymbolWithinBars`만 `null`이고 나머지 태그는 남는다.
+
+`/api/sim`의 `structure.groups`는 이 태그를 세 차원으로 분리한다.
+
+| 차원 | 집단 |
+|---|---|
+| `reentry` | `FIRST_ENTRY` · `R0_2` · `R3_5` · `R6_PLUS` · `REENTRY_BARS_UNCOLLECTED` · `REENTRY_UNTAGGED` |
+| `reentryTargetZone` | `FIRST_ENTRY` · `SAME_TARGET_ZONE` · `OTHER_TARGET_ZONE` · `TARGET_ZONE_UNCOLLECTED` · `REENTRY_UNTAGGED` |
+| `reentryPrevExit` | `FIRST_ENTRY` · `PREV_STOP` · `PREV_TARGET` · `PREV_EOD` · `PREV_CUT` · … · `REENTRY_UNTAGGED` |
+
+미수집 집단은 `collected=false`로 나가며 0건 성과로 읽지 않는다.
+
 ### 2.2 연결 키
 
 ```
@@ -83,11 +127,16 @@ realizedFillCostModelVersion, netR}`.
 | `missingLiquidity = true` | 호가가 없어 **spread=0으로 가정**하고 자격을 평가했다(현 운영 정책, 이 이슈에서 바꾸지 않는다) |
 | `trend.state` 없음 | 추세 미수집. 추세 코호트에서 별도 집단으로 분리된다 |
 | `detail = "summary"` | Zone 배열·품질 상세가 없다(§16). 근거 재현 범위가 좁다 |
+| `WidthFromTickOnly` | 1.0.2609.1201부터 가격선 반폭 생성 시 ATR이 없어서 tick 하한만 쓴 경우를 뜻한다. 일봉 context level은 세션 최초 사용 가능 ATR이 생기면 그 ATR 폭으로 재계산되며 이 플래그를 붙이지 않는다 |
 
 호가는 **결측 / 관측된 0 스프레드 / 관측된 양수 스프레드** 세 집단으로 나눈다. 결측과 "실제로 0"을 합치면
 비용 가정의 효과가 보이지 않는다.
 
-### 3.3 시간 규율
+### 3.3 §6.3 C-2 daily 폭 예외
+
+C-2. 일봉 context level은 세션 시작 전 이미 알려진 원천이지만, 장 초반에는 1분 ATR14가 아직 없다. ATR이 없을 때는 tick 하한 반폭과 `WidthFromTickOnly`로 노출하고, 세션 최초 사용 가능 ATR이 생긴 뒤에는 `0.15·ATR_first` 반폭으로 확장해 `WidthFromTickOnly`를 제거한다. 병합 간격과 `maxWidth`는 여전히 cutoff ATR 기준이며, 확장된 daily zone과 인접 pivot zone의 합산 폭이 `maxWidth`를 넘으면 병합하지 않는다.
+
+### 3.4 시간 규율
 
 - `observedAt` 또는 `analysisAsOf`가 `AsOf`보다 뒤인 관측은 **입력에서 제외**한다.
 - `enteredAt`이 `AsOf`보다 뒤인 거래는 **연결하지 않는다**(그 시점에는 진입하지 않은 것이다).
@@ -96,7 +145,7 @@ realizedFillCostModelVersion, netR}`.
 - 학습/검증 분리는 **New York 거래일 단위 anchored walk-forward**다. 한 세션이 두 구간에 동시에 들어가지 않고,
   검증 구간의 모든 거래일은 학습 구간보다 뒤다. 세션이 `folds+1`개 미만이면 fold를 만들지 않고 검증 불가로 보고한다.
 
-### 3.4 보존 한계 (표본이 좋아 보여도 사라지지 않는다)
+### 3.5 보존 한계 (표본이 좋아 보여도 사라지지 않는다)
 
 | 한계 코드 | 내용 |
 |---|---|
@@ -136,6 +185,19 @@ realizedFillCostModelVersion, netR}`.
 - **관측 승률(%)**: 분모는 실현 손익이 유효한 청산 건이다. 표본이 없으면 `null`이며 0%가 아니다.
 - **계획 netR 평균**: 동결 계획의 계획값이다. 실현 손익과 **절대 합산하지 않는다**.
 - **상위 거절 사유**: 선택 편향을 눈으로 볼 수 있게 분포로 남긴다.
+
+### 4.2.1 진입 차단 사유 (#111)
+
+`evaluation.entryBlocks`는 READY 후보가 진입으로 이어지지 않은 사유를 **코드별로 따로** 센다.
+두 코드는 성격이 달라 한 숫자로 합치지 않는다.
+
+| 코드 | 뜻 |
+|---|---|
+| `V5_ENTRY_SUPPRESSED_BY_SAME_POLL_EXIT` | #106 — 같은 poll에 청산이 있어 이번 poll의 진입만 건너뛴 건. 쿨다운이 아니라 **1 poll 지연**이다 |
+| `V5_ENTRY_BLOCKED_BY_STOP_COOLDOWN` | #117 — 직전 손절 이후 완료 봉이 정책 개수만큼 쌓이지 않아 **차단**된 건 |
+
+`events`는 이벤트 기준(같은 이벤트의 반복 poll은 한 건), `symbols`는 그 이벤트가 걸친 종목 수다.
+근거는 후보의 `rejectionCodes`(#107)이며 0건도 그대로 보고한다.
 
 ### 4.3 표본 충분성 — "검증 불가"를 통과로 위장하지 않는다
 
@@ -224,6 +286,60 @@ node .github/scripts/repository-policy.mjs
 반올림(소수 4자리), walk-forward 분할(정렬된 거래일의 연속 블록)이 모두 고정되어 있다.
 회귀 테스트는 `server/tests/ValidationLinkerTests.cs`, `ValidationEvaluationTests.cs`, `ValidationServiceTests.cs`에 있고
 fixture는 전부 코드로 생성한다(**운영 실데이터는 커밋하지 않는다**).
+
+---
+
+## 5A. 실매매 대조 (#131)
+
+사용자의 실계좌 체결은 v5 밖에서 만들어진 **외부 기준**이다. 엔진 성과의 증거가 아니라
+"엔진이 내 매매와 어디서 갈렸는가"를 재는 축으로만 쓴다.
+
+### 5A.1 수집 — 읽기 전용
+
+`GET /orders?status=CLOSED`만 호출한다. **주문 생성·정정·취소 API는 어떤 경로에서도 호출하지 않는다.**
+세션 종료(종료 시각 경과) 후 그 거래일에 대해 자동 1회, 그리고
+`POST /api/validation/real-fills/refresh?date=YYYY-MM-DD`로 수동 수집한다.
+커서로 전량 순회하며(페이지 100건, ORDER_HISTORY 5/s를 넘지 않도록 페이지 간 간격),
+`status=FILLED`이고 체결 정보가 있는 주문만 남긴다. 실패는 진단 로그로만 남고 진입·청산을 막지 않는다.
+
+### 5A.2 저장 계약 — `App_Data/real-fills/YYYY-MM-DD.json`
+
+| 필드 | 의미 |
+|---|---|
+| `recordVersion` | `real-fills.1` |
+| `tradingDate` | New York 거래일 |
+| `collectedAt` | 수집 시각 |
+| `fills[].symbol` | 종목 |
+| `fills[].side` | `BUY` / `SELL` |
+| `fills[].filledAt` | 체결 시각 |
+| `fills[].averageFilledPrice` | 평균 체결가 |
+| `fills[].filledQuantity` | 체결 수량 |
+| `fills[].commission` | 수수료 |
+| `fills[].orderType` | 주문 유형 |
+
+**저장하지 않는 것**: 계좌번호(`accountSeq`)·주문 식별자(`orderId`)·체결 금액 합계(`filledAmount`)·잔고.
+게이트웨이가 이 필드를 채워 와도 저장 단계에서 떨어진다(`RealFillsServiceTests`가 고정한다).
+`App_Data/`는 gitignore 대상이라 실데이터는 저장소에 들어가지 않는다.
+
+### 5A.3 대조 규칙 (`RealFillComparer`, Domain 순수 함수)
+
+- **창**: 같은 심볼, 체결 시각 ±5분. 경계는 **양끝 포함**이다.
+- **MATCHED**: 실매수 창 안에 v5 `READY` 또는 `ENTERED` 후보가 있었다. 대표 후보는 `ENTERED` → `READY` 순,
+  같은 상태면 시각이 가까운 것, 그래도 같으면 `eventId` ordinal 최소.
+- **USER_ONLY**: 실매수 창 안에 후보가 없거나 `REJECTED`뿐이다. 대표가 `REJECTED`면 그 거절 코드를 함께 남긴다.
+- **ENGINE_ONLY**: v5 `ENTERED` 이벤트인데 같은 창에 실매수가 없다. 같은 `eventId`의 반복 관측은 첫 관측 한 건으로 접힌다.
+- **가격 괴리**: `(체결가 − entryReference) / atr1m`. ATR이 없거나 0 이하면 **null**이며 0으로 바꾸지 않는다.
+- **실매도**: 그 시점 열려 있던 v5 거래(`enteredAt ≤ 체결시각 ≤ exitAt`, 열린 거래는 `exitAt` 없음)의
+  `ABOVE_TARGET` / `BETWEEN` / `BELOW_STOP` 위치만 본다. 열린 거래가 없으면 null이다.
+- 매칭률의 분모는 **실매수 건수**다. 실매도는 분모에 들어가지 않으며, 실매수가 0건이면 매칭률은 null이다(0%가 아니다).
+
+### 5A.4 조회 — `GET /api/validation/real-vs-v5?date=YYYY-MM-DD`
+
+조회는 Toss를 호출하지 않는다. 저장된 실체결 파일·그날 관측 jsonl(#28과 같은 리더)·`simtrades.json`만 읽는다.
+응답은 `tradingDate`, `fillsCollected`, `collectedAt`, `observationLines`, `observationFileFound`,
+`report`(매칭률·세 분류 건수·괴리 중앙값/사분위·`topUserOnlyRejections` 상위 5개·`rows`), `limitations`다.
+`limitations`의 `REAL_FILLS_NOT_COLLECTED`(실체결 미수집)·`REAL_FILLS_NO_OBSERVATIONS`(그날 관측 파일 없음)는
+"대조 불가"를 뜻하며 0건 성과로 읽지 않는다.
 
 ---
 

@@ -2,10 +2,16 @@ using System.Collections.Concurrent;
 
 namespace Astra.Server.Application;
 
-public sealed record MetricsResponse(string Symbol, bool MarketOpen, bool Running, DailyMetrics? Daily, DailyMetrics? Daily5m, DailyMetrics? Daily10m, object? Flow, object? Flow5m, object? Flow10m, DateTimeOffset UpdatedAt);
+public sealed record MetricsResponse(string Symbol, bool MarketOpen, bool Running, DailyMetrics? Daily, DailyMetrics? Daily5m, DailyMetrics? Daily10m, object? Flow, object? Flow5m, object? Flow10m, DateTimeOffset UpdatedAt, string FlowSource = "none", int? BlockTradeCount = null, double? TurnoverPercent = null);
 
-public sealed class MetricsQueryService(ILocalStore store, IMarketDataGateway marketData, IRealtimeMarketStream stream, MonitorRuntimeState runtime, TimeProvider clock)
+public sealed class MetricsQueryService(ILocalStore store, IMarketDataGateway marketData, IRealtimeMarketStream stream, MonitorRuntimeState runtime, TimeProvider clock, TickFlowTape? tape = null, SymbolMetadataService? metadata = null)
 {
+    /// <summary>#132 회전율(%) = 당일 누적 거래량 / 상장주식수 × 100. 메타·거래량이 없으면 null이다.</summary>
+    public static double? Turnover(DailyMetrics? daily, StockInfo? info) =>
+        daily is null || info?.SharesOutstanding is not { } shares || shares <= 0m || !double.IsFinite(daily.TodayVolume)
+            ? null
+            : Math.Round(daily.TodayVolume / (double)shares * 100, 2);
+
     sealed record CacheKey(string Symbol, DateTimeOffset Start, DateTimeOffset End);
     readonly ConcurrentDictionary<CacheKey, (DateTimeOffset At, DailyMetrics? Data)> _cache = new();
     readonly ConcurrentDictionary<CacheKey, ConcurrentQueue<(DateTimeOffset At, DailyMetrics Data)>> _history = new();
@@ -39,7 +45,9 @@ public sealed class MetricsQueryService(ILocalStore store, IMarketDataGateway ma
         }
         DailyMetrics? Near(TimeSpan ago) { if (key is null || !_history.TryGetValue(key, out var q)) return null; var target = now - ago; return q.Where(x => (x.At - target).Duration() <= TimeSpan.FromMinutes(2.5)).OrderBy(x => (x.At - target).Duration()).Select(x => x.Data).FirstOrDefault(); }
         object? Flow(DateTimeOffset from, DateTimeOffset to) { from = from < start ? start : from; to = to > now ? now : to; if (to > end) to = end; if (from >= to) return null; var flow = stream.Flow(symbol, from, to); return flow is null ? null : new { buyVolume = flow.Value.Buy, sellVolume = flow.Value.Sell, strength = flow.Value.Sell > 0 ? Math.Round((double)(flow.Value.Buy / flow.Value.Sell) * 100, 1) : (double?)null, buyShare = flow.Value.Buy + flow.Value.Sell > 0 ? Math.Round((double)(flow.Value.Buy / (flow.Value.Buy + flow.Value.Sell)) * 100, 1) : (double?)null, windowMinutes = 5 }; }
+        if (open && metadata is not null) await metadata.EnsureAsync([symbol], ct);
         return (200, new(symbol, open, state.Running, daily, open ? Near(TimeSpan.FromMinutes(5)) : null, open ? Near(TimeSpan.FromMinutes(10)) : null,
-            open ? Flow(now.AddMinutes(-5), now) : null, open ? Flow(now.AddMinutes(-10), now.AddMinutes(-5)) : null, open ? Flow(now.AddMinutes(-15), now.AddMinutes(-10)) : null, now));
+            open ? Flow(now.AddMinutes(-5), now) : null, open ? Flow(now.AddMinutes(-10), now.AddMinutes(-5)) : null, open ? Flow(now.AddMinutes(-15), now.AddMinutes(-10)) : null, now,
+            tape?.FlowSource(symbol) ?? "none", tape?.BlockTradeCount(symbol), Turnover(daily, metadata?.Get(symbol))));
     }
 }

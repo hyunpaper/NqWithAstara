@@ -386,6 +386,81 @@ public sealed class StructureD6ActiveWiringTests
         Assert.True(ready is not null, Describe(view));            // 후보는 남지만 진입하지 않는다
     }
 
+    [Fact]
+    public async Task AnExitInTheSamePollSuppressesTheNewEntryAndLeavesTheCandidateReady()
+    {
+        var store = new RecordingStore();
+        store.Watch.Add(new WatchItem(Fx.Symbol, "테스트"));
+        store.Seed(new SimTrade("v4-exiting-1", Fx.Symbol, "REBOUND", Fx.At(64), 100.00, 150.0, 99.55, "저항", "ATR",
+            "OPEN", null, null, null, 100.00, Score: 75, Logic: "v4", SessionEnd: Fx.SessionEnd));
+
+        var harness = Build(StructureEngineMode.Active, store);
+        await PollAt(harness, 64);
+        await PollAt(harness, 65);
+
+        var exited = Assert.Single(harness.Store.Trades);
+        Assert.Equal("v4-exiting-1", exited.Id);
+        Assert.Equal("STOP", exited.Status);
+
+        Assert.True(harness.Structure.TryGetPublished(Fx.Symbol, out var view));
+        Assert.Contains(StructureAnalysisService.NoteEntrySuppressedBySamePollExit, view.Notes);
+        Assert.DoesNotContain(StructureAnalysisService.NoteEntryCommitted, view.Notes);
+        Assert.Equal("READY", view.CandidateSummary);
+        var ready = view.Candidates.SingleOrDefault(x => x.State == "READY");
+        Assert.True(ready is not null, Describe(view));
+        Assert.NotNull(ready!.Plan);
+        Assert.Equal(0, harness.Entries.Calls);
+    }
+
+    [Fact]
+    public async Task TheNextPollWithoutAnExitEntersNormally()
+    {
+        var store = new RecordingStore();
+        store.Watch.Add(new WatchItem(Fx.Symbol, "테스트"));
+        store.Seed(new SimTrade("v4-exiting-1", Fx.Symbol, "REBOUND", Fx.At(64), 99.00, 99.60, 90.0, "저항", "ATR",
+            "OPEN", null, null, null, 99.00, Score: 75, Logic: "v4", SessionEnd: Fx.SessionEnd));
+
+        var harness = Build(StructureEngineMode.Active, store);
+        await PollAt(harness, 64);
+        await PollAt(harness, 65);
+        Assert.Equal(0, harness.Entries.Calls);
+        Assert.Equal("TARGET", Assert.Single(harness.Store.Trades).Status);
+
+        await PollAt(harness, 66);
+
+        Assert.True(harness.Structure.TryGetPublished(Fx.Symbol, out var view));
+        Assert.DoesNotContain(StructureAnalysisService.NoteEntrySuppressedBySamePollExit, view.Notes);
+        Assert.Equal(1, harness.Entries.Calls);
+        var entered = Assert.Single(harness.Store.Trades, StructuralSimulation.OwnsTrade);
+        Assert.Equal("OPEN", entered.Status);
+    }
+
+    [Fact]
+    public async Task AnExitOnAnotherSymbolDoesNotSuppressThisSymbolsEntry()
+    {
+        var store = new RecordingStore();
+        store.Watch.Add(new WatchItem(Fx.Symbol, "테스트"));
+        store.Watch.Add(new WatchItem("OTHER", "다른 종목"));
+        store.Seed(new SimTrade("v4-exiting-other", "OTHER", "REBOUND", Fx.At(64), 100.00, 150.0, 99.55, "저항", "ATR",
+            "OPEN", null, null, null, 100.00, Score: 75, Logic: "v4", SessionEnd: Fx.SessionEnd));
+
+        var harness = Build(StructureEngineMode.Active, store);
+        await PollAt(harness, 64);
+        await PollAt(harness, 65);
+
+        Assert.Equal("STOP", Assert.Single(harness.Store.Trades, x => x.Id == "v4-exiting-other").Status);
+
+        Assert.True(harness.Structure.TryGetPublished(Fx.Symbol, out var view));
+        Assert.DoesNotContain(StructureAnalysisService.NoteEntrySuppressedBySamePollExit, view.Notes);
+        Assert.Contains(StructureAnalysisService.NoteEntryCommitted, view.Notes);
+        var entered = Assert.Single(harness.Store.Trades, x => StructuralSimulation.OwnsTrade(x) && x.Symbol == Fx.Symbol);
+        Assert.Equal("OPEN", entered.Status);
+
+        Assert.True(harness.Structure.TryGetPublished("OTHER", out var other));
+        Assert.Contains(StructureAnalysisService.NoteEntrySuppressedBySamePollExit, other.Notes);
+        Assert.DoesNotContain(harness.Store.Trades, x => StructuralSimulation.OwnsTrade(x) && x.Symbol == "OTHER");
+    }
+
     /// <summary>
     /// active에서 관측 저장이 실패하면 거래·관측·래치 어느 것도 남기지 않거나(진입 전 실패) 이미 저장된
     /// 거래를 다음 poll이 멱등하게 회복한다(§12.6). 어느 쪽이든 거래는 정확히 1개다.

@@ -207,9 +207,14 @@ public static class StructuralLifecycle
         string.Join('|', BreakoutCooldownKeyPrefix, symbol, StructureMath.Iso(sessionStart),
             SetupKinds.Name(SetupKind.Breakout), zoneId, StructureMath.Iso(activatedAt));
 
+    /// <summary>
+    /// §8 "하나의 구조 사건 = 하나의 거래". 같은 zone·episode의 PULLBACK과 REBOUND는 zone·anchor·
+    /// invalidation·손절이 동일한 하나의 사건이므로 kind를 키에 넣지 않는다(이슈 #118).
+    /// BREAKOUT은 episode 기반이 아니고 §10 쿨다운이 담당한다.
+    /// </summary>
     static string? EpisodeConsumptionKey(EntryCandidate candidate) => candidate.EpisodeStartAt is not { } episodeStart
         ? null
-        : string.Join('|', "episode-consumed", candidate.KindName, candidate.ZoneId, StructureMath.Iso(episodeStart));
+        : string.Join('|', "episode-consumed", candidate.ZoneId, StructureMath.Iso(episodeStart));
 
     /// <summary>래치에 남은 쿨다운 표식을 ZoneId별 마지막 발동 시각으로 정리한다.</summary>
     static Dictionary<string, DateTimeOffset> BreakoutActivations(StructuralLatch latch)
@@ -311,15 +316,27 @@ public static class StructuralLifecycle
     /// <summary>
     /// 저장이 성공한 뒤에만 호출한다(§12.6). 실패했는데 이벤트를 소비한 것으로 남기지 않는다.
     /// </summary>
+    /// <param name="entryBlockedEventIds">
+    /// 이슈 #107: active에서 이번 poll에 진입이 막힌 후보. READY로 남기되 가드 키·쿨다운 표식을 소비하지 않아
+    /// 재시도가 가능하다. off/shadow는 진입 시도 자체가 없어 항상 비어 있고 "READY = 소비"가 그대로다(§8 파리티).
+    /// </param>
+    /// <param name="consumeOnReady">
+    /// 이슈 #118: episode 소비 시점. off/shadow는 진입 경로가 없어 READY 성립이 곧 소비이고(true),
+    /// active는 실제 ENTERED만 소비한다(false). Domain은 모드 enum을 모르고 이 불리언만 받는다(§4).
+    /// </param>
     public static StructuralLatch Commit(StructuralLatch latch, DateTimeOffset? evaluatedBarStart,
         ImmutableArray<EntryCandidate> candidates, IEnumerable<string> retiredZoneIds,
-        string? eventSignature, string? observationId)
+        string? eventSignature, string? observationId, IEnumerable<string>? entryBlockedEventIds = null,
+        bool consumeOnReady = false)
     {
         ArgumentNullException.ThrowIfNull(latch);
         ArgumentNullException.ThrowIfNull(retiredZoneIds);
         var watermark = latch.WatermarkBarStart;
         if (evaluatedBarStart is { } start && (watermark is null || start > watermark.Value)) watermark = start;
 
+        var entryBlocked = entryBlockedEventIds is null
+            ? null
+            : new HashSet<string>(entryBlockedEventIds, StringComparer.Ordinal);
         var tombstones = latch.Tombstones;
         var guards = latch.ConsumedGuardKeys;
         var activatedBreakoutId = ActivatedBreakout(candidates)?.EventId;
@@ -327,15 +344,16 @@ public static class StructuralLifecycle
         {
             if (CandidateSelection.IsTerminal(candidate.Disposition))
                 tombstones = tombstones.SetItem(candidate.EventId, candidate.Disposition);
-            if (candidate.Disposition is CandidateDisposition.Ready or CandidateDisposition.Entered)
+            if (candidate.Disposition is CandidateDisposition.Ready or CandidateDisposition.Entered &&
+                entryBlocked?.Contains(candidate.EventId) != true)
             {
                 guards = guards.Add(candidate.DuplicateGuardKey);
-                if (candidate.Disposition == CandidateDisposition.Entered && candidate.Kind is SetupKind.Pullback or SetupKind.Rebound &&
+                if ((candidate.Disposition == CandidateDisposition.Entered ||
+                        (consumeOnReady && candidate.Disposition == CandidateDisposition.Ready)) &&
+                    candidate.Kind is SetupKind.Pullback or SetupKind.Rebound &&
                     EpisodeConsumptionKey(candidate) is { } episodeKey)
                     guards = guards.Add(episodeKey);
-                // §10 돌파 쿨다운의 기준 시점은 "재발동"의 대상인 대표 발동이다. 같은 trigger에서 여러
-                // BREAKOUT 후보가 READY여도 §8의 실제 신규 거래 후보는 1개뿐이므로, 대표로 선택된 zone만
-                // cooldown을 소비한다. active에서 대표 후보가 ENTERED로 바뀐 뒤에도 같은 결론을 유지한다.
+                // §10: 쿨다운은 BREAKOUT kind 안의 대표 후보 1개만 소비한다(다른 kind의 대표와 무관).
                 if (candidate.Kind == SetupKind.Breakout &&
                     string.Equals(candidate.EventId, activatedBreakoutId, StringComparison.Ordinal))
                     guards = guards.Add(BreakoutCooldownKey(latch.Symbol, latch.SessionStart, candidate.ZoneId,
@@ -357,12 +375,8 @@ public static class StructuralLifecycle
 
     static EntryCandidate? ActivatedBreakout(ImmutableArray<EntryCandidate> candidates)
     {
-        var entered = SelectEnteredPreferred(candidates.Where(x => x.Kind == SetupKind.Breakout));
-        if (entered is not null) return entered;
-        var preferred = CandidateSelection.SelectPreferred(candidates);
-        return preferred?.Kind == SetupKind.Breakout
-            ? preferred
-            : null;
+        var breakouts = candidates.Where(x => x.Kind == SetupKind.Breakout).ToArray();
+        return SelectEnteredPreferred(breakouts) ?? CandidateSelection.SelectPreferred(breakouts);
     }
 
     static EntryCandidate? SelectEnteredPreferred(IEnumerable<EntryCandidate> candidates)

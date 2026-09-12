@@ -291,6 +291,73 @@ public sealed class StructureBreakoutCooldownTests
         Assert.DoesNotContain(StructuralLifecycle.CodeBreakoutCooldown, Breakout(later).RejectionCodes);
     }
 
+    [Fact]
+    public void CommitRecordsTheBreakoutCooldownEvenWhenAnotherKindIsTheGlobalPreferred()
+    {
+        var detected = Breakout(Detect(30));
+        var breakout = detected with { EntryQuality = detected.EntryQuality!.Value - 1 };
+        var pullback = detected with
+        {
+            EventId = detected.EventId + "|pullback",
+            DuplicateGuardKey = SetupDetector.DuplicateGuardKey(Fx.Symbol, Fx.SessionStart, "PULLBACK",
+                detected.TriggerBarStart),
+            Kind = SetupKind.Pullback,
+            KindName = "PULLBACK",
+            ZoneId = "pullback-zone"
+        };
+
+        Assert.Equal(pullback.EventId, CandidateSelection.SelectPreferred([breakout, pullback])!.EventId);
+
+        var latch = StructuralLifecycle.Commit(Seeded(), Fx.At(30), [breakout, pullback], [], null, null);
+        Assert.Contains(CooldownKey(breakout), latch.ConsumedGuardKeys);
+
+        var repeat = StructuralLifecycle.ApplyLatch(latch, Detect(45), allowNewTrigger: true, P, Zones());
+        Assert.Equal(CandidateDisposition.Rejected, Breakout(repeat).Disposition);
+        Assert.Contains(StructuralLifecycle.CodeBreakoutCooldown, Breakout(repeat).RejectionCodes);
+    }
+
+    [Fact]
+    public void AnEnteredBreakoutStaysTheActivationEvenWhenAReadyBreakoutScoresHigher()
+    {
+        var detected = Breakout(Detect(30));
+        var entered = detected with
+        {
+            Disposition = CandidateDisposition.Entered,
+            EntryQuality = detected.EntryQuality!.Value - 1
+        };
+        var readyHigher = detected with
+        {
+            EventId = detected.EventId + "|ready",
+            ZoneId = "ready-zone",
+            Disposition = CandidateDisposition.Ready
+        };
+
+        var latch = StructuralLifecycle.Commit(Seeded(), Fx.At(30), [readyHigher, entered], [], null, null);
+
+        Assert.Contains(CooldownKey(entered), latch.ConsumedGuardKeys);
+        Assert.DoesNotContain(CooldownKey(readyHigher), latch.ConsumedGuardKeys);
+    }
+
+    [Fact]
+    public void AnEntryBlockedBreakoutArmsNeitherTheCooldownNorTheDuplicateGuard()
+    {
+        var candidates = Detect(30);
+        var breakout = Breakout(candidates);
+        var latch = StructuralLifecycle.Commit(Seeded(), Fx.At(30), candidates, [], "sig", "obs",
+            [breakout.EventId]);
+
+        Assert.DoesNotContain(CooldownKey(breakout), latch.ConsumedGuardKeys);
+        Assert.DoesNotContain(breakout.DuplicateGuardKey, latch.ConsumedGuardKeys);
+
+        var repeat = StructuralLifecycle.ApplyLatch(latch, Detect(45), allowNewTrigger: true, P, Zones());
+        Assert.Equal(CandidateDisposition.Ready, Breakout(repeat).Disposition);
+        Assert.DoesNotContain(StructuralLifecycle.CodeBreakoutCooldown, Breakout(repeat).RejectionCodes);
+
+        var same = StructuralLifecycle.ApplyLatch(latch, candidates, allowNewTrigger: true, P, Zones());
+        Assert.Equal(CandidateDisposition.Ready, Breakout(same).Disposition);
+        Assert.DoesNotContain(StructuralLifecycle.CodeDuplicateGuard, Breakout(same).RejectionCodes);
+    }
+
     /// <summary>PULLBACK READY는 중복 방지 키만 남기고 돌파 쿨다운 표식을 남기지 않는다.</summary>
     [Fact]
     public void CommitDoesNotRecordACooldownForNonBreakoutCandidates()

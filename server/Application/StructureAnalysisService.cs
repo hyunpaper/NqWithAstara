@@ -37,7 +37,16 @@ public sealed record StructureEngineOptions(StructureEngineMode Mode)
 public sealed record StructureTrendDto(string State, double? SignedTrend, double? PriceDirection,
     double? StructureDirection, double? Efficiency, double? Atr1m, double? Ema9, double? Ema21, double? Vwap,
     double? VwapSd, bool StructureEvidenceMissing, int BarCount, DateTimeOffset AnalysisCutoff,
-    string[] UsedFamilies, string[] MissingComponents, string[] Warnings);
+    string[] UsedFamilies, string[] MissingComponents, string[] Warnings,
+    StructureTrendComponentsDto? Components = null);
+
+/// <summary>추세 구성요소 하나의 원값·변환값(§9.4). 둘 다 결측이면 null이다(#146).</summary>
+public sealed record StructureTrendComponentDto(double? Raw, double? Value);
+
+/// <summary>§7/§16B 추세 구성요소 원값 스냅샷(#146). StructureDirection은 5분 구조 결측이면 전체가 null이다.</summary>
+public sealed record StructureTrendComponentsDto(StructureTrendComponentDto EmaDirection,
+    StructureTrendComponentDto SlopeDirection, StructureTrendComponentDto VwapDirection,
+    StructureTrendComponentDto? StructureDirection, StructureTrendComponentDto Efficiency);
 
 /// <summary>
 /// §11 Zone 저장 계약의 증거 묶음. Key는 (family, from, to)의 SHA-256이라 이 세 필드로 다시 계산되므로
@@ -92,9 +101,10 @@ public sealed record StructureAnalysisView(string Symbol, string Mode, string St
     StructureCandidateDto[] Candidates, StructureQualityDto Quality, string[] Warnings, string[] Notes);
 
 /// <summary>폴링이 넘겨주는 v5 입력. v4가 이미 사용한 원본 응답을 그대로 재사용하고 추가 조회를 하지 않는다.</summary>
+/// <param name="ExitedThisPoll">이번 poll에 이 심볼의 시뮬 거래가 종결됐다(#106 신규 진입 억제 입력).</param>
 public sealed record StructureObservationRequest(string Symbol, long Generation, MarketSession Market,
     IReadOnlyList<Candle>? OneMinuteBars, IReadOnlyList<Candle>? DailyBars, double? QuotePrice,
-    DateTimeOffset? QuoteAt, StructureLiquidity? Liquidity = null);
+    DateTimeOffset? QuoteAt, StructureLiquidity? Liquidity = null, bool ExitedThisPoll = false);
 
 /// <summary>
 /// 설계 §12. snapshot 구성 → 순수 계산(gate 밖) → 짧은 commit(gate 안, generation 재검증) → 공개 snapshot 갱신.
@@ -109,7 +119,8 @@ public sealed class StructureAnalysisService(
     StructureEngineOptions? options = null,
     StructurePolicy? policy = null,
     IStructuralTradeEntries? tradeEntries = null,
-    StructureAlertPublisher? alerts = null)
+    StructureAlertPublisher? alerts = null,
+    SymbolMetadataService? metadata = null)
 {
     public const string LatchFile = "structure-lifecycle.json";
     public const string EntryOwnerV4 = "v4";
@@ -117,13 +128,28 @@ public sealed class StructureAnalysisService(
     public const string NoteEntryCommitted = "V5_ENTRY_COMMITTED";
     public const string NoteEntryBlockedByOpenTrade = "V5_ENTRY_BLOCKED_BY_OPEN_TRADE";
     public const string NoteEntryPlanInvalid = "V5_ENTRY_PLAN_INVALID";
+
+    /// <summary>#117 §10: 같은 심볼의 직전 손절 이후 완료 봉이 정책 개수만큼 쌓이지 않았다.</summary>
+    public const string NoteEntryBlockedByStopCooldown = Domain.Validation.EntryBlockCodes.BlockedByStopCooldown;
     public const string NoteEntryUnavailable = "V5_ENTRY_PORT_UNAVAILABLE";
+
+    /// <summary>
+    /// #106: 이번 poll에 같은 심볼의 청산이 있었다. 청산을 만든 그 틱이 곧바로 신규 진입가가 되지 않도록
+    /// 이 poll의 진입만 건너뛴다. 후보는 READY로 남고 쿨다운이 아니다.
+    /// </summary>
+    public const string NoteEntrySuppressedBySamePollExit = Domain.Validation.EntryBlockCodes.SuppressedBySamePollExit;
 
     /// <summary>§16B 가격 단위: 관측된 가격이 정책 tick의 배수가 아니다(신규 READY 금지).</summary>
     public const string NotePriceTickUnsupported = "V5_PRICE_TICK_UNSUPPORTED";
 
-    /// <summary>§16B 가격 단위: tick을 판정할 가격 근거가 없다. 모르면 허용이 아니라 차단이다.</summary>
+    /// <summary>§16B 가격 단위: 호가 근거가 없어 tick을 판정할 수 없다. 신규 READY는 계속 허용한다.</summary>
     public const string NotePriceTickUnknown = "V5_PRICE_TICK_UNKNOWN";
+
+    /// <summary>#132 §16A 종목 유형: 정책이 허용하지 않는 securityType·비보통주·레버리지다(신규 READY 금지).</summary>
+    public const string NoteSymbolTypeUnsupported = Domain.Structure.SymbolEligibility.CodeTypeUnsupported;
+
+    /// <summary>#132 §16A 종목 유형: 메타데이터가 없어 판정할 수 없다. 신규 READY는 계속 허용한다.</summary>
+    public const string NoteSymbolMetaUnknown = Domain.Structure.SymbolEligibility.NoteMetaUnknown;
 
     /// <summary>§12.5 gate 재확인에서 신규 진입이 막혔다. 뒤의 코드가 구체 사유다.</summary>
     public const string NoteEntryGateRecheck = "V5_ENTRY_BLOCKED_BY_GATE_RECHECK";
@@ -142,6 +168,7 @@ public sealed class StructureAnalysisService(
     readonly ConcurrentDictionary<string, CacheEntry> _cache = new(StringComparer.OrdinalIgnoreCase);
     readonly ConcurrentDictionary<string, StructuralLatch> _latches = new(StringComparer.OrdinalIgnoreCase);
     readonly ConcurrentDictionary<string, StructureAnalysisView> _published = new(StringComparer.OrdinalIgnoreCase);
+    readonly ConcurrentDictionary<string, TickUnknownState> _tickUnknowns = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>#64: 마지막 평가가 예외로 끝난 종목. 성공하면 즉시 사라진다.</summary>
     readonly ConcurrentDictionary<string, byte> _failed = new(StringComparer.OrdinalIgnoreCase);
     readonly SemaphoreSlim _restoreGate = new(1, 1);
@@ -158,8 +185,14 @@ public sealed class StructureAnalysisService(
     /// </summary>
     public string EntryOwner => _options.Mode == StructureEngineMode.Active ? EntryOwnerV5 : EntryOwnerV4;
 
+    /// <summary>
+    /// 이슈 #118: off/shadow는 진입 경로가 없으므로 READY 성립이 곧 episode 소비이고, active는 ENTERED만 소비한다.
+    /// active와 shadow의 후보 집합을 같게 유지하는 파리티 기준이다(#27/#28).
+    /// </summary>
+    bool ConsumeEpisodeOnReady => _options.Mode != StructureEngineMode.Active;
+
     /// <summary>세션 종료·모니터링 중지 시 메모리를 정리한다(§16 "메모리도 세션 종료 시 정리한다").</summary>
-    public void Clear() { _cache.Clear(); _published.Clear(); _latches.Clear(); _failed.Clear(); }
+    public void Clear() { _cache.Clear(); _published.Clear(); _latches.Clear(); _failed.Clear(); _tickUnknowns.Clear(); }
 
     public void Remove(string symbol)
     {
@@ -167,6 +200,7 @@ public sealed class StructureAnalysisService(
         _published.TryRemove(symbol, out _);
         _latches.TryRemove(symbol, out _);
         _failed.TryRemove(symbol, out _);
+        _tickUnknowns.TryRemove(symbol, out _);
     }
 
     public bool TryGetPublished(string symbol, out StructureAnalysisView view) =>
@@ -210,6 +244,11 @@ public sealed class StructureAnalysisService(
         var snapshot = build.Snapshot;
         var lastBarStart = build.LastCompletedBarStart.Value;
         var lastBarEnd = build.LastCompletedBarEnd.Value;
+        var tickNote = PriceTickNote(snapshot.OptionalLiquidity, _policy);
+        var tickSupported = !string.Equals(tickNote, NotePriceTickUnsupported, StringComparison.Ordinal);
+        var tickUnknownWarning = false;
+        var symbolNote = SymbolEligibility.Note(metadata?.Get(request.Symbol), _policy);
+        var symbolBlocked = string.Equals(symbolNote, NoteSymbolTypeUnsupported, StringComparison.Ordinal);
 
         await RestoreAsync(ct);
         var latch = Latch(request.Symbol, snapshot.SessionStart);
@@ -226,47 +265,56 @@ public sealed class StructureAnalysisService(
             var refreshed = StructuralLifecycle.ApplyLive(cached.Candidates, snapshot.QuotePrice, now);
             var liveSignature = Signature(refreshed);
             var transitioned = !string.Equals(liveSignature, Signature(cached.Candidates), StringComparison.Ordinal);
-            if (!transitioned && cached.Generation == request.Generation) return;
-
-            var preferredId = CandidateSelection.SelectPreferred(refreshed)?.EventId;
-            var liveCandidateDtos = refreshed.Select(StructureViewMapper.Candidate).ToArray();
-            var liveSummary = (refreshed.Length == 0
-                ? CandidateDisposition.Wait
-                : CandidateSelection.Summarize(refreshed)).ToString().ToUpperInvariant();
 
             using (await runtime.EnterControlAsync(ct))
             {
                 if (!Current(request, snapshot, clock.GetLocalNow())) return;
+                tickUnknownWarning = TickUnknownWarning(request.Symbol, snapshot.SessionStart, tickNote);
+                var (tickNotes, tickWarnings) = WithTickDiagnostics(cached.Notes, cached.Warnings, tickNote,
+                    tickSupported, tickUnknownWarning, symbolNote, symbolBlocked);
+                var tickDiagnosticsChanged = !tickNotes.SequenceEqual(cached.Notes) ||
+                                             !tickWarnings.SequenceEqual(cached.Warnings);
+                if (!transitioned && !tickDiagnosticsChanged && cached.Generation == request.Generation) return;
+
+                var preferredId = CandidateSelection.SelectPreferred(refreshed)?.EventId;
+                var liveCandidateDtos = refreshed.Select(StructureViewMapper.Candidate).ToArray();
+                var liveSummary = (refreshed.Length == 0
+                    ? CandidateDisposition.Wait
+                    : CandidateSelection.Summarize(refreshed)).ToString().ToUpperInvariant();
 
                 var liveWarnings = ImmutableArray<string>.Empty;
-                if (transitioned)
+                if (transitioned || tickDiagnosticsChanged)
                 {
-                    // #64 §16/§16B: 같은 봉 안의 상태 전이(READY→INVALIDATED/EXPIRED)도 관측에 남긴다.
-                    // 기록은 이벤트 서명이 바뀐 poll에서만 일어나고 ID가 그 서명을 포함하므로 주기 반복은
-                    // 그대로 중복 폐기된다. 상태는 종결 방향으로만 움직여 봉당 기록 수는 후보 수로 제한된다.
+                    // 같은 봉 안에서도 후보 상태 또는 tick 진단 상태가 바뀌면 관측에 남긴다.
+                    // 두 상태가 모두 같으면 ID도 같아 주기 반복은 중복 폐기된다.
                     var liveRecord = new StructureObservationRecord(
-                        StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash, liveSignature),
+                        StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash,
+                            ObservationSignature(liveSignature, tickNotes, tickWarnings)),
                         RecordVersion, snapshot.Symbol, now, snapshot.SessionStart, snapshot.AnalysisAsOf,
                         snapshot.QuoteAt, lastBarStart, PolicyHash, EngineVersion, ModeName, EntryOwner,
                         DetailTransition, build.Status, liveSummary, preferredId,
-                        cached.Trend is null ? null : StructureViewMapper.Trend(cached.Trend), null, null,
-                        liveCandidateDtos, cached.Warnings.ToArray(), cached.Notes.ToArray());
+                        // #146: components는 full 평가에만 싣는다. 전이 레코드는 추가 부담 없이 기존 필드만 유지한다.
+                        cached.Trend is null ? null : StructureViewMapper.Trend(cached.Trend) with { Components = null },
+                        null, null, liveCandidateDtos, tickWarnings.ToArray(), tickNotes.ToArray());
                     var liveWrite = await observations.AppendAsync(liveRecord, ct);
                     if (!Current(request, snapshot, clock.GetLocalNow())) return;
                     liveWarnings = StructureObservationWriter.StorageWarnings(liveWrite);
 
                     // 저장 성공 뒤에만 래치를 올린다(§12.6). 종결된 후보의 tombstone이 여기서 남는다.
+                    // #107: 이 경로는 진입을 시도하지 않으므로 직전 full 평가에서 막힌 후보도 그대로 소비하지 않는다.
                     _latches[request.Symbol] = StructuralLifecycle.Commit(latch, lastBarStart, refreshed,
-                        latch.RetiredZoneIds, liveSignature, liveRecord.ObservationId);
+                        latch.RetiredZoneIds, liveSignature, liveRecord.ObservationId, cached.EntryBlocked,
+                        ConsumeEpisodeOnReady);
                     await PersistAsync(ct);
                 }
 
                 var liveView = View(request, build, snapshot, lastBarStart, cached.Trend, cached.Zones, refreshed,
-                    cached.Quality, cached.Notes, cached.Warnings, preferredId, now, liveWarnings,
+                    cached.Quality, tickNotes, tickWarnings, preferredId, now, liveWarnings,
                     candidateDtos: liveCandidateDtos, summary: liveSummary);
                 _cache[request.Symbol] = cached with
                 {
-                    Candidates = refreshed, Generation = request.Generation, View = liveView
+                    Candidates = refreshed, Generation = request.Generation, Notes = tickNotes, Warnings = tickWarnings,
+                    View = liveView
                 };
                 _published[request.Symbol] = liveView;
             }
@@ -290,12 +338,8 @@ public sealed class StructureAnalysisService(
         var gate = StructuralLifecycle.Gate(latch, lastBarStart, lastBarEnd, lastBarEnd - lastBarStart, now, _policy);
 
         var blockers = build.Quality.BlockersForCandidate.Concat(gate.Blockers)
+            .Concat(symbolBlocked ? [NoteSymbolTypeUnsupported] : Array.Empty<string>())
             .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToImmutableArray();
-
-        // #61 §16B: tick 지원 여부는 Application이 판정해서 넘긴다. Domain 기본값(허용)에 의존하지 않는다.
-        // #93: 차단은 UNSUPPORTED(격자를 벗어난 호가)뿐이고 UNKNOWN(호가 결측)은 관측 note로만 남긴다.
-        var tickNote = PriceTickNote(snapshot.OptionalLiquidity, _policy);
-        var tickSupported = !string.Equals(tickNote, NotePriceTickUnsupported, StringComparison.Ordinal);
 
         var detection = SetupDetector.Detect(SetupDetectionRequest.Create(snapshot.Symbol, snapshot.SessionStart,
             snapshot.SessionEnd, snapshot.AnalysisAsOf, now, build.Bars.Bars, candidateLayer.Zones,
@@ -318,11 +362,9 @@ public sealed class StructureAnalysisService(
 
         var warnings = new SortedSet<string>(build.Warnings, StringComparer.Ordinal);
         foreach (var blocker in detection.ReadyBlockers) warnings.Add(blocker);
-        if (tickNote is not null) notes.Add(tickNote);
-        if (!tickSupported) warnings.Add(tickNote!);
 
         var signature = StructuralLifecycle.EventSignature(candidates, preferred);
-        // #64: 관측 ID는 (봉, 이벤트 서명) 쌍이다. 같은 봉의 같은 상태는 그대로 중복 폐기되고 전이만 새 ID를 얻는다.
+        // full 관측 ID는 완료 봉과 후보 서명으로 만든다. 같은 봉을 재시작해 재평가해도 중복 기록하지 않는다.
         var observationId = StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash, signature);
         var full = !string.Equals(signature, latch.LastEventSignature, StringComparison.Ordinal);
 
@@ -334,9 +376,11 @@ public sealed class StructureAnalysisService(
             ? CandidateDisposition.Wait
             : CandidateSelection.Summarize(candidates)).ToString().ToUpperInvariant();
 
+        // #146: 추세 구성요소 원값은 full 평가에만 싣는다. summary는 기존 Trend 필드만 그대로 유지한다.
+        var observedTrendDto = full ? trendDto : trendDto with { Components = null };
         var record = new StructureObservationRecord(observationId, RecordVersion, snapshot.Symbol, now,
             snapshot.SessionStart, snapshot.AnalysisAsOf, snapshot.QuoteAt, lastBarStart, PolicyHash, EngineVersion,
-            ModeName, EntryOwner, full ? "full" : "summary", build.Status, summary, preferred, trendDto,
+            ModeName, EntryOwner, full ? "full" : "summary", build.Status, summary, preferred, observedTrendDto,
             full ? qualityDto : null, full ? zoneDtos : null, candidateDtos,
             warnings.ToArray(), notes.ToArray());
 
@@ -346,30 +390,37 @@ public sealed class StructureAnalysisService(
             // #62 §12.5: 계산·파일 I/O·gate 경합 뒤의 실제 commit 시각이다. 진입 재확인은 이 시각으로 한다.
             var gateNow = clock.GetLocalNow();
             if (!Current(request, snapshot, gateNow)) return;
+            tickUnknownWarning = TickUnknownWarning(request.Symbol, snapshot.SessionStart, tickNote);
+            if (tickNote is not null) notes.Add(tickNote);
+            if (!tickSupported || tickUnknownWarning) warnings.Add(tickNote!);
+            if (symbolNote is not null) notes.Add(symbolNote);
+            record = record with { Warnings = warnings.ToArray(), Notes = notes.ToArray() };
 
             // ── D6 active 진입(§18): READY 대표 후보 1개만 실제 시뮬 거래로 커밋한다. 거래 저장이 성공한 뒤에만
             // 후보를 ENTERED로 바꾸고 래치에 tombstone을 남기며, 실패하면 관측·래치도 갱신하지 않아 다음 poll이
             // 같은 이벤트를 멱등하게 재시도한다(§12.6). off/shadow에서는 이 경로 자체가 없다.
             // 이슈 #26: 이 commit에서 READY로 커밋되는 후보를 알림 초안으로 잡아 둔다(진입 성공 시 ENTERED로 바뀌기 전).
             var readyForAlerts = candidates.Where(x => x.Disposition == CandidateDisposition.Ready).ToArray();
-            var activeEntry = await TryEnterPreferredAsync(request, candidates, preferred, snapshot, trend, gateNow, ct);
+            var activeEntry = await TryEnterPreferredAsync(request, candidates, preferred, snapshot, trend, gateNow,
+                build.Bars.Bars.Select(x => x.Start).ToImmutableArray(), ct);
             if (activeEntry is not null)
             {
                 candidates = activeEntry.Candidates;
                 if (activeEntry.Note is { } entryNote) notes.Add(entryNote);
+                candidateDtos = candidates.Select(StructureViewMapper.Candidate).ToArray();
                 if (activeEntry.Entered)
                 {
                     preferred = CandidateSelection.SelectPreferred(candidates)?.EventId;
                     signature = StructuralLifecycle.EventSignature(candidates, preferred);
                     full = !string.Equals(signature, latch.LastEventSignature, StringComparison.Ordinal);
-                    candidateDtos = candidates.Select(StructureViewMapper.Candidate).ToArray();
                     summary = CandidateSelection.Summarize(candidates).ToString().ToUpperInvariant();
                 }
+                observationId = StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash, signature);
                 record = record with
                 {
                     Detail = full ? "full" : "summary", CandidateSummary = summary, PreferredCandidateId = preferred,
                     Candidates = candidateDtos, Zones = full ? zoneDtos : null, Quality = full ? qualityDto : null,
-                    Notes = notes.ToArray()
+                    ObservationId = observationId, Warnings = warnings.ToArray(), Notes = notes.ToArray()
                 };
             }
 
@@ -395,14 +446,17 @@ public sealed class StructureAnalysisService(
                 zoneDtos, candidateDtos, trendDto, qualityDto, summary);
 
             // watermark는 신규 트리거 허용 여부와 무관하게 평가한 최신 완료 봉까지 전진한다(§16B seeding).
+            var entryBlocked = activeEntry?.BlockedEventId is { } blockedId
+                ? ImmutableArray.Create(blockedId)
+                : ImmutableArray<string>.Empty;
             var committed = StructuralLifecycle.Commit(latch, lastBarStart, candidates,
-                displayLayer.RetiredZoneIds, signature, observationId);
+                displayLayer.RetiredZoneIds, signature, observationId, entryBlocked, ConsumeEpisodeOnReady);
             _latches[request.Symbol] = committed;
             await PersistAsync(ct);
 
             _cache[request.Symbol] = new CacheEntry(snapshot.SessionStart, snapshot.AnalysisAsOf, structureCutoff,
                 PolicyHash, request.Generation, displayLayer, candidateLayer, candidates, trend, quality,
-                notes.ToImmutableArray(), warnings.ToImmutableArray(), view);
+                notes.ToImmutableArray(), warnings.ToImmutableArray(), view, entryBlocked);
             _published[request.Symbol] = view;
         }
     }
@@ -415,25 +469,33 @@ public sealed class StructureAnalysisService(
     /// </summary>
     async Task<ActiveEntryResult?> TryEnterPreferredAsync(StructureObservationRequest request,
         ImmutableArray<EntryCandidate> candidates, string? preferredId, StructureSnapshot snapshot,
-        TrendAssessment? trend, DateTimeOffset now, CancellationToken ct)
+        TrendAssessment? trend, DateTimeOffset now, ImmutableArray<DateTimeOffset> completedBarStarts,
+        CancellationToken ct)
     {
         if (_options.Mode != StructureEngineMode.Active || preferredId is null) return null;
         var chosen = candidates.FirstOrDefault(x => x.EventId == preferredId);
         if (chosen is null || chosen.Disposition != CandidateDisposition.Ready || chosen.Plan is null) return null;
 
-        // #62 §12.5: 후보 판정 이후 흘러간 시간을 gate 안에서 다시 본다. 후보는 READY로 남고 다음 poll이 재시도한다.
+        // #106: 청산이 발생한 poll의 틱으로는 새로 진입하지 않는다. 후보는 READY로 남고 가드 키·쿨다운 표식은
+        // 소비하지 않는다(#107 — 같은 봉 재시도는 watermark로 막히고 다음 트리거 봉부터 가능하다).
+        if (request.ExitedThisPoll)
+            return Blocked(candidates, chosen, NoteEntrySuppressedBySamePollExit);
+
+        // #62 §12.5: 후보 판정 이후 흘러간 시간을 gate 안에서 다시 본다. 후보는 READY로 남고 가드 키·쿨다운 표식은
+        // 소비하지 않는다(#107 — 같은 봉 재시도는 watermark로 막히고 다음 트리거 봉부터 가능하다).
         if (!Current(request, snapshot, now, newEntry: true))
-            return new ActiveEntryResult(candidates, false,
+            return Blocked(candidates, chosen,
                 $"{NoteEntryGateRecheck}:{NewEntryBlocker(snapshot, now) ?? "GENERATION_OR_SESSION"}");
 
-        if (tradeEntries is null) return new ActiveEntryResult(candidates, false, NoteEntryUnavailable);
+        if (tradeEntries is null) return Blocked(candidates, chosen, NoteEntryUnavailable);
 
         // §10: 체결 시 FrozenPlan을 저장한다. 진입 이후 이 스냅샷은 다시 만들지 않는다.
         var context = Domain.StructuralSimulation.Freeze(chosen.Plan, chosen.EventId,
             (trend?.State ?? TrendState.Unknown).ToString().ToUpperInvariant(), trend?.SignedTrend,
             chosen.EntryQuality, snapshot.AnalysisAsOf, snapshot.QuoteAt);
         var result = await tradeEntries.TryEnterAsync(new Domain.StructuralEntryRequest(snapshot.Symbol,
-            chosen.TriggerBarStart, now, snapshot.SessionEnd, context), ct);
+            chosen.TriggerBarStart, now, snapshot.SessionEnd, context, completedBarStarts, snapshot.SessionStart,
+            chosen.Plan.TargetZoneSnapshot.Aliases), ct);
 
         return result.Outcome switch
         {
@@ -454,12 +516,34 @@ public sealed class StructureAnalysisService(
                     true, NoteEntryCommitted),
             // 한 종목 OPEN 하나 제한은 버전 공통이다(§18). 후보는 READY로 남고 새 거래는 만들지 않는다.
             Domain.StructuralEntryOutcome.BlockedByOpenTrade =>
-                new ActiveEntryResult(candidates, false, NoteEntryBlockedByOpenTrade),
-            _ => new ActiveEntryResult(candidates, false, NoteEntryPlanInvalid)
+                Blocked(candidates, chosen, NoteEntryBlockedByOpenTrade),
+            // #117: 같은 심볼의 직전 손절 이후 완료 봉이 부족하다. 후보는 READY로 남고 가드 키를 소비하지 않는다.
+            Domain.StructuralEntryOutcome.BlockedByStopCooldown =>
+                Blocked(candidates, chosen, NoteEntryBlockedByStopCooldown),
+            _ => Blocked(candidates, chosen, NoteEntryPlanInvalid)
         };
     }
 
-    sealed record ActiveEntryResult(ImmutableArray<EntryCandidate> Candidates, bool Entered, string? Note);
+    /// <summary>
+    /// #107: 진입이 막힌 preferred는 READY로 남기되 사유를 note가 아닌 후보의 RejectionCodes에도 남기고,
+    /// 이 poll의 가드 키 소비 대상에서 제외해 같은 트리거의 재시도를 살려 둔다.
+    /// </summary>
+    static ActiveEntryResult Blocked(ImmutableArray<EntryCandidate> candidates, EntryCandidate chosen, string code) =>
+        new(candidates
+                .Select(x => x.EventId != chosen.EventId
+                    ? x
+                    : x with
+                    {
+                        RejectionCodes = x.RejectionCodes.Contains(code, StringComparer.Ordinal)
+                            ? x.RejectionCodes
+                            : x.RejectionCodes.Append(code).OrderBy(c => c, StringComparer.Ordinal)
+                                .ToImmutableArray()
+                    })
+                .ToImmutableArray(),
+            false, code, chosen.EventId);
+
+    sealed record ActiveEntryResult(ImmutableArray<EntryCandidate> Candidates, bool Entered, string? Note,
+        string? BlockedEventId = null);
 
     /// <summary>
     /// 이슈 #26: commit 지점의 후보·진입 결과에서 알림 초안을 파생한다. 새 가격·점수를 만들지 않고
@@ -558,6 +642,41 @@ public sealed class StructureAnalysisService(
 
         return observed == 0 ? NotePriceTickUnknown : null;
     }
+
+    bool TickUnknownWarning(string symbol, DateTimeOffset sessionStart, string? tickNote)
+    {
+        if (!string.Equals(tickNote, NotePriceTickUnknown, StringComparison.Ordinal))
+        {
+            _tickUnknowns.TryRemove(symbol, out _);
+            return false;
+        }
+
+        var state = _tickUnknowns.AddOrUpdate(symbol,
+            _ => new TickUnknownState(sessionStart, 1),
+            (_, previous) => previous.SessionStart == sessionStart
+                ? previous with { ConsecutivePolls = previous.ConsecutivePolls + 1 }
+                : new TickUnknownState(sessionStart, 1));
+        return state.ConsecutivePolls >= Math.Max(1, _policy.PriceTickUnknownWarningPolls);
+    }
+
+    static (ImmutableArray<string> Notes, ImmutableArray<string> Warnings) WithTickDiagnostics(
+        IEnumerable<string> notes, IEnumerable<string> warnings, string? tickNote, bool tickSupported,
+        bool tickUnknownWarning, string? symbolNote, bool symbolBlocked)
+    {
+        var nextNotes = new SortedSet<string>(notes.Where(x => !IsTickDiagnostic(x)), StringComparer.Ordinal);
+        var nextWarnings = new SortedSet<string>(warnings.Where(x => !IsTickDiagnostic(x)), StringComparer.Ordinal);
+        if (tickNote is not null) nextNotes.Add(tickNote);
+        if (!tickSupported || tickUnknownWarning) nextWarnings.Add(tickNote!);
+        if (symbolNote is not null) nextNotes.Add(symbolNote);
+        if (symbolBlocked) nextWarnings.Add(symbolNote!);
+        return (nextNotes.ToImmutableArray(), nextWarnings.ToImmutableArray());
+    }
+
+    static bool IsTickDiagnostic(string code) => string.Equals(code, NotePriceTickUnsupported, StringComparison.Ordinal) ||
+        string.Equals(code, NotePriceTickUnknown, StringComparison.Ordinal) || SymbolEligibility.IsDiagnostic(code);
+
+    static string ObservationSignature(string eventSignature, IEnumerable<string> notes, IEnumerable<string> warnings) =>
+        $"{eventSignature}|notes={string.Join(',', notes.Order(StringComparer.Ordinal))}|warnings={string.Join(',', warnings.Order(StringComparer.Ordinal))}";
 
     StructureLayer BuildLayer(StructureSnapshot snapshot, DateTimeOffset cutoff, StructureSnapshotBuild build,
         ImmutableArray<PriceZone> previousZones, IEnumerable<string> retired)
@@ -745,11 +864,13 @@ public sealed class StructureAnalysisService(
         string PolicyHash, long Generation, StructureLayer Layer, StructureLayer CandidateLayer,
         ImmutableArray<EntryCandidate> Candidates,
         TrendAssessment? Trend, DataQuality Quality, ImmutableArray<string> Notes,
-        ImmutableArray<string> Warnings, StructureAnalysisView View)
+        ImmutableArray<string> Warnings, StructureAnalysisView View, ImmutableArray<string> EntryBlocked)
     {
         public ImmutableArray<PriceZone> Zones => Layer.Zones;
         public ImmutableArray<TouchEpisode> Episodes => Layer.Episodes;
     }
+
+    sealed record TickUnknownState(DateTimeOffset SessionStart, int ConsecutivePolls);
 }
 
 public sealed record StructureQueryResponse(string Symbol, string Mode, string Status, string EntryOwner,
@@ -768,7 +889,26 @@ public static class StructureViewMapper
             Finite(trend.PriceDirection), Finite(trend.StructureDirection), Finite(trend.Efficiency),
             Finite(trend.Atr1m), Finite(trend.Ema9), Finite(trend.Ema21), Finite(trend.Vwap), Finite(trend.VwapSd),
             trend.StructureEvidenceMissing, trend.BarCount, trend.AnalysisCutoff, trend.UsedFamilies.ToArray(),
-            trend.MissingComponents.ToArray(), trend.Warnings.ToArray());
+            trend.MissingComponents.ToArray(), trend.Warnings.ToArray(), TrendComponents(trend));
+    }
+
+    /// <summary>#146: TrendEvaluator가 이미 계산한 원값을 관측용으로 노출한다. structureDirection은 5분 구조
+    /// 결측이면(trend.StructureDirection null) 구성요소 전체를 null로 남긴다.</summary>
+    static StructureTrendComponentsDto TrendComponents(TrendAssessment trend)
+    {
+        var components = trend.Components;
+        return new StructureTrendComponentsDto(
+            TrendComponent(components, "emaDirection"),
+            TrendComponent(components, "slopeDirection"),
+            TrendComponent(components, "vwapDirection"),
+            trend.StructureDirection is null ? null : TrendComponent(components, "structureDirection"),
+            TrendComponent(components, "efficiency"));
+    }
+
+    static StructureTrendComponentDto TrendComponent(ImmutableArray<TrendComponent> components, string name)
+    {
+        var found = components.FirstOrDefault(x => x.Name == name);
+        return new StructureTrendComponentDto(Finite(found?.Raw), Finite(found?.Value));
     }
 
     public static StructureZoneDto Zone(PriceZone zone)

@@ -117,6 +117,26 @@ public sealed record LinkOptions(DateTimeOffset AsOf)
     public string? Mode { get; init; }
 }
 
+/// <summary>
+/// #111: 후보가 READY인데도 진입이 이뤄지지 않은 사유 코드. Application이 관측 레코드에 남기고(#107 RejectionCodes)
+/// 여기서 집계한다 — "1 poll 지연"과 "쿨다운 차단"을 한 숫자로 합치지 않기 위해 코드를 분리해 둔다.
+/// </summary>
+public static class EntryBlockCodes
+{
+    /// <summary>#106: 같은 poll에 청산이 있어 이번 poll의 진입만 건너뛴 건. 쿨다운이 아니다.</summary>
+    public const string SuppressedBySamePollExit = "V5_ENTRY_SUPPRESSED_BY_SAME_POLL_EXIT";
+
+    /// <summary>#117 §10: 같은 심볼의 직전 손절 이후 완료 봉이 정책 개수만큼 쌓이지 않아 막힌 건.</summary>
+    public const string BlockedByStopCooldown = "V5_ENTRY_BLOCKED_BY_STOP_COOLDOWN";
+
+    public static string Label(string code) => code switch
+    {
+        SuppressedBySamePollExit => "같은 poll 청산으로 1 poll 지연 (#106)",
+        BlockedByStopCooldown => "직전 손절 쿨다운 차단 (#117)",
+        _ => code
+    };
+}
+
 /// <summary>연결 단계에서 남기는 코드. 문자열을 흩어 쓰지 않고 한곳에서 정의한다.</summary>
 public static class LinkCodes
 {

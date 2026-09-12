@@ -38,6 +38,11 @@ public static class SymbolAliases
         ("반도체이티에프", "SMH"), ("아크", "ARKK"), ("금이티에프", "GLD"), ("비트코인이티에프", "IBIT"),
     ];
 
+    /// <summary>심볼 → 한글 별칭 역방향 조회. 뉴스 본문의 한글 종목명 매칭에 쓴다(#151).</summary>
+    public static IReadOnlyList<string> AliasesFor(string symbol)
+        => Entries.Where(e => string.Equals(e.Symbol, symbol, StringComparison.OrdinalIgnoreCase))
+            .Select(e => e.Alias).ToArray();
+
     public static IReadOnlyList<string> Resolve(string query)
     {
         var norm = new string(query.Where(c => !char.IsWhiteSpace(c)).ToArray());

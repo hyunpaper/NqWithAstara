@@ -16,6 +16,12 @@ public interface IMarketDataGateway
     Task<(double Price, DateTimeOffset At)> Price(string symbol, CancellationToken ct);
     Task<MarketSession> Session(DateTimeOffset now, CancellationToken ct);
     Task<string> GetAccessTokenAsync(CancellationToken ct);
+    Task<IReadOnlyList<TossTrade>> Trades(string symbol, int count, CancellationToken ct);
+    Task<IReadOnlyList<StockInfo>> StockInfos(string symbols, CancellationToken ct);
+    Task<IReadOnlyList<TossAccount>> Accounts(CancellationToken ct);
+    Task<IReadOnlyList<TossCommission>> Commissions(int accountSeq, CancellationToken ct);
+    Task<TossOrderPage> ClosedOrders(int accountSeq, DateOnly? from, DateOnly? to, string? cursor, int limit, CancellationToken ct);
+    Task<IReadOnlyList<TossHolding>> Holdings(int accountSeq, CancellationToken ct);
 }
 
 public interface IOrderBookGateway { Task<OrderBookSnapshot> OrderBook(string symbol, CancellationToken ct); }

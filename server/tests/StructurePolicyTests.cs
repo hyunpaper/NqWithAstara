@@ -25,6 +25,7 @@ public sealed class StructurePolicyTests
         {
             StructurePolicy.Default with { ZoneEligibilityStrength = .36 },
             StructurePolicy.Default with { PriceTick = .05m },
+            StructurePolicy.Default with { PriceTickUnknownWarningPolls = 4 },
             StructurePolicy.Default with { ProfileMaxBins = 401 },
             StructurePolicy.Default with { ReactionWindowBars = 6 },
             StructurePolicy.Default with { MinimumNetR = 1.3 },
@@ -41,8 +42,8 @@ public sealed class StructurePolicyTests
     public void CanonicalJsonIsKeySortedAndFreeOfRuntimeContext()
     {
         var json = StructurePolicy.Default.CanonicalJson;
-        var keys = json.Trim('{', '}').Split(",\"")
-            .Select(x => x.TrimStart('"').Split("\":")[0]).ToArray();
+        var keys = System.Text.RegularExpressions.Regex.Matches(json, "[{,]\"(\\w+)\":")
+            .Select(x => x.Groups[1].Value).ToArray();
         Assert.Equal(keys.OrderBy(x => x, StringComparer.Ordinal).ToArray(), keys);
         Assert.DoesNotContain("PolicyHash", keys);
         Assert.DoesNotContain("CanonicalJson", keys);
@@ -69,6 +70,7 @@ public sealed class StructurePolicyTests
         Assert.Equal(30, p.BreakoutCooldownMinutes);
         Assert.Equal(20L * 1024 * 1024, p.ObservationDailyByteLimit);
         Assert.Equal(.01m, p.PriceTick);
+        Assert.Equal(3, p.PriceTickUnknownWarningPolls);
         Assert.Equal(400, p.ProfileMaxBins);
         Assert.Equal(.15, p.ZoneHalfWidthAtrFactor);
         Assert.Equal(390, p.RecencyTradingMinutes);
