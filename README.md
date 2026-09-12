@@ -212,7 +212,7 @@ flowchart TB
         SIM[SimulationEngine · SignalLifecycle<br>시뮬 체결·수명 관리]
     end
     subgraph INFRA[Infrastructure]
-        GW[Toss gateway 어댑터]
+        GW[Infrastructure/Toss 어댑터]
         OBS[StructureObservationStore]
     end
     FE[client/ React] --> API

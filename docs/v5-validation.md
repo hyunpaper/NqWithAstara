@@ -54,6 +54,45 @@ realizedFillCostModelVersion, netR}`.
 | `structureDirection.{raw, value}` | 확정 5분 피벗 delta의 tanh 평균 (raw는 항상 null, deltaHigh/deltaLow가 원값을 보존) | **5분 구조 자체가 결측이면(`trend.structureEvidenceMissing`) 필드 전체가 null** |
 | `efficiency.{raw, value}` | §16B 효율성(raw=value, 변환 없음) | 봉 부족이면 null |
 
+#### `confluence` (#167)
+
+`detail = "full"` 레코드에서만 `confluence`가 실린다. 컨플루언스 층(설계 C1)은 v5 구조 판정과 **분리된 별도
+층**이며 1단계에서는 관측·표시 전용이다 — 후보·계획·진입·게이트 어느 경로에도 입력되지 않는다. 진입 경로
+소스가 이 층을 참조하지 않는다는 사실은 소스 스캔 테스트(`ConfluencePolicyTests`)로 고정되어 있다.
+`summary`·전이(`transition`) 레코드에서는 생략한다(§16, 이슈 #44 캡 영향 없음).
+
+| 필드 | 의미 | 결측 |
+|---|---|---|
+| `barEnd` | 점수를 만든 완료 1분봉의 끝 시각 | — |
+| `score` | C4 합산 `Σ w·c·s / Σ w·c`, [−1,+1] | 기여 기법이 하나도 없으면 **null**(0으로 대체하지 않는다) |
+| `warmupCount` | warmup 상태인 기법 수 | — |
+| `policyHash` | `ConfluencePolicy`의 canonical JSON SHA-256. `StructurePolicy.policyHash`와 **별개** | — |
+| `weightsVersion` | 가중치 집합의 버전. 초기값 `uniform.1`(전부 1.0, 미검증) | — |
+| `techniques[]` | 기법별 `{name, score, confidence, weight, warmup, contributing, correlationGroup, evidence}` | 기법 자체는 항상 10개가 실린다 |
+
+기법별 `score`∈[−1,+1](롱 전용이므로 음수는 "롱에 불리")과 `confidence`∈[0,1] 정의는 설계 C3 표 그대로다.
+
+| 기법(`name`) | score | confidence |
+|---|---|---|
+| `MACD` | Hist를 ATR로 정규화 후 tanh, Signal 상향 교차 봉은 0선 위일 때만 +0.2 | 0선 위 1.0 / 아래 0.5 |
+| `RSI` | (RSI−50)/50 | ADX≥20이면 1.0 / 아니면 0.7 |
+| `BB_PERCENT_B` | (%B−0.5)×2 클램프, 직전 봉이 밴드폭 20봉 최저이고 종가가 상단을 이탈하면 +0.3 | 밴드폭이 20봉 최저·최고면 0.6 / 아니면 1.0 |
+| `ADX_DMI` | sign(+DI−−DI)×min(ADX/50,1) | ADX≥20이면 1.0 / 아니면 0.4 |
+| `VWAP_DEVIATION` | tanh((종가−VWAP)/σ) | 1.0 |
+| `RVOL` | tanh(RVOL20−1)×sign(종가−세션 시가) | 20봉 표본이 있으면 1.0 / 없으면 **0** |
+| `ATR_CHANNEL` | (종가−EMA20)/(2·ATR) 클램프 | 1.0 |
+| `ORB15` | 개장 15분 레인지 상단 대비 위치(위 +, 안 0, 아래 −), 레인지 폭으로 스케일 | 1.0 |
+| `RS_QQQ` | tanh((당일 수익률 − QQQ 당일 수익률)/ATR%) | 벤치마크 봉이 ±60초 동기면 1.0 / 아니면 **0** |
+| `OBI` | (Bid−Ask)/(Bid+Ask) 최근 3 poll 평균 | 호가가 있으면 1.0 / 결측이면 **0** |
+
+`warmup`이거나 `confidence = 0`인 기법은 합산의 분자·분모 양쪽에서 빠진다. 상관군(`oscillator`,
+`volatilityBand`, `range`)은 군 안의 기여 기법 수 n으로 가중치를 1/n 한다 — 1군 목록에는 각 군에 한 기법씩만
+있어 현재 실질 계수는 1.0이다. 가중치는 전부 1.0(미검증)에서 시작하며 측정(K4) 전에는 바뀌지 않는다(C1 §16A).
+
+조회 API는 두 곳이다. `GET /api/confluence/{symbol}`은 최신 점수와 기법별 값을, `/api/structure/{symbol}`은
+additive `confluence: {score, warmupCount, weightsVersion}` 요약을 돌려준다. 두 경로 모두 **조회가 계산을
+유발하지 않는다** — 마지막 완료 봉 평가에서 캐시된 값만 읽는다.
+
 ### 2.1.1 재진입 코호트 태그 (#111)
 
 `SimTrade.Structure.reentry`는 **진입 시점에 직전 거래를 아는 계층**(`StructuralSimulation.Enter`)이 채우는

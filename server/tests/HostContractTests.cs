@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Astra.Server;
 using Astra.Server.Application;
 using Microsoft.AspNetCore.Hosting;
@@ -126,6 +126,30 @@ public sealed class HttpContractTests(AstraHostFixture host) : IClassFixture<Ast
         Assert.Equal(JsonValueKind.Number, benchmark.GetProperty("todayBars").ValueKind);
     }
 
+    /// <summary>이슈 #167: 컨플루언스 조회는 구조 응답과 같은 검증 규칙을 쓰고 camelCase로 나간다.</summary>
+    [Fact]
+    public async Task ConfluenceQueryFollowsTheSameSymbolContractAsStructure()
+    {
+        await SeedWatchlistAsync();
+        using var client = host.Factory.CreateClient();
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest,
+            (await client.GetAsync("/api/confluence/bad_symbol")).StatusCode);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, (await client.GetAsync("/api/confluence/MSFT")).StatusCode);
+
+        var response = await client.GetAsync("/api/confluence/tsla");
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+        using var json = await ReadJson(response);
+        var root = json.RootElement;
+        Assert.Equal("TSLA", root.GetProperty("symbol").GetString());
+        Assert.Equal("warmup", root.GetProperty("status").GetString());
+        Assert.Equal(64, root.GetProperty("policyHash").GetString()!.Length);
+        Assert.Equal("uniform.1", root.GetProperty("weightsVersion").GetString());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("score").ValueKind);
+        Assert.Equal(0, root.GetProperty("techniques").GetArrayLength());
+        foreach (var name in new[] { "barEnd", "warmupCount", "updatedAt" })
+            Assert.True(root.TryGetProperty(name, out _), $"missing property: {name}");
+    }
+
     [Fact]
     public async Task StructureRejectsInvalidSymbolWith400()
     {
@@ -160,7 +184,7 @@ public sealed class HttpContractTests(AstraHostFixture host) : IClassFixture<Ast
         Assert.Equal("v4", root.GetProperty("entryOwner").GetString());
         Assert.Equal(JsonValueKind.Null, root.GetProperty("analysis").ValueKind);
         // §12 계약 필드가 camelCase로 전부 존재한다.
-        foreach (var name in new[] { "engineVersion", "policyHash", "message", "updatedAt" })
+        foreach (var name in new[] { "engineVersion", "policyHash", "message", "updatedAt", "confluence" })
             Assert.True(root.TryGetProperty(name, out _), $"missing property: {name}");
         Assert.False(root.TryGetProperty("Symbol", out _));
     }

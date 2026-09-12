@@ -1,3 +1,4 @@
+// v4 레거시 — 청산 경로에서만 사용
 namespace Astra.Server;
 
 public static class Indicators
