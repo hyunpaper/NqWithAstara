@@ -9,7 +9,11 @@ namespace Astra.Server.Application.Backtest;
 /// <summary>측정 한 번의 요약 (C5, #169). 지평별 기법 통계를 전부 담는다.</summary>
 public sealed record ConfluenceMeasurementReport(DateOnly From, DateOnly To, int Days, int Symbols, int Bars,
     int Signals, int HorizonBars, ImmutableArray<TechniqueMeasurement> Techniques,
-    ImmutableDictionary<int, ImmutableArray<TechniqueMeasurement>> ByHorizon);
+    ImmutableDictionary<int, ImmutableArray<TechniqueMeasurement>> ByHorizon)
+{
+    public ImmutableDictionary<string, ImmutableArray<TechniqueMeasurement>> BySymbol { get; init; } =
+        ImmutableDictionary<string, ImmutableArray<TechniqueMeasurement>>.Empty;
+}
 
 /// <summary>
 /// 저장 봉 재생 러너 (C5, #169). `App_Data/bars/&lt;날짜&gt;/&lt;심볼&gt;.jsonl`을 날짜·심볼별로 시간순 재생하며
@@ -32,7 +36,7 @@ public sealed class ConfluenceReplay(IBarStore store, ConfluencePolicy? policy =
         var days = ConfluenceWalkForward.DaysInWindow(await store.ListDaysAsync(ct), from, to);
         var outcomes = new List<SignalOutcome>();
         var symbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var history = new Dictionary<string, SymbolHistory>(StringComparer.OrdinalIgnoreCase);
+        var history = new Dictionary<string, ReplaySymbolHistory>(StringComparer.OrdinalIgnoreCase);
         int barCount = 0, signalCount = 0;
 
         foreach (var day in days)
@@ -47,7 +51,7 @@ public sealed class ConfluenceReplay(IBarStore store, ConfluencePolicy? policy =
                 if (bars.Length == 0) continue;
                 symbols.Add(symbol);
                 barCount += bars.Length;
-                if (!history.TryGetValue(symbol, out var past)) history[symbol] = past = new SymbolHistory();
+                if (!history.TryGetValue(symbol, out var past)) history[symbol] = past = new ReplaySymbolHistory();
                 signalCount += Replay(symbol, bars, benchmark, outcomes, past);
                 past.Append(day, bars);
             }
@@ -58,13 +62,16 @@ public sealed class ConfluenceReplay(IBarStore store, ConfluencePolicy? policy =
         var primary = byHorizon.TryGetValue(horizonBars, out var found)
             ? found
             : ConfluenceMeasurement.Summarize(outcomes, horizonBars, _measurement);
+        var bySymbol = symbols.Order(StringComparer.OrdinalIgnoreCase).ToImmutableDictionary(x => x,
+            x => ConfluenceMeasurement.Summarize(outcomes.Where(y => string.Equals(y.Symbol, x,
+                StringComparison.OrdinalIgnoreCase)), horizonBars, _measurement), StringComparer.OrdinalIgnoreCase);
         return new ConfluenceMeasurementReport(from, to, days.Length, symbols.Count, barCount, signalCount,
-            horizonBars, primary, byHorizon.SetItem(horizonBars, primary));
+            horizonBars, primary, byHorizon.SetItem(horizonBars, primary)) { BySymbol = bySymbol };
     }
 
     /// <summary>하루·한 심볼 재생. 창마다 기법을 평가하고 발생한 신호의 지평별 결과를 모은다.</summary>
     int Replay(string symbol, ImmutableArray<IndicatorBar> bars, ImmutableArray<IndicatorBar> benchmark,
-        List<SignalOutcome> outcomes, SymbolHistory past)
+        List<SignalOutcome> outcomes, ReplaySymbolHistory past)
     {
         var sessionStart = bars[0].Start;
         var signals = 0;
@@ -102,24 +109,6 @@ public sealed class ConfluenceReplay(IBarStore store, ConfluencePolicy? policy =
     }
 
     /// <summary>이미 재생을 마친 과거 세션들만 담는다 — 당일 값은 하루가 끝난 뒤에 들어간다(C6).</summary>
-    sealed class SymbolHistory
-    {
-        readonly List<IndicatorBar> _daily = [];
-        readonly List<SessionVolumeProfile> _profiles = [];
-
-        public ImmutableArray<IndicatorBar> DailyBars => [.._daily];
-        public ImmutableArray<SessionVolumeProfile> Profiles => [.._profiles];
-        public decimal? PreviousSessionClose => _daily.Count == 0 ? null : _daily[^1].Close;
-
-        public void Append(DateOnly day, ImmutableArray<IndicatorBar> bars)
-        {
-            if (bars.Length == 0) return;
-            _daily.Add(new IndicatorBar(bars[0].Start, bars[^1].End, bars[0].Open, bars.Max(x => x.High),
-                bars.Min(x => x.Low), bars[^1].Close, bars.Sum(x => x.Volume)));
-            _profiles.Add(SessionVolumeProfile.FromBars(day, bars[0].Start, bars));
-        }
-    }
-
     public async Task<ImmutableArray<IndicatorBar>> LoadAsync(string day, string symbol, CancellationToken ct) =>
         Parse(await store.ReadLinesAsync(day, symbol, ct));
 
@@ -148,4 +137,22 @@ public sealed class ConfluenceReplay(IBarStore store, ConfluencePolicy? policy =
     }
 
     static decimal Decimal(JsonElement root, string name) => (decimal)root.GetProperty(name).GetDouble();
+}
+
+public sealed class ReplaySymbolHistory
+{
+    readonly List<IndicatorBar> _daily = [];
+    readonly List<SessionVolumeProfile> _profiles = [];
+
+    public ImmutableArray<IndicatorBar> DailyBars => [.._daily];
+    public ImmutableArray<SessionVolumeProfile> Profiles => [.._profiles];
+    public decimal? PreviousSessionClose => _daily.Count == 0 ? null : _daily[^1].Close;
+
+    public void Append(DateOnly day, ImmutableArray<IndicatorBar> bars)
+    {
+        if (bars.Length == 0) return;
+        _daily.Add(new IndicatorBar(bars[0].Start, bars[^1].End, bars[0].Open, bars.Max(x => x.High),
+            bars.Min(x => x.Low), bars[^1].Close, bars.Sum(x => x.Volume)));
+        _profiles.Add(SessionVolumeProfile.FromBars(day, bars[0].Start, bars));
+    }
 }

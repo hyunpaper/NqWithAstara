@@ -61,6 +61,26 @@ public sealed class TossClient(HttpClient http)
         }
         return bars.DistinctBy(x => x.Timestamp).OrderBy(x => x.Timestamp).ToArray();
     }
+    public async Task<IReadOnlyList<Candle>> HistoricalCandles(string symbol, DateTimeOffset from,
+        DateTimeOffset to, CancellationToken ct)
+    {
+        var bars = new List<Candle>(); string? before = null;
+        for (var page = 0; page < 80; page++)
+        {
+            var path = $"api/v1/candles?symbol={Uri.EscapeDataString(symbol)}&interval=1m&count=200&adjusted=true" +
+                       (before is null ? "" : "&before=" + Uri.EscapeDataString(before));
+            using var d = await Get(path, ct); var result = d.RootElement.GetProperty("result");
+            var fetched = result.GetProperty("candles").EnumerateArray()
+                .Select(x => new Candle(x.GetProperty("timestamp").GetDateTimeOffset(), D(x, "openPrice"),
+                    D(x, "highPrice"), D(x, "lowPrice"), D(x, "closePrice"), D(x, "volume"))).ToArray();
+            bars.AddRange(fetched.Where(x => x.Timestamp >= from && x.Timestamp < to));
+            if (fetched.Length == 0 || fetched.Min(x => x.Timestamp) < from) break;
+            before = result.TryGetProperty("nextBefore", out var next) && next.ValueKind == JsonValueKind.String
+                ? next.GetString() : null;
+            if (before is null) break;
+        }
+        return bars.OrderBy(x => x.Timestamp).ToArray();
+    }
     public async Task<IReadOnlyList<Candle>> DailyCandles(string symbol, CancellationToken ct) { using var d = await Get($"api/v1/candles?symbol={Uri.EscapeDataString(symbol)}&interval=1d&count=30&adjusted=true", ct); return d.RootElement.GetProperty("result").GetProperty("candles").EnumerateArray().Select(x => new Candle(x.GetProperty("timestamp").GetDateTimeOffset(), D(x, "openPrice"), D(x, "highPrice"), D(x, "lowPrice"), D(x, "closePrice"), D(x, "volume"))).DistinctBy(x => x.Timestamp).OrderBy(x => x.Timestamp).ToArray(); }
     static double D(JsonElement x, string p) => double.Parse(x.GetProperty(p).GetString()!, System.Globalization.CultureInfo.InvariantCulture);
     static decimal Dec(JsonElement x, string p) => decimal.Parse(x.GetProperty(p).GetString()!, System.Globalization.CultureInfo.InvariantCulture);

@@ -13,6 +13,13 @@ if (args is [ConfluenceMeasureCommand.Name, ..])
         CancellationToken.None);
     return;
 }
+if (args is [ConfluenceBackfillCommand.Name, ..])
+{
+    using var http = new HttpClient { BaseAddress = new Uri("https://openapi.tossinvest.com/"), Timeout = TimeSpan.FromSeconds(30) };
+    Environment.ExitCode = await ConfluenceBackfillCommand.RunAsync(args, Console.Out, TimeProvider.System,
+        new TossHistoricalBarSource(new TossClient(http)), CancellationToken.None);
+    return;
+}
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseUrls(Environment.GetEnvironmentVariable("ASTRA_URLS") ?? "http://127.0.0.1:5188");

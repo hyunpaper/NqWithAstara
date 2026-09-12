@@ -34,7 +34,10 @@ public static class ConfluenceMeasureCommand
         var benchmark = Option(args, "--benchmark") ?? new ConfluenceOptions().BenchmarkSymbol;
         if (to < from) { output.WriteLine("--to는 --from보다 앞설 수 없다."); return 2; }
 
-        var replay = new ConfluenceReplay(new BarStore(Path.Combine(root, "App_Data", "bars")),
+        var replayBars = Directory.Exists(Path.Combine(root, "bars"))
+            ? Path.Combine(root, "bars")
+            : Path.Combine(root, "App_Data", "bars");
+        var replay = new ConfluenceReplay(new BarStore(replayBars),
             ConfluencePolicy.Default, measurement);
         var report = await replay.RunAsync(from, to, horizon, benchmark, ct);
         output.WriteLine($"측정 창 {from:yyyy-MM-dd}~{to:yyyy-MM-dd} · 날짜 {report.Days}일 · 심볼 " +
@@ -46,9 +49,37 @@ public static class ConfluenceMeasureCommand
         }
 
         output.Write(Table(report));
+        if (Directory.Exists(Path.Combine(root, "bars")))
+        {
+            output.Write(SymbolTable(report));
+            var split = from.AddDays(21);
+            if (split <= to)
+            {
+                var training = await replay.RunAsync(from, split.AddDays(-1), horizon, benchmark, ct);
+                var validation = await replay.RunAsync(split, to, horizon, benchmark, ct);
+                output.WriteLine($"워크포워드 학습 3주 {training.From:yyyy-MM-dd}~{training.To:yyyy-MM-dd} · " +
+                                 $"검증 1주 {validation.From:yyyy-MM-dd}~{validation.To:yyyy-MM-dd}");
+                output.WriteLine("검증 결과");
+                output.Write(Table(validation));
+            }
+            output.WriteLine("호가·체결 입력 없음: OBI/LR_DELTA는 unavailable이며 표본 0이다.");
+            return 0;
+        }
         var document = ConfluenceWeightsDocument.FromMeasurement(report, clock.GetUtcNow());
         output.WriteLine($"가중치 파일: {ConfluenceWeightsStore.Save(root, document)} ({document.WeightsVersion})");
         return 0;
+    }
+
+    public static string SymbolTable(ConfluenceMeasurementReport report)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("| 심볼 | 기법 | n | 적중률 | 평균수익(ATR) | 비용후(ATR) |");
+        builder.AppendLine("|---|---|---|---|---|---|");
+        foreach (var symbol in report.BySymbol.Keys.Order(StringComparer.OrdinalIgnoreCase))
+            foreach (var row in report.BySymbol[symbol])
+                builder.AppendLine(string.Create(CultureInfo.InvariantCulture,
+                    $"| {symbol} | {row.Technique} | {row.N} | {row.HitRate:0.0000} | {row.MeanReturnAtr:0.0000} | {row.MeanNetReturnAtr:0.0000} |"));
+        return builder.ToString();
     }
 
     /// <summary>PR 본문에 그대로 붙일 수 있는 마크다운 표.</summary>
