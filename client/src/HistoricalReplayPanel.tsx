@@ -21,7 +21,7 @@ export default function HistoricalReplayPanel() {
 
   useEffect(() => { load().catch((error) => setMessage(error.message)); }, []);
   useEffect(() => {
-    if (!run || (run.status !== "queued" && run.status !== "running")) return;
+    if (!run || (run.status !== "queued" && run.status !== "running" && run.status !== "canceling")) return;
     const timer = window.setInterval(() => load(`/api/replays/${run.id}`).catch((error) =>
       setMessage(error.message)), 1500);
     return () => window.clearInterval(timer);
@@ -38,7 +38,17 @@ export default function HistoricalReplayPanel() {
     setRun(body);
   }
 
-  const busy = run?.status === "queued" || run?.status === "running";
+  async function cancel() {
+    if (!run) return;
+    setMessage("");
+    const response = await fetch(`/api/replays/${run.id}/cancel`, { method: "POST" });
+    const body = await response.json();
+    if (!response.ok) { setMessage(body.message ?? "중지 요청에 실패했습니다."); return; }
+    setRun(body);
+  }
+
+  const busy = run?.status === "queued" || run?.status === "running" || run?.status === "canceling";
+  const cancelable = run?.status === "queued" || run?.status === "running";
   return <section className="replay-view">
     <div className="panel replay-control">
       <div className="panel-head"><h3>기간 지정</h3><span>현재 관심종목 전체 · QQQ 벤치마크</span></div>
@@ -46,6 +56,7 @@ export default function HistoricalReplayPanel() {
         <label>시작일<input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} /></label>
         <label>종료일<input type="date" value={to} min={from} max={iso(today)} onChange={(e) => setTo(e.target.value)} /></label>
         <button disabled={busy}>{busy ? "실행 중" : "과거 replay 실행"}</button>
+        {busy && <button type="button" disabled={!cancelable} onClick={cancel}>{cancelable ? "중지" : "중지 중"}</button>}
       </form>
       <p className="replay-notice">과거 replay 가상 결과이며 실제 체결 성과가 아닙니다. 운영 시뮬레이션 거래와 분리해 저장합니다.</p>
       {message && <p className="replay-error">{message}</p>}
