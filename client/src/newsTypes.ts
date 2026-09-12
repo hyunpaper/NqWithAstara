@@ -32,6 +32,7 @@ export type NewsSymbolScore = {
   score: number;
   count: number;
   latestAt: string | null;
+  weight?: number | null;
 };
 
 export type NewsSentimentResponse = {
@@ -106,7 +107,7 @@ const normalizeScore = (raw: unknown): NewsSymbolScore | null => {
   const symbol = str(r.symbol);
   const score = num(r.score);
   if (!symbol || score === null) return null;
-  return { symbol, score, count: num(r.count) ?? 0, latestAt: str(r.latestAt) };
+  return { symbol, score, count: num(r.count) ?? 0, latestAt: str(r.latestAt), weight: num(r.weight) };
 };
 
 export const normalizeSentimentResponse = (raw: unknown): NewsSentimentResponse => {

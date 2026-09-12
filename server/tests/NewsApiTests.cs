@@ -92,6 +92,19 @@ public sealed class NewsQueryServiceTests
     }
 
     [Fact]
+    public void SentimentExposesWeightAlongsideCount()
+    {
+        var (query, state, options) = Build();
+        state.Add(Record("1", NewsSentiments.Positive, 3, Now, "NVDA"), options.RecentCapacity);
+        state.Add(Record("2", NewsSentiments.Negative, 2, Now.AddMinutes(-30), "NVDA"), options.RecentCapacity);
+
+        var symbol = Assert.Single(Serialize(query.Sentiment()).GetProperty("symbols").EnumerateArray());
+
+        Assert.Equal(2, symbol.GetProperty("count").GetInt32());
+        Assert.Equal(1.5, symbol.GetProperty("weight").GetDouble(), 2);
+    }
+
+    [Fact]
     public void SentimentIncludesSymbolsOutsideTheWatchlist()
     {
         var (query, state, options) = Build();

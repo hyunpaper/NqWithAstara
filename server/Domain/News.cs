@@ -126,42 +126,52 @@ public sealed record NewsWatchSymbol(string Symbol, string Name);
 /// <summary>감쇠 점수 입력 한 건(#151 §4).</summary>
 public sealed record NewsSentimentInput(string Symbol, string Sentiment, int Strength, DateTimeOffset At);
 
-/// <summary>심볼별 감성 점수(#151 §4). 표시·관측용이며 진입 판정에 쓰지 않는다.</summary>
-public sealed record NewsSentimentScore(string Symbol, double Score, int Count, DateTimeOffset LatestAt);
+/// <summary>심볼별 감성 점수(#151 §4, #157). Weight는 최근성 가중치 합(Σw)이며 표시용이다.</summary>
+public sealed record NewsSentimentScore(string Symbol, double Score, int Count, DateTimeOffset LatestAt, double Weight);
 
 /// <summary>
-/// 반감기 감쇠 감성 점수(#151 §4): Σ sign×strength×0.5^(age/HalfLife)를 -5..+5로 클램프한다.
+/// 반감기 가중 평균 감성 점수(#157): Σ(sign×strength×w)/Σw, w = 0.5^(age/HalfLife).
+/// 유입 속도가 빨라도 항상 -5..+5 범위 안에 자연히 들어오므로 클램프가 필요 없다.
 /// </summary>
 public static class NewsSentimentDecay
 {
     public const double DefaultHalfLifeMinutes = 30;
-    public const double Bound = 5;
 
-    public static double Weight(int strength, string sentiment, TimeSpan age, double halfLifeMinutes)
+    /// <summary>기사 하나의 최근성 가중치(부호·강도와 무관). 미래 타임스탬프는 age 0으로 본다.</summary>
+    public static double DecayWeight(TimeSpan age, double halfLifeMinutes)
     {
-        var sign = NewsSentiments.Sign(sentiment);
-        if (sign == 0 || strength <= 0) return 0;
         var half = halfLifeMinutes > 0 ? halfLifeMinutes : DefaultHalfLifeMinutes;
         var minutes = Math.Max(0, age.TotalMinutes);
-        return sign * strength * Math.Pow(0.5, minutes / half);
+        return Math.Pow(0.5, minutes / half);
     }
 
-    public static double Clamp(double score) => Math.Clamp(score, -Bound, Bound);
+    sealed record Accumulator(double Numerator, double WeightSum, int Count, DateTimeOffset Latest);
 
     public static IReadOnlyList<NewsSentimentScore> Score(
         IEnumerable<NewsSentimentInput> inputs, DateTimeOffset now, double halfLifeMinutes)
     {
-        var totals = new Dictionary<string, (double Score, int Count, DateTimeOffset Latest)>(StringComparer.OrdinalIgnoreCase);
+        var totals = new Dictionary<string, Accumulator>(StringComparer.OrdinalIgnoreCase);
         foreach (var input in inputs)
         {
             if (string.IsNullOrWhiteSpace(input.Symbol)) continue;
-            var weight = Weight(input.Strength, input.Sentiment, now - input.At, halfLifeMinutes);
-            var current = totals.TryGetValue(input.Symbol, out var existing) ? existing : (0d, 0, DateTimeOffset.MinValue);
-            totals[input.Symbol] = (current.Item1 + weight, current.Item2 + 1,
-                input.At > current.Item3 ? input.At : current.Item3);
+            var weight = DecayWeight(now - input.At, halfLifeMinutes);
+            var sign = NewsSentiments.Sign(input.Sentiment);
+            var current = totals.TryGetValue(input.Symbol, out var existing) ? existing : new Accumulator(0, 0, 0, DateTimeOffset.MinValue);
+            totals[input.Symbol] = current with
+            {
+                Numerator = current.Numerator + sign * input.Strength * weight,
+                WeightSum = current.WeightSum + weight,
+                Count = current.Count + 1,
+                Latest = input.At > current.Latest ? input.At : current.Latest,
+            };
         }
         return totals
-            .Select(x => new NewsSentimentScore(x.Key, Round(Clamp(x.Value.Score)), x.Value.Count, x.Value.Latest))
+            .Select(x => new NewsSentimentScore(
+                x.Key,
+                Round(x.Value.WeightSum > 0 ? x.Value.Numerator / x.Value.WeightSum : 0),
+                x.Value.Count,
+                x.Value.Latest,
+                Math.Round(x.Value.WeightSum, 2, MidpointRounding.AwayFromZero)))
             .OrderByDescending(x => Math.Abs(x.Score)).ThenBy(x => x.Symbol, StringComparer.Ordinal)
             .ToArray();
     }

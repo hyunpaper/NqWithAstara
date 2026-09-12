@@ -15,6 +15,19 @@ export const scoreBadge = (score: number | null | undefined): Badge | null => {
   return { label: `중립 ${score >= 0 ? "+" : ""}${score.toFixed(1)}`, className: "news-badge neutral" };
 };
 
+/** 점수 배지 title(§#157). "N건 · 최근 M분" — count·latestAt이 없으면 건수/경과분을 생략한다. */
+export const scoreBadgeTitle = (
+  count: number | null | undefined,
+  latestAt: string | null | undefined,
+  nowMs: number = Date.now(),
+): string => {
+  if (count == null || count <= 0) return "뉴스 감성";
+  const at = latestAt ? new Date(latestAt).getTime() : NaN;
+  if (Number.isNaN(at)) return `${count}건`;
+  const minutes = Math.max(0, Math.floor((nowMs - at) / MINUTE));
+  return `${count}건 · 최근 ${minutes}분`;
+};
+
 /** 기사 개별 판정 배지(뉴스 패널). unclassified는 배지를 그리지 않는다. */
 export const sentimentBadge = (sentiment: NewsSentimentLabel): Badge | null => {
   switch (sentiment) {
