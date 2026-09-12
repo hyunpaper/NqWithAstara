@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Globalization;
 
 namespace Astra.Server.Domain.Structure;
@@ -320,9 +320,14 @@ public static class StructuralLifecycle
     /// 이슈 #107: active에서 이번 poll에 진입이 막힌 후보. READY로 남기되 가드 키·쿨다운 표식을 소비하지 않아
     /// 재시도가 가능하다. off/shadow는 진입 시도 자체가 없어 항상 비어 있고 "READY = 소비"가 그대로다(§8 파리티).
     /// </param>
+    /// <param name="consumeOnReady">
+    /// 이슈 #118: episode 소비 시점. off/shadow는 진입 경로가 없어 READY 성립이 곧 소비이고(true),
+    /// active는 실제 ENTERED만 소비한다(false). Domain은 모드 enum을 모르고 이 불리언만 받는다(§4).
+    /// </param>
     public static StructuralLatch Commit(StructuralLatch latch, DateTimeOffset? evaluatedBarStart,
         ImmutableArray<EntryCandidate> candidates, IEnumerable<string> retiredZoneIds,
-        string? eventSignature, string? observationId, IEnumerable<string>? entryBlockedEventIds = null)
+        string? eventSignature, string? observationId, IEnumerable<string>? entryBlockedEventIds = null,
+        bool consumeOnReady = false)
     {
         ArgumentNullException.ThrowIfNull(latch);
         ArgumentNullException.ThrowIfNull(retiredZoneIds);
@@ -343,7 +348,9 @@ public static class StructuralLifecycle
                 entryBlocked?.Contains(candidate.EventId) != true)
             {
                 guards = guards.Add(candidate.DuplicateGuardKey);
-                if (candidate.Disposition == CandidateDisposition.Entered && candidate.Kind is SetupKind.Pullback or SetupKind.Rebound &&
+                if ((candidate.Disposition == CandidateDisposition.Entered ||
+                        (consumeOnReady && candidate.Disposition == CandidateDisposition.Ready)) &&
+                    candidate.Kind is SetupKind.Pullback or SetupKind.Rebound &&
                     EpisodeConsumptionKey(candidate) is { } episodeKey)
                     guards = guards.Add(episodeKey);
                 // §10: 쿨다운은 BREAKOUT kind 안의 대표 후보 1개만 소비한다(다른 kind의 대표와 무관).
