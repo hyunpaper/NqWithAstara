@@ -341,9 +341,7 @@ public static class StructuralLifecycle
                 if (candidate.Disposition == CandidateDisposition.Entered && candidate.Kind is SetupKind.Pullback or SetupKind.Rebound &&
                     EpisodeConsumptionKey(candidate) is { } episodeKey)
                     guards = guards.Add(episodeKey);
-                // §10 돌파 쿨다운의 기준 시점은 "재발동"의 대상인 대표 발동이다. 같은 trigger에서 여러
-                // BREAKOUT 후보가 READY여도 §8의 실제 신규 거래 후보는 1개뿐이므로, 대표로 선택된 zone만
-                // cooldown을 소비한다. active에서 대표 후보가 ENTERED로 바뀐 뒤에도 같은 결론을 유지한다.
+                // §10: 쿨다운은 BREAKOUT kind 안의 대표 후보 1개만 소비한다(다른 kind의 대표와 무관).
                 if (candidate.Kind == SetupKind.Breakout &&
                     string.Equals(candidate.EventId, activatedBreakoutId, StringComparison.Ordinal))
                     guards = guards.Add(BreakoutCooldownKey(latch.Symbol, latch.SessionStart, candidate.ZoneId,
@@ -365,12 +363,8 @@ public static class StructuralLifecycle
 
     static EntryCandidate? ActivatedBreakout(ImmutableArray<EntryCandidate> candidates)
     {
-        var entered = SelectEnteredPreferred(candidates.Where(x => x.Kind == SetupKind.Breakout));
-        if (entered is not null) return entered;
-        var preferred = CandidateSelection.SelectPreferred(candidates);
-        return preferred?.Kind == SetupKind.Breakout
-            ? preferred
-            : null;
+        var breakouts = candidates.Where(x => x.Kind == SetupKind.Breakout).ToArray();
+        return SelectEnteredPreferred(breakouts) ?? CandidateSelection.SelectPreferred(breakouts);
     }
 
     static EntryCandidate? SelectEnteredPreferred(IEnumerable<EntryCandidate> candidates)
