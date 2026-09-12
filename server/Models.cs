@@ -39,7 +39,17 @@ public sealed record ExecutionProvenance(DateTimeOffset EntryBarStart, DateTimeO
 /// </summary>
 public sealed record FrozenStructureContext(string EntryEventId, FrozenPlanSnapshot PlanSnapshot,
     string TrendAtEntry, double? SignedTrendAtEntry, double? EntryQualityAtEntry,
-    DateTimeOffset AnalysisAsOf, DateTimeOffset? QuoteAt, string StructuralExitPolicyVersion);
+    DateTimeOffset AnalysisAsOf, DateTimeOffset? QuoteAt, string StructuralExitPolicyVersion,
+    // #111 additive: 재진입 코호트 태그. 기존 필드 순서·의미를 바꾸지 않으려고 마지막에 선택 필드로 붙인다.
+    // 이 계약 이전에 저장된 행은 null로 복원되며, 결측을 "첫 진입"으로 바꾸지 않는다(§16A).
+    ReentryTags? Reentry = null);
+
+/// <summary>
+/// #111 재진입 코호트 태그. 진입 시점에 직전 거래를 아는 계층이 채우는 관측값이며 진입·청산 판정에 쓰이지 않는다.
+/// 태그 자체가 null이면 미수집(이 계약 이전 데이터)이고, 첫 진입은 태그가 있고 모든 값이 null이다.
+/// </summary>
+public sealed record ReentryTags(int? SameSymbolWithinBars, string? PrevExitStatus, bool? SameTargetZone,
+    double? PrevEntryQuality, string? PrevTrend);
 
 /// <summary>
 /// 설계 §11 StructuralTradePlan의 동결 저장 형태. 무효화/목표 구간은 진입 시점 경계 스냅샷만 남긴다(§16B FrozenPlan).

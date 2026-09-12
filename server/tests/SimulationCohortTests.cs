@@ -51,7 +51,7 @@ public sealed class SimulationCohortTests
         Assert.Null(report.V5Stats.AvgPlannedNetR);
         Assert.Equal(0, report.V5Stats.PlannedNetRSamples);
         Assert.All(report.Groups, g => Assert.Empty(g.Cohorts));
-        Assert.Equal(8, report.Groups.Count);
+        Assert.Equal(11, report.Groups.Count);
     }
 
     /// <summary>v4-only: v4/legacy 거래는 구조 코호트에 들어가지 않는다(기존 ByVersion이 담당).</summary>
