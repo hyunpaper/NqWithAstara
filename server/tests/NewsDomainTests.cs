@@ -81,22 +81,46 @@ public sealed class NewsDomainTests
     }
 
     [Fact]
-    public void OneHalfLifeHalvesTheScore()
+    public void ASingleArticleKeepsItsRawStrengthRegardlessOfAge()
     {
+        // #157: 평균이므로 기사가 하나뿐이면 분자·분모의 w가 상쇄되어 나이와 무관하게 sign×strength다.
         var scores = NewsSentimentDecay.Score(
             [new NewsSentimentInput("NVDA", NewsSentiments.Negative, 4, Now.AddMinutes(-30))], Now, 30);
 
-        Assert.Equal(-2, Assert.Single(scores).Score, 3);
+        Assert.Equal(-4, Assert.Single(scores).Score, 3);
     }
 
     [Fact]
-    public void ScoreIsClampedToFive()
+    public void ManyNegativeArticlesAverageInsteadOfSaturating()
     {
-        var inputs = Enumerable.Range(0, 10)
-            .Select(_ => new NewsSentimentInput("NVDA", NewsSentiments.Positive, 5, Now))
+        // #157: 강도 2 negative 15건이 같은 시각에 쌓여도 포화(-5)되지 않고 평균 -2로 수렴한다.
+        var inputs = Enumerable.Range(0, 15)
+            .Select(_ => new NewsSentimentInput("NVDA", NewsSentiments.Negative, 2, Now))
             .ToArray();
 
-        Assert.Equal(5, Assert.Single(NewsSentimentDecay.Score(inputs, Now, 30)).Score, 3);
+        Assert.Equal(-2, Assert.Single(NewsSentimentDecay.Score(inputs, Now, 30)).Score, 3);
+    }
+
+    [Fact]
+    public void EqualPositiveAndNegativeArticlesAverageNearZero()
+    {
+        var inputs = Enumerable.Range(0, 5).Select(_ => new NewsSentimentInput("NVDA", NewsSentiments.Positive, 3, Now))
+            .Concat(Enumerable.Range(0, 5).Select(_ => new NewsSentimentInput("NVDA", NewsSentiments.Negative, 3, Now)))
+            .ToArray();
+
+        Assert.Equal(0, Assert.Single(NewsSentimentDecay.Score(inputs, Now, 30)).Score, 3);
+    }
+
+    [Fact]
+    public void RecentStrongArticleOutweighsOlderWeakArticles()
+    {
+        var inputs = new List<NewsSentimentInput> { new("NVDA", NewsSentiments.Negative, 5, Now) };
+        inputs.AddRange(Enumerable.Range(0, 5)
+            .Select(_ => new NewsSentimentInput("NVDA", NewsSentiments.Positive, 1, Now.AddMinutes(-120))));
+
+        var score = Assert.Single(NewsSentimentDecay.Score(inputs, Now, 30)).Score;
+
+        Assert.True(score < -3, $"최근 강한 기사 쪽으로 기울어야 하는데 {score}");
     }
 
     [Fact]
@@ -106,6 +130,16 @@ public sealed class NewsDomainTests
             [new NewsSentimentInput("NVDA", NewsSentiments.Neutral, 5, Now)], Now, 30);
 
         Assert.Equal(0, Assert.Single(scores).Score, 3);
+    }
+
+    [Fact]
+    public void AllNeutralArticlesAverageToZero()
+    {
+        var inputs = Enumerable.Range(0, 6)
+            .Select(i => new NewsSentimentInput("NVDA", NewsSentiments.Neutral, i % 5 + 1, Now.AddMinutes(-i * 10)))
+            .ToArray();
+
+        Assert.Equal(0, Assert.Single(NewsSentimentDecay.Score(inputs, Now, 30)).Score, 3);
     }
 
     [Fact]
@@ -120,10 +154,15 @@ public sealed class NewsDomainTests
     [Fact]
     public void FutureTimestampIsNotAmplified()
     {
+        // #157: 미래 타임스탬프가 age<0으로 취급돼 w>1이 되면 평균이 그쪽으로 쏠린다.
+        // age가 0으로 클램프되면 두 반대 부호 기사의 가중치가 같아 평균이 0이다.
         var scores = NewsSentimentDecay.Score(
-            [new NewsSentimentInput("NVDA", NewsSentiments.Positive, 2, Now.AddMinutes(30))], Now, 30);
+            [
+                new NewsSentimentInput("NVDA", NewsSentiments.Positive, 1, Now),
+                new NewsSentimentInput("NVDA", NewsSentiments.Negative, 1, Now.AddMinutes(30)),
+            ], Now, 30);
 
-        Assert.Equal(2, Assert.Single(scores).Score, 3);
+        Assert.Equal(0, Assert.Single(scores).Score, 3);
     }
 
     [Fact]
