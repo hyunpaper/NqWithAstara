@@ -42,7 +42,8 @@ public sealed record NewsRecord(
     string Reason,
     string Model,
     long LatencyMs,
-    DateTimeOffset ClassifiedAt);
+    DateTimeOffset ClassifiedAt,
+    string InputKind = NewsInputKinds.Body);
 
 /// <summary>health·조회가 함께 보는 뉴스 런타임 상태(#151 §6). 스레드 안전하다.</summary>
 public sealed class NewsRuntimeState

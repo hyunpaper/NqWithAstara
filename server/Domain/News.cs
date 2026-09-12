@@ -28,14 +28,29 @@ public static class NewsSymbols
     public const string Market = "MARKET";
 }
 
-/// <summary>매칭·분류 입력으로 쓰는 기사 최소 형태(#151).</summary>
+/// <summary>매칭·분류 입력으로 쓰는 기사 최소 형태(#151). Headline은 피드가 붙인 AI 헤드라인이다.</summary>
 public sealed record NewsArticle(
     string Id,
     string Title,
     string Summary,
     string Source,
     DateTimeOffset CreatedAt,
-    IReadOnlyList<string> Tickers);
+    IReadOnlyList<string> Tickers,
+    string Headline = "",
+    bool HeadlineOnly = false);
+
+/// <summary>분류 입력으로 무엇을 썼는지(#151). 판정 근거를 사후에 되짚기 위해 레코드에 남긴다.</summary>
+public static class NewsInputKinds
+{
+    /// <summary>상세의 AI 요약(`translations.translated.ko_KR.summary`).</summary>
+    public const string Summary = "summary";
+
+    /// <summary>상세 본문 블록 또는 목록 요약.</summary>
+    public const string Body = "body";
+
+    /// <summary>제목(과 AI 헤드라인)만 있는 속보.</summary>
+    public const string Headline = "headline";
+}
 
 /// <summary>관심종목 매칭 결과(#151 §2). 매칭 여부는 저장이 아니라 큐 우선순위를 정한다.</summary>
 public sealed record NewsMatch(IReadOnlyList<string> Symbols)
@@ -63,7 +78,7 @@ public static class NewsMatcher
         }
         if (tagged.Count > 0) return new NewsMatch(Distinct(tagged));
 
-        var text = article.Title + "\n" + article.Summary;
+        var text = article.Title + "\n" + article.Headline + "\n" + article.Summary;
         if (string.IsNullOrWhiteSpace(text)) return new NewsMatch([]);
 
         var found = new List<string>();

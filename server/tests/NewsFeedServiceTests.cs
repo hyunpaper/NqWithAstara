@@ -196,15 +196,63 @@ public sealed class NewsFeedServiceTests
         harness.Page(1, Item("100", "기준"));
         await harness.PollAsync();
 
-        harness.Feed.Details["101"] = "엔비디아 본문";
-        harness.Feed.Details["102"] = "포드 본문";
-        harness.Feed.Details["103"] = "인텔 본문";
+        harness.Feed.Details["101"] = new NewsDetail("", "엔비디아 본문");
+        harness.Feed.Details["102"] = new NewsDetail("", "포드 본문");
+        harness.Feed.Details["103"] = new NewsDetail("", "인텔 본문");
         harness.Page(1, Item("104", "유가 급등"), Item("103", "$INTC 감산"), Item("102", "$F 리콜"), Item("101", "$NVDA 신고가"), Item("100", "기준"));
         await harness.PollAsync();
 
         Assert.Equal(["101", "102"], harness.Feed.DetailCalls);
         Assert.Equal("엔비디아 본문", harness.Classifier.Requests[0].Body);
-        Assert.Equal("", harness.Classifier.Requests[2].Body);
+        Assert.Equal("목록 요약", harness.Classifier.Requests[2].Body);
+    }
+
+    [Fact]
+    public async Task AiSummaryIsPreferredOverTheDetailBody()
+    {
+        var harness = new Harness(new WatchItem("NVDA", "NVIDIA"));
+        harness.Page(1, Item("100", "기준"));
+        await harness.PollAsync();
+
+        harness.Feed.Details["101"] = new NewsDetail("- 요약 첫 줄\n- 요약 둘째 줄", "긴 본문");
+        harness.Page(1, Item("101", "$NVDA 신고가"), Item("100", "기준"));
+        await harness.PollAsync();
+
+        Assert.Equal("- 요약 첫 줄\n- 요약 둘째 줄", Assert.Single(harness.Classifier.Requests).Body);
+        Assert.Equal(NewsInputKinds.Summary, Assert.Single(harness.Saved()).InputKind);
+    }
+
+    [Fact]
+    public async Task EmptyAiSummaryFallsBackToTheDetailBody()
+    {
+        var harness = new Harness(new WatchItem("NVDA", "NVIDIA"));
+        harness.Page(1, Item("100", "기준"));
+        await harness.PollAsync();
+
+        harness.Feed.Details["101"] = new NewsDetail("", "긴 본문");
+        harness.Page(1, Item("101", "$NVDA 신고가"), Item("100", "기준"));
+        await harness.PollAsync();
+
+        Assert.Equal("긴 본문", Assert.Single(harness.Classifier.Requests).Body);
+        Assert.Equal(NewsInputKinds.Body, Assert.Single(harness.Saved()).InputKind);
+    }
+
+    [Fact]
+    public async Task HeadlineOnlyArticleIsClassifiedFromTheTitleAndAiHeadline()
+    {
+        var harness = new Harness();
+        harness.Page(1, Item("100", "기준"));
+        await harness.PollAsync();
+
+        harness.Page(1,
+            new NewsFeedItem("101", "우크라이나, 정유시설 타격", "", "financial-juice", Start, [], "AI 헤드라인", true),
+            Item("100", "기준"));
+        await harness.PollAsync();
+
+        var request = Assert.Single(harness.Classifier.Requests);
+        Assert.Equal("우크라이나, 정유시설 타격\nAI 헤드라인", request.Title);
+        Assert.Equal("", request.Body);
+        Assert.Equal(NewsInputKinds.Headline, Assert.Single(harness.Saved()).InputKind);
     }
 
     [Fact]

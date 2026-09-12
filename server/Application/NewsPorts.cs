@@ -2,25 +2,30 @@ using Astra.Server.Domain.News;
 
 namespace Astra.Server.Application;
 
-/// <summary>피드 목록 한 건(#151 §1). 상세 본문은 매칭 기사에 한해 따로 받는다.</summary>
+/// <summary>피드 목록 한 건(#151 §1). 상세는 매칭 기사에 한해 따로 받는다.</summary>
 public sealed record NewsFeedItem(
     string Id,
     string Title,
     string Summary,
     string Source,
     DateTimeOffset CreatedAt,
-    IReadOnlyList<string> Tickers);
+    IReadOnlyList<string> Tickers,
+    string Headline = "",
+    bool HeadlineOnly = false);
+
+/// <summary>기사 상세(#151). AI 요약이 있으면 본문 대신 그것을 분류 입력으로 쓴다.</summary>
+public sealed record NewsDetail(string Summary, string Body);
 
 /// <summary>외부 뉴스 피드 포트(#151 §1). 구현은 Infrastructure에만 둔다.</summary>
 public interface INewsFeed
 {
     Task<IReadOnlyList<NewsFeedItem>> ListAsync(int page, CancellationToken ct);
 
-    /// <summary>기사 본문. 없거나 실패하면 null이다.</summary>
-    Task<string?> DetailAsync(string id, CancellationToken ct);
+    /// <summary>기사 상세. 없거나 실패하면 null이다.</summary>
+    Task<NewsDetail?> DetailAsync(string id, CancellationToken ct);
 }
 
-/// <summary>분류 요청(#151 §3). Body는 상세 본문 또는 목록 요약이다.</summary>
+/// <summary>분류 요청(#151 §3). Body는 AI 요약·상세 본문·목록 요약 중 하나다.</summary>
 public sealed record NewsClassificationRequest(string Title, string Body, IReadOnlyList<string> Tickers);
 
 /// <summary>

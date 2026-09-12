@@ -120,7 +120,8 @@ public sealed class NewsFeedService(
         state.SeenArticles(fresh.Count);
         foreach (var item in fresh.OrderBy(x => ParseId(x.Id)))
         {
-            var article = new NewsArticle(item.Id, item.Title, item.Summary, item.Source, item.CreatedAt, item.Tickers);
+            var article = new NewsArticle(item.Id, item.Title, item.Summary, item.Source, item.CreatedAt,
+                item.Tickers, item.Headline, item.HeadlineOnly);
             Enqueue(article, NewsMatcher.Match(article, watchlist).Symbols);
         }
         state.QueueDepth(QueueDepth);
@@ -179,24 +180,36 @@ public sealed class NewsFeedService(
             if (entry is null) break;
 
             var body = entry.Article.Summary;
-            // 상세 본문은 관심종목 매칭 기사에만, 남은 피드 요청 예산 안에서 받는다(#151 §1).
+            var inputKind = NewsInputKinds.Body;
+            // 상세는 관심종목 매칭 기사에만, 남은 피드 요청 예산 안에서 받는다(#151 §1).
             if (entry.MatchedSymbols.Count > 0 && feedBudget > 0)
             {
                 feedBudget--;
                 try
                 {
                     var detail = await feed.DetailAsync(entry.Article.Id, ct);
-                    if (!string.IsNullOrWhiteSpace(detail)) body = detail;
+                    // 사용자 요구: AI 요약이 있으면 본문 대신 요약만 쓴다.
+                    if (!string.IsNullOrWhiteSpace(detail?.Summary)) { body = detail!.Summary; inputKind = NewsInputKinds.Summary; }
+                    else if (!string.IsNullOrWhiteSpace(detail?.Body)) body = detail!.Body;
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
                 catch (Exception exception) { diagnostics.PollFailed("news-detail", exception); }
             }
+            if (inputKind == NewsInputKinds.Body && (entry.Article.HeadlineOnly || string.IsNullOrWhiteSpace(body)))
+            {
+                inputKind = NewsInputKinds.Headline;
+                body = "";
+            }
+
+            var title = string.IsNullOrWhiteSpace(entry.Article.Headline)
+                ? entry.Article.Title
+                : entry.Article.Title + "\n" + entry.Article.Headline;
 
             NewsClassificationResult result;
             try
             {
                 result = await classifier.ClassifyAsync(
-                    new NewsClassificationRequest(entry.Article.Title, body, entry.Article.Tickers), ct);
+                    new NewsClassificationRequest(title, body, entry.Article.Tickers), ct);
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
@@ -218,12 +231,12 @@ public sealed class NewsFeedService(
 
             state.Ollama(true);
             _classifications.Enqueue(clock.GetUtcNow());
-            await SaveAsync(Compose(entry, result), ct);
+            await SaveAsync(Compose(entry, result, inputKind), ct);
         }
         state.QueueDepth(QueueDepth);
     }
 
-    NewsRecord Compose(QueuedArticle entry, NewsClassificationResult result)
+    NewsRecord Compose(QueuedArticle entry, NewsClassificationResult result, string inputKind)
     {
         var classification = result.Classification;
         // 피드 `tickers` 태그가 있으면 그것을 심볼로 쓰고, 없을 때만 LLM 판정을 쓴다.
@@ -245,7 +258,8 @@ public sealed class NewsFeedService(
             classification?.Reason ?? "",
             result.Model,
             result.LatencyMs,
-            clock.GetUtcNow());
+            clock.GetUtcNow(),
+            inputKind);
     }
 
     async Task SaveAsync(NewsRecord record, CancellationToken ct)

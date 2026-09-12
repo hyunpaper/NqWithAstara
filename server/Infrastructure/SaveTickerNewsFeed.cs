@@ -40,21 +40,27 @@ public sealed class SaveTickerNewsFeed : INewsFeed
                 x.Content ?? "",
                 x.Source ?? "",
                 x.CreatedAt ?? DateTimeOffset.MinValue,
-                x.Tickers?.Where(t => !string.IsNullOrWhiteSpace(t.Symbol)).Select(t => t.Symbol!.ToUpperInvariant()).Distinct(StringComparer.Ordinal).ToArray() ?? []))
+                x.Tickers?.Where(t => !string.IsNullOrWhiteSpace(t.Symbol)).Select(t => t.Symbol!.ToUpperInvariant()).Distinct(StringComparer.Ordinal).ToArray() ?? [],
+                x.GroupSummary?.IsAiHeadline == true ? x.GroupSummary.Headline ?? "" : "",
+                x.IsHeadlineOnly ?? false))
             .ToArray();
     }
 
-    public async Task<string?> DetailAsync(string id, CancellationToken ct)
+    public async Task<NewsDetail?> DetailAsync(string id, CancellationToken ct)
     {
         using var response = await SendAsync($"api/news/detail?id={Uri.EscapeDataString(id)}", ct);
         var payload = await response.Content.ReadFromJsonAsync<DetailPayload>(Json, ct);
-        if (payload?.Content is null) return null;
-        var body = string.Join("\n", payload.Content
-            .Select(x => x.Content)
-            .Where(x => !string.IsNullOrWhiteSpace(x)));
-        if (body.Length == 0) return null;
-        return body.Length > DetailBodyLimit ? body[..DetailBodyLimit] : body;
+        if (payload is null) return null;
+        var summary = Join(payload.Translations?.Translated?.Korean?.Summary);
+        var body = Join(payload.Content);
+        if (body.Length > DetailBodyLimit) body = body[..DetailBodyLimit];
+        return summary.Length == 0 && body.Length == 0 ? null : new NewsDetail(summary, body);
     }
+
+    static string Join(List<ContentBlock>? blocks)
+        => blocks is null
+            ? ""
+            : string.Join("\n", blocks.Select(x => x.Content).Where(x => !string.IsNullOrWhiteSpace(x)));
 
     async Task<HttpResponseMessage> SendAsync(string path, CancellationToken ct)
     {
@@ -75,11 +81,23 @@ public sealed class SaveTickerNewsFeed : INewsFeed
         string? Content,
         string? Source,
         [property: JsonPropertyName("created_at")] DateTimeOffset? CreatedAt,
-        List<TickerTag>? Tickers);
+        List<TickerTag>? Tickers,
+        [property: JsonPropertyName("group_summary")] GroupSummary? GroupSummary,
+        [property: JsonPropertyName("is_headline_only")] bool? IsHeadlineOnly);
+
+    sealed record GroupSummary(
+        string? Headline,
+        [property: JsonPropertyName("is_ai_headline")] bool? IsAiHeadline);
 
     sealed record TickerTag(string? Symbol, string? Name);
 
-    sealed record DetailPayload(string? Id, string? Title, List<ContentBlock>? Content);
+    sealed record DetailPayload(string? Id, string? Title, List<ContentBlock>? Content, Translations? Translations);
+
+    sealed record Translations(Translated? Translated);
+
+    sealed record Translated([property: JsonPropertyName("ko_KR")] Localized? Korean);
+
+    sealed record Localized(List<ContentBlock>? Summary);
 
     sealed record ContentBlock(string? Type, string? Content);
 }

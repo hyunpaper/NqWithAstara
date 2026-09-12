@@ -21,7 +21,7 @@ sealed class NewsDiagnostics : IMonitorDiagnostics
 sealed class FakeNewsFeed : INewsFeed
 {
     public Dictionary<int, List<NewsFeedItem>> Pages { get; } = [];
-    public Dictionary<string, string> Details { get; } = new(StringComparer.Ordinal);
+    public Dictionary<string, NewsDetail> Details { get; } = new(StringComparer.Ordinal);
     public List<int> ListCalls { get; } = [];
     public List<string> DetailCalls { get; } = [];
     public Exception? ListError { get; set; }
@@ -34,10 +34,10 @@ sealed class FakeNewsFeed : INewsFeed
             Pages.TryGetValue(page, out var items) ? items.ToArray() : []);
     }
 
-    public Task<string?> DetailAsync(string id, CancellationToken ct)
+    public Task<NewsDetail?> DetailAsync(string id, CancellationToken ct)
     {
         DetailCalls.Add(id);
-        return Task.FromResult(Details.TryGetValue(id, out var body) ? body : null);
+        return Task.FromResult(Details.TryGetValue(id, out var detail) ? detail : null);
     }
 }
 
@@ -115,7 +115,7 @@ sealed class NewsLocalStore : ILocalStore
 static class NewsBuilder
 {
     public static NewsFeedItem Item(string id, string title, DateTimeOffset at, params string[] tickers)
-        => new(id, title, "", "financial-juice", at, tickers);
+        => new(id, title, "목록 요약", "financial-juice", at, tickers);
 
     public static NewsFeedService Service(
         NewsOptions options, FakeNewsFeed feed, FakeNewsClassifier classifier, MemoryNewsStore store,

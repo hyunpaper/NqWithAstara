@@ -71,6 +71,7 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         model = record.Model,
         latencyMs = record.LatencyMs,
         classifiedAt = record.ClassifiedAt,
+        inputKind = record.InputKind,
     };
 
     static object Project(NewsSentimentScore score) => new
