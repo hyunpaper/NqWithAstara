@@ -240,6 +240,43 @@ public sealed class StructureD3LifecycleTests
         Assert.Contains("zone-x", latch.RetiredZoneIds);
     }
 
+    [Fact]
+    public void AnEntryBlockedReadyKeepsItsGuardKeyWhileTheOthersAreStillConsumed()
+    {
+        var computed = Detect().Candidates;
+        var blocked = computed.First(x => x.Disposition == CandidateDisposition.Ready);
+        var other = blocked with
+        {
+            EventId = blocked.EventId + "|other",
+            DuplicateGuardKey = blocked.DuplicateGuardKey + "|other"
+        };
+
+        var latch = StructuralLifecycle.Commit(Fresh(), Fx.At(TriggerMinute), [blocked, other], [], "sig", "obs",
+            [blocked.EventId]);
+
+        Assert.DoesNotContain(blocked.DuplicateGuardKey, latch.ConsumedGuardKeys);
+        Assert.Contains(other.DuplicateGuardKey, latch.ConsumedGuardKeys);
+
+        var retried = StructuralLifecycle.ApplyLatch(latch with { Seeded = true }, [blocked],
+            allowNewTrigger: true, P);
+        Assert.Equal(CandidateDisposition.Ready, Assert.Single(retried).Disposition);
+    }
+
+    [Fact]
+    public void AnEnteredCandidateIsStillConsumedAndRejectsAnotherReadyForTheSameTrigger()
+    {
+        var ready = Detect().Candidates.First(x => x.Kind == SetupKind.Pullback &&
+                                                   x.Disposition == CandidateDisposition.Ready);
+        var entered = ready with { Disposition = CandidateDisposition.Entered };
+        var latch = StructuralLifecycle.Commit(Fresh(), Fx.At(TriggerMinute), [entered], [], "sig", "obs", []);
+
+        Assert.Contains(entered.DuplicateGuardKey, latch.ConsumedGuardKeys);
+        var replay = Assert.Single(StructuralLifecycle.ApplyLatch(latch with { Seeded = true },
+            [ready with { EventId = ready.EventId + "|same-trigger" }], allowNewTrigger: true, P));
+        Assert.Equal(CandidateDisposition.Rejected, replay.Disposition);
+        Assert.Contains(StructuralLifecycle.CodeDuplicateGuard, replay.RejectionCodes);
+    }
+
     // ── 실시간 유지 조건 · 만료 ──
 
     /// <summary>표시 유지 중에도 live quote가 구조 손절을 깨면 즉시 INVALIDATED다. 재상승으로 되살리지 않는다(§10).</summary>
