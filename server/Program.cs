@@ -35,7 +35,14 @@ builder.Services.AddSingleton<FeeRateCheckService>();
 // 이슈 #131: 실계좌 체결(읽기 전용) 수집과 v5 대조 보고서. 주문 생성·정정·취소는 호출하지 않는다.
 builder.Services.AddSingleton<IRealFillStore, RealFillStore>();
 builder.Services.AddSingleton<RealFillsService>(); builder.Services.AddSingleton<RealVsV5QueryService>();
+// 이슈 #151: 뉴스 감성(선택 기능). News:Enabled 기본 false이며 false면 피드·Ollama를 호출하지 않는다.
+builder.Services.AddSingleton(_ => { var news = new NewsOptions(); builder.Configuration.GetSection("News").Bind(news); return news; });
+builder.Services.AddSingleton<INewsStore, NewsStore>();
+builder.Services.AddSingleton<INewsFeed>(x => new SaveTickerNewsFeed(x.GetRequiredService<NewsOptions>()));
+builder.Services.AddSingleton<INewsClassifier>(x => new OllamaNewsClassifier(x.GetRequiredService<NewsOptions>()));
+builder.Services.AddSingleton<NewsRuntimeState>(); builder.Services.AddSingleton<NewsFeedService>(); builder.Services.AddSingleton<NewsQueryService>();
 builder.Services.AddHostedService(x => x.GetRequiredService<MonitorService>());
+builder.Services.AddHostedService<NewsService>();
 var app = builder.Build();
 var clientRoot = Environment.GetEnvironmentVariable("ASTRA_CLIENT_ROOT") ?? Path.Combine(app.Environment.ContentRootPath, "..", "client"); var clientDist = Path.GetFullPath(Path.Combine(clientRoot, "dist"));
 if (Directory.Exists(clientDist)) { var files = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(clientDist); app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = files }); app.UseStaticFiles(new StaticFileOptions { FileProvider = files }); }
