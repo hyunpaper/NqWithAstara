@@ -273,8 +273,9 @@ public sealed class StructureAnalysisService(
                     liveWarnings = StructureObservationWriter.StorageWarnings(liveWrite);
 
                     // 저장 성공 뒤에만 래치를 올린다(§12.6). 종결된 후보의 tombstone이 여기서 남는다.
+                    // #107: 이 경로는 진입을 시도하지 않으므로 직전 full 평가에서 막힌 후보도 그대로 소비하지 않는다.
                     _latches[request.Symbol] = StructuralLifecycle.Commit(latch, lastBarStart, refreshed,
-                        latch.RetiredZoneIds, liveSignature, liveRecord.ObservationId);
+                        latch.RetiredZoneIds, liveSignature, liveRecord.ObservationId, cached.EntryBlocked);
                     await PersistAsync(ct);
                 }
 
@@ -372,12 +373,12 @@ public sealed class StructureAnalysisService(
             {
                 candidates = activeEntry.Candidates;
                 if (activeEntry.Note is { } entryNote) notes.Add(entryNote);
+                candidateDtos = candidates.Select(StructureViewMapper.Candidate).ToArray();
                 if (activeEntry.Entered)
                 {
                     preferred = CandidateSelection.SelectPreferred(candidates)?.EventId;
                     signature = StructuralLifecycle.EventSignature(candidates, preferred);
                     full = !string.Equals(signature, latch.LastEventSignature, StringComparison.Ordinal);
-                    candidateDtos = candidates.Select(StructureViewMapper.Candidate).ToArray();
                     summary = CandidateSelection.Summarize(candidates).ToString().ToUpperInvariant();
                 }
                 observationId = StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash, signature);
@@ -411,14 +412,17 @@ public sealed class StructureAnalysisService(
                 zoneDtos, candidateDtos, trendDto, qualityDto, summary);
 
             // watermark는 신규 트리거 허용 여부와 무관하게 평가한 최신 완료 봉까지 전진한다(§16B seeding).
+            var entryBlocked = activeEntry?.BlockedEventId is { } blockedId
+                ? ImmutableArray.Create(blockedId)
+                : ImmutableArray<string>.Empty;
             var committed = StructuralLifecycle.Commit(latch, lastBarStart, candidates,
-                displayLayer.RetiredZoneIds, signature, observationId);
+                displayLayer.RetiredZoneIds, signature, observationId, entryBlocked);
             _latches[request.Symbol] = committed;
             await PersistAsync(ct);
 
             _cache[request.Symbol] = new CacheEntry(snapshot.SessionStart, snapshot.AnalysisAsOf, structureCutoff,
                 PolicyHash, request.Generation, displayLayer, candidateLayer, candidates, trend, quality,
-                notes.ToImmutableArray(), warnings.ToImmutableArray(), view);
+                notes.ToImmutableArray(), warnings.ToImmutableArray(), view, entryBlocked);
             _published[request.Symbol] = view;
         }
     }
@@ -437,16 +441,18 @@ public sealed class StructureAnalysisService(
         var chosen = candidates.FirstOrDefault(x => x.EventId == preferredId);
         if (chosen is null || chosen.Disposition != CandidateDisposition.Ready || chosen.Plan is null) return null;
 
-        // #106: 청산이 발생한 poll의 틱으로는 새로 진입하지 않는다. 후보는 READY로 남고 다음 poll이 재시도한다.
+        // #106: 청산이 발생한 poll의 틱으로는 새로 진입하지 않는다. 후보는 READY로 남고 가드 키·쿨다운 표식은
+        // 소비하지 않는다(#107 — 같은 봉 재시도는 watermark로 막히고 다음 트리거 봉부터 가능하다).
         if (request.ExitedThisPoll)
-            return new ActiveEntryResult(candidates, false, NoteEntrySuppressedBySamePollExit);
+            return Blocked(candidates, chosen, NoteEntrySuppressedBySamePollExit);
 
-        // #62 §12.5: 후보 판정 이후 흘러간 시간을 gate 안에서 다시 본다. 후보는 READY로 남고 다음 poll이 재시도한다.
+        // #62 §12.5: 후보 판정 이후 흘러간 시간을 gate 안에서 다시 본다. 후보는 READY로 남고 가드 키·쿨다운 표식은
+        // 소비하지 않는다(#107 — 같은 봉 재시도는 watermark로 막히고 다음 트리거 봉부터 가능하다).
         if (!Current(request, snapshot, now, newEntry: true))
-            return new ActiveEntryResult(candidates, false,
+            return Blocked(candidates, chosen,
                 $"{NoteEntryGateRecheck}:{NewEntryBlocker(snapshot, now) ?? "GENERATION_OR_SESSION"}");
 
-        if (tradeEntries is null) return new ActiveEntryResult(candidates, false, NoteEntryUnavailable);
+        if (tradeEntries is null) return Blocked(candidates, chosen, NoteEntryUnavailable);
 
         // §10: 체결 시 FrozenPlan을 저장한다. 진입 이후 이 스냅샷은 다시 만들지 않는다.
         var context = Domain.StructuralSimulation.Freeze(chosen.Plan, chosen.EventId,
@@ -474,12 +480,31 @@ public sealed class StructureAnalysisService(
                     true, NoteEntryCommitted),
             // 한 종목 OPEN 하나 제한은 버전 공통이다(§18). 후보는 READY로 남고 새 거래는 만들지 않는다.
             Domain.StructuralEntryOutcome.BlockedByOpenTrade =>
-                new ActiveEntryResult(candidates, false, NoteEntryBlockedByOpenTrade),
-            _ => new ActiveEntryResult(candidates, false, NoteEntryPlanInvalid)
+                Blocked(candidates, chosen, NoteEntryBlockedByOpenTrade),
+            _ => Blocked(candidates, chosen, NoteEntryPlanInvalid)
         };
     }
 
-    sealed record ActiveEntryResult(ImmutableArray<EntryCandidate> Candidates, bool Entered, string? Note);
+    /// <summary>
+    /// #107: 진입이 막힌 preferred는 READY로 남기되 사유를 note가 아닌 후보의 RejectionCodes에도 남기고,
+    /// 이 poll의 가드 키 소비 대상에서 제외해 같은 트리거의 재시도를 살려 둔다.
+    /// </summary>
+    static ActiveEntryResult Blocked(ImmutableArray<EntryCandidate> candidates, EntryCandidate chosen, string code) =>
+        new(candidates
+                .Select(x => x.EventId != chosen.EventId
+                    ? x
+                    : x with
+                    {
+                        RejectionCodes = x.RejectionCodes.Contains(code, StringComparer.Ordinal)
+                            ? x.RejectionCodes
+                            : x.RejectionCodes.Append(code).OrderBy(c => c, StringComparer.Ordinal)
+                                .ToImmutableArray()
+                    })
+                .ToImmutableArray(),
+            false, code, chosen.EventId);
+
+    sealed record ActiveEntryResult(ImmutableArray<EntryCandidate> Candidates, bool Entered, string? Note,
+        string? BlockedEventId = null);
 
     /// <summary>
     /// 이슈 #26: commit 지점의 후보·진입 결과에서 알림 초안을 파생한다. 새 가격·점수를 만들지 않고
@@ -798,7 +823,7 @@ public sealed class StructureAnalysisService(
         string PolicyHash, long Generation, StructureLayer Layer, StructureLayer CandidateLayer,
         ImmutableArray<EntryCandidate> Candidates,
         TrendAssessment? Trend, DataQuality Quality, ImmutableArray<string> Notes,
-        ImmutableArray<string> Warnings, StructureAnalysisView View)
+        ImmutableArray<string> Warnings, StructureAnalysisView View, ImmutableArray<string> EntryBlocked)
     {
         public ImmutableArray<PriceZone> Zones => Layer.Zones;
         public ImmutableArray<TouchEpisode> Episodes => Layer.Episodes;

@@ -291,6 +291,26 @@ public sealed class StructureBreakoutCooldownTests
         Assert.DoesNotContain(StructuralLifecycle.CodeBreakoutCooldown, Breakout(later).RejectionCodes);
     }
 
+    [Fact]
+    public void AnEntryBlockedBreakoutArmsNeitherTheCooldownNorTheDuplicateGuard()
+    {
+        var candidates = Detect(30);
+        var breakout = Breakout(candidates);
+        var latch = StructuralLifecycle.Commit(Seeded(), Fx.At(30), candidates, [], "sig", "obs",
+            [breakout.EventId]);
+
+        Assert.DoesNotContain(CooldownKey(breakout), latch.ConsumedGuardKeys);
+        Assert.DoesNotContain(breakout.DuplicateGuardKey, latch.ConsumedGuardKeys);
+
+        var repeat = StructuralLifecycle.ApplyLatch(latch, Detect(45), allowNewTrigger: true, P, Zones());
+        Assert.Equal(CandidateDisposition.Ready, Breakout(repeat).Disposition);
+        Assert.DoesNotContain(StructuralLifecycle.CodeBreakoutCooldown, Breakout(repeat).RejectionCodes);
+
+        var same = StructuralLifecycle.ApplyLatch(latch, candidates, allowNewTrigger: true, P, Zones());
+        Assert.Equal(CandidateDisposition.Ready, Breakout(same).Disposition);
+        Assert.DoesNotContain(StructuralLifecycle.CodeDuplicateGuard, Breakout(same).RejectionCodes);
+    }
+
     /// <summary>PULLBACK READY는 중복 방지 키만 남기고 돌파 쿨다운 표식을 남기지 않는다.</summary>
     [Fact]
     public void CommitDoesNotRecordACooldownForNonBreakoutCandidates()
