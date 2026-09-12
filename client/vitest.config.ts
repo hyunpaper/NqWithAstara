@@ -12,7 +12,7 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       // json-summary는 .github/scripts/coverage-summary.mjs가 Step Summary 표로 파싱한다.
-      reporter: ["text", "json-summary", "lcov"],
+      reporter: ["json-summary", "lcov"],
       reportsDirectory: "coverage",
       // 기준선을 정직하게 잡기 위해 진입점(main.tsx) 포함 src 전체를 분모로 둔다.
       include: ["src/**/*.{ts,tsx}"],
