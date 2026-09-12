@@ -9,14 +9,12 @@ import {
   Gauge,
   LayoutDashboard,
   Layers,
-  Moon,
   PanelLeftClose,
   PanelLeftOpen,
   Play,
   Plus,
   Search,
   Square,
-  Sun,
   Trash2,
   Wifi,
   WifiOff,
@@ -413,10 +411,7 @@ function MiniChart({ bars, positive }: { bars: Bar[]; positive: boolean }) {
 export default function App() {
   const loadingState = useRef(false);
   const stateRef = useRef<State | null>(null);
-  const [theme, setTheme] = useState(
-      () => localStorage.getItem("astra-theme") || "dark",
-    ),
-    [state, setState] = useState<State | null>(null),
+  const [state, setState] = useState<State | null>(null),
     [selected, setSelected] = useState(
       () => parseViewHash(window.location.hash).symbol ?? "",
     ),
@@ -518,10 +513,6 @@ export default function App() {
       clearTimeout(id);
     };
   }, []);
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    localStorage.setItem("astra-theme", theme);
-  }, [theme]);
   useEffect(() => {
     localStorage.setItem("astra-side", sideOpen ? "open" : "closed");
   }, [sideOpen]);
@@ -903,9 +894,6 @@ export default function App() {
             />
             {!state ? "연결 확인 중" : state.connection.message}
           </div>
-          <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
-            {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-          </button>
         </div>
       </aside>
       <main>
@@ -1005,12 +993,6 @@ export default function App() {
               onClick={toggleAlerts}
             >
               {alertsOn ? <Bell size={18} /> : <BellOff size={18} />}
-            </button>
-            <button
-              className="theme"
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            >
-              {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
             </button>
           </div>
         </header>
