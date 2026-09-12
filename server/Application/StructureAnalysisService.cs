@@ -333,7 +333,7 @@ public sealed class StructureAnalysisService(
         foreach (var blocker in detection.ReadyBlockers) warnings.Add(blocker);
 
         var signature = StructuralLifecycle.EventSignature(candidates, preferred);
-        // 관측 ID는 완료 봉과 후보·진단 서명으로 만든다. 같은 상태의 반복은 중복 폐기된다.
+        // full 관측 ID는 완료 봉과 후보 서명으로 만든다. 같은 봉을 재시작해 재평가해도 중복 기록하지 않는다.
         var observationId = StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash, signature);
         var full = !string.Equals(signature, latch.LastEventSignature, StringComparison.Ordinal);
 
@@ -360,9 +360,7 @@ public sealed class StructureAnalysisService(
             tickUnknownWarning = TickUnknownWarning(request.Symbol, snapshot.SessionStart, tickNote);
             if (tickNote is not null) notes.Add(tickNote);
             if (!tickSupported || tickUnknownWarning) warnings.Add(tickNote!);
-            observationId = StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash,
-                ObservationSignature(signature, notes, warnings));
-            record = record with { ObservationId = observationId, Warnings = warnings.ToArray(), Notes = notes.ToArray() };
+            record = record with { Warnings = warnings.ToArray(), Notes = notes.ToArray() };
 
             // ── D6 active 진입(§18): READY 대표 후보 1개만 실제 시뮬 거래로 커밋한다. 거래 저장이 성공한 뒤에만
             // 후보를 ENTERED로 바꾸고 래치에 tombstone을 남기며, 실패하면 관측·래치도 갱신하지 않아 다음 poll이
@@ -382,8 +380,7 @@ public sealed class StructureAnalysisService(
                     candidateDtos = candidates.Select(StructureViewMapper.Candidate).ToArray();
                     summary = CandidateSelection.Summarize(candidates).ToString().ToUpperInvariant();
                 }
-                observationId = StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash,
-                    ObservationSignature(signature, notes, warnings));
+                observationId = StructuralLifecycle.ObservationId(snapshot.Symbol, lastBarStart, PolicyHash, signature);
                 record = record with
                 {
                     Detail = full ? "full" : "summary", CandidateSummary = summary, PreferredCandidateId = preferred,
