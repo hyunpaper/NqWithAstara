@@ -42,10 +42,14 @@ public static class TechniqueNames
     public const string RelativeStrength = "RS_QQQ";
     public const string OrderBookImbalance = "OBI";
 
+    // ── C3-2 2군 (#170) ──
+    public const string Candle = "CANDLE";
+
     public static readonly ImmutableArray<string> All =
     [
         Macd, Rsi, BollingerPercentB, AdxDmi, VwapDeviation, RelativeVolume, AtrChannel, OpeningRange,
-        RelativeStrength, OrderBookImbalance
+        RelativeStrength, OrderBookImbalance,
+        Candle
     ];
 }
 
@@ -68,6 +72,9 @@ public static class ConfluenceMath
 /// <param name="OrderBook">최근 poll 순서의 호가 스냅샷(오래된 것 → 최신). 없으면 비어 있다.</param>
 /// <param name="RelativeVolume">기존 상대거래량 계산 경로가 낸 값. 표본이 없으면 null이다.</param>
 /// <param name="PreviousSessionClose">C2 ATR 세션 첫봉 TR의 기준이 되는 전일 정규장 종가. 없으면 null이다.</param>
+/// <param name="PreviousDailyBars">전일까지의 완료 일봉(오래된 것 → 최신). 당일 일봉은 들어오지 않는다(C6).</param>
+/// <param name="PreviousSessionVolumes">지난 세션들의 누적 거래량 곡선(오래된 것 → 최신), 당일은 제외한다(C3-2).</param>
+/// <param name="Trades">최근 체결(오래된 것 → 최신). 호가 중간값은 <see cref="OrderBook"/>에서 시각으로 맞춘다(C3-2).</param>
 public sealed record ConfluenceInput(
     string Symbol,
     DateTimeOffset SessionStart,
@@ -75,7 +82,18 @@ public sealed record ConfluenceInput(
     ImmutableArray<IndicatorBar> BenchmarkBars,
     ImmutableArray<OrderBookSnapshot> OrderBook,
     double? RelativeVolume,
-    decimal? PreviousSessionClose = null);
+    decimal? PreviousSessionClose = null,
+    ImmutableArray<IndicatorBar> PreviousDailyBars = default,
+    ImmutableArray<SessionVolumeProfile> PreviousSessionVolumes = default,
+    ImmutableArray<ConfluenceTrade> Trades = default);
 
-/// <summary>OBI 입력으로 쓰는 호가 잔량 스냅샷 (C3, #167). 가격은 쓰지 않는다.</summary>
-public sealed record OrderBookSnapshot(DateTimeOffset ObservedAt, double BidVolume, double AskVolume);
+/// <summary>OBI 입력으로 쓰는 호가 스냅샷 (C3, #167). 잔량은 OBI가, 호가 중간값은 LR_DELTA가 쓴다(C3-2, #170).</summary>
+public sealed record OrderBookSnapshot(DateTimeOffset ObservedAt, double BidVolume, double AskVolume,
+    decimal? BidPrice = null, decimal? AskPrice = null)
+{
+    /// <summary>호가 중간값. 한쪽이라도 결측이거나 0 이하면 null이다.</summary>
+    public decimal? Mid => BidPrice is { } bid and > 0 && AskPrice is { } ask and > 0 ? (bid + ask) / 2m : null;
+}
+
+/// <summary>LR_DELTA 입력 체결 (C3-2, #170). 방향은 주어지지 않으며 호가 중간값·틱룰로 추정한다.</summary>
+public sealed record ConfluenceTrade(DateTimeOffset At, decimal Price, decimal Volume);

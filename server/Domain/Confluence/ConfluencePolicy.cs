@@ -57,6 +57,20 @@ public sealed record ConfluencePolicy
     public double AdxScoreScale { get; init; } = 50;
     public double AdxLowConfidence { get; init; } = .4;
 
+    // ── 2군 기법 파라미터 (C3-2, #170) ──
+
+    /// <summary>캔들 확인 점수 — 강세 장악형·망치·핀바 순. 성과로 탐색한 값이 아니다.</summary>
+    public double CandleEngulfingScore { get; init; } = .6;
+    public double CandleHammerScore { get; init; } = .5;
+    public double CandlePinBarScore { get; init; } = .4;
+
+    /// <summary>선행 하락 조건 — 패턴 봉의 저가가 직전 N봉 최저를 갱신해야 한다.</summary>
+    public int CandlePriorLowLookbackBars { get; init; } = 5;
+
+    /// <summary>몸통이 ATR의 이 비율 미만이면 confidence를 낮춘다(zone 근접을 알 수 없는 대체 기준).</summary>
+    public double CandleBodyAtrRatio { get; init; } = .3;
+    public double CandleWeakBodyConfidence { get; init; } = .5;
+
     /// <summary>
     /// C4 상관군. 같은 정보축 묶음은 군 안에서 1/n로 나눈다. `군이름:기법,기법` 형식이며 2·3군이
     /// 들어오면 이 목록만 늘어난다. 1군 채택 목록에는 각 군에 한 기법씩만 있어 실질 계수는 1.0이다.
