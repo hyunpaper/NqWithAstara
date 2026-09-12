@@ -115,7 +115,7 @@ export const tradeEntryTooltip = (t: {
   }
   const p = s.planSnapshot;
   return [
-    `v5 동결 근거 (진입 시점 값 · 재계산 없음)`,
+    `동결 근거 (진입 시점 값 · 재계산 없음)`,
     `EntryQuality ${num(s.entryQualityAtEntry)} · 추세 ${trendKo(s.trendAtEntry)} (${num(s.signedTrendAtEntry)}) · 셋업 ${p.kind}`,
     `계획 netR ${num(p.netR, 2)}R (실현 손익 아님)${p.missingLiquidity ? " · 비용 결측(스프레드 0 가정)" : ""}`,
     `무효화 zone ${p.invalidationZoneId} [${p.invalidationLower}~${p.invalidationUpper}] · 목표 zone ${p.targetZoneId} [${p.targetLower}~${p.targetUpper}]`,

@@ -75,7 +75,7 @@ describe("tradeEntryTooltip", () => {
 
   it("v5 거래는 동결 근거(품질·추세·계획·zone·엔진)를 보여 주고 계획 netR을 실현 손익과 구분한다", () => {
     const tip = tradeEntryTooltip({ structure });
-    expect(tip).toContain("v5 동결 근거");
+    expect(tip).toContain("동결 근거");
     expect(tip).toContain("EntryQuality 55.5");
     expect(tip).toContain("추세 상승 (41.0)");
     expect(tip).toContain("셋업 REBOUND");

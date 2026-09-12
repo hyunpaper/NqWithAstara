@@ -177,9 +177,6 @@ export default function StructurePanel({
     );
   }, [summary, watchlist]);
 
-  const nameOf = (symbol: string) =>
-    watchlist.find((w) => w.symbol === symbol)?.name ?? "";
-
   const ordered = useMemo(() => {
     // 기본 정렬: v5 상태 우선순위 → EntryQuality ↓ → |SignedTrend| ↓ → symbol(§13·이슈 #26 §3).
     // 나머지 탭은 비교 함수는 App 라이브 목록과 공용이다(이슈 #88).
@@ -264,9 +261,6 @@ export default function StructurePanel({
       <div className="structure-body">
         <section className="panel structure-list">
           <div className="panel-head">
-            <div>
-              <h2>종목별 구조 상태</h2>
-            </div>
             <div className="structure-sort">
               <button
                 className={sort === "ready" ? "on" : ""}
@@ -329,7 +323,6 @@ export default function StructurePanel({
                     >
                       <div className="sr-symbol">
                         <b>{row.symbol}</b>
-                        <small>{nameOf(row.symbol)}</small>
                       </div>
                       <div className={`sr-trend ${trendClass(row.trendState)}`}>
                         <small>추세</small>

@@ -9,14 +9,12 @@ import {
   Gauge,
   LayoutDashboard,
   Layers,
-  Moon,
   PanelLeftClose,
   PanelLeftOpen,
   Play,
   Plus,
   Search,
   Square,
-  Sun,
   Trash2,
   Wifi,
   WifiOff,
@@ -216,13 +214,6 @@ type SimData = {
   byKind: { kind: string; stats: SimStats }[];
   analysis: SimAnalysis | null;
   trades: SimTradeRow[];
-  byVersion?: {
-    version: string;
-    label: string;
-    stats: SimStats;
-    analysis: SimAnalysis | null;
-    byKind?: { kind: string; stats: SimStats }[];
-  }[];
   /** 이슈 #27: v5 동결 근거 기준 코호트 집계(additive). 구버전 서버에는 없을 수 있다. */
   structure?: StructureCohortReport | null;
 };
@@ -413,10 +404,7 @@ function MiniChart({ bars, positive }: { bars: Bar[]; positive: boolean }) {
 export default function App() {
   const loadingState = useRef(false);
   const stateRef = useRef<State | null>(null);
-  const [theme, setTheme] = useState(
-      () => localStorage.getItem("astra-theme") || "dark",
-    ),
-    [state, setState] = useState<State | null>(null),
+  const [state, setState] = useState<State | null>(null),
     [selected, setSelected] = useState(
       () => parseViewHash(window.location.hash).symbol ?? "",
     ),
@@ -518,10 +506,6 @@ export default function App() {
       clearTimeout(id);
     };
   }, []);
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    localStorage.setItem("astra-theme", theme);
-  }, [theme]);
   useEffect(() => {
     localStorage.setItem("astra-side", sideOpen ? "open" : "closed");
   }, [sideOpen]);
@@ -901,11 +885,8 @@ export default function App() {
             <span
               className={`dot ${state?.connection.status === "connected" ? "ok" : ""}`}
             />
-            {state?.connection.message || "연결 확인 중"}
+            {!state ? "연결 확인 중" : state.connection.message}
           </div>
-          <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
-            {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-          </button>
         </div>
       </aside>
       <main>
@@ -1005,12 +986,6 @@ export default function App() {
               onClick={toggleAlerts}
             >
               {alertsOn ? <Bell size={18} /> : <BellOff size={18} />}
-            </button>
-            <button
-              className="theme"
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            >
-              {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
             </button>
           </div>
         </header>
@@ -1168,7 +1143,6 @@ export default function App() {
               <>
                 <div className="stock-head">
                   <div>
-                    <div className="eyebrow">미국 주식</div>
                     <h2>{signal.symbol}</h2>
                   </div>
                   <div className="big-price">
@@ -1346,13 +1320,6 @@ export default function App() {
                     />
                   )}
                 </div>
-                <div className="events">
-                  <h3>예정 이벤트</h3>
-                  <p>
-                    경제지표와 기업 일정 분석은 다음 버전에서 제공됩니다.
-                    확인되지 않은 예측치는 표시하지 않습니다.
-                  </p>
-                </div>
               </>
             ) : selectedWatch ? (
               <PendingStock
@@ -1391,6 +1358,7 @@ export default function App() {
         <footer>
           본 화면의 시그널은 기술적 조건 충족 점수이며 수익 확률이나 투자 권유가
           아닙니다.
+          <span className="app-version">v{__ASTRA_VERSION__}</span>
         </footer>
       </main>
     </div>
@@ -1433,7 +1401,6 @@ function DashTabs({ tab, onChange }: { tab: "sim" | "real"; onChange: (next: "si
 }
 function Dashboard() {
   const [data, setData] = useState<SimData | null>(null);
-  const [version, setVersion] = useState("all");
   const [tab, setTab] = useState<"sim" | "real">("sim");
   const [loadError, setLoadError] = useState("");
   useVisiblePolling(async () => {
@@ -1461,19 +1428,17 @@ function Dashboard() {
       </div>
     );
   if (!data) return loadError ? <div className="error"><WifiOff size={16} /><span>{loadError} 10초 후 다시 시도합니다.</span></div> : <Loading />;
-  const cohort = data.byVersion?.find((x) => x.version === version);
-  const s = cohort?.stats ?? data.summary;
-  const analysis = cohort?.analysis ?? (version === "all" ? data.analysis : null);
-  const byKind = cohort?.byKind ?? data.byKind;
-  const trades = version === "all" ? data.trades : data.trades.filter((t) => (t.logic?.trim() || "legacy") === version);
+  const s = data.summary;
+  const analysis = data.analysis;
+  const byKind = data.byKind;
+  const trades = data.trades;
   return (
     <div className="dash">
       <DashTabs tab={tab} onChange={setTab} />
       <section className="panel metrics-panel">
         <div className="panel-head">
           <div>
-            {/* 이슈 #29: 반복 구현 설명 제거 — 비용 기준은 각 지표의 help에 남아 있다. */}
-            <h2>{cohort ? `${cohort.label} 코호트` : "전체 성과 요약"}</h2>
+            <h2>전체 성과 요약</h2>
           </div>
           <LayoutDashboard size={18} />
         </div>
@@ -1487,7 +1452,6 @@ function Dashboard() {
               tone={
                 s.winRate == null ? undefined : s.winRate >= 50 ? "up" : "down"
               }
-              help={`손익 유효 ${s.validClosed ?? s.closed}건 중 ${s.wins}건 수익`}
             />
             <MetricTile
               label="평균 손익"
@@ -1495,7 +1459,6 @@ function Dashboard() {
               tone={
                 s.avgPnl == null ? undefined : s.avgPnl >= 0 ? "up" : "down"
               }
-              help="청산 건 기준"
             />
             <MetricTile
               label="건별 수익률 합계"
@@ -1503,24 +1466,12 @@ function Dashboard() {
               tone={
                 s.totalPnl == null ? undefined : s.totalPnl >= 0 ? "up" : "down"
               }
-              help="포트폴리오 누적 수익률이 아닌 각 거래 수익률의 합"
             />
-            {!!s.estimatedExits && <MetricTile label="추정 청산" value={`${s.estimatedExits}건`} help="재시작 복구 시 마지막 관측 가격으로 추정한 청산" />}
+            {!!s.estimatedExits && <MetricTile label="추정 청산" value={`${s.estimatedExits}건`} />}
           </div>
         </div>
       </section>
       {!!s.missingPnl && <div className="sample-warning">청산 {s.closed}건 중 손익이 없는 {s.missingPnl}건은 승률·평균·합계 계산에서 제외했습니다.</div>}
-      {!!data.byVersion?.length && (
-        <div className="cohort-picker">
-          <label htmlFor="logic-version">로직 버전</label>
-          <select id="logic-version" value={version} onChange={(e) => setVersion(e.target.value)}>
-            <option value="all">전체 버전 혼합</option>
-            {data.byVersion.map((v) => <option key={v.version} value={v.version}>{v.label} · 청산 {v.stats.closed}건</option>)}
-          </select>
-          <span>버전별 규칙이 달라 성과는 같은 코호트 안에서 비교하세요.</span>
-        </div>
-      )}
-      {cohort && s.closed < 10 && !analysis?.sampleWarning && <div className="sample-warning">청산 {s.closed}건의 작은 표본입니다. 현재 수치는 잠정 관찰값이며 규칙 변경 근거로 확정하기 어렵습니다.</div>}
       {analysis?.sampleWarning && <div className="sample-warning">{analysis.sampleWarning}</div>}
       {analysis && (
         <section className="panel metrics-panel">
@@ -1598,9 +1549,7 @@ function Dashboard() {
       <section className="panel metrics-panel">
         <div className="panel-head">
           <div>
-            <h2>{cohort ? `${cohort.label} · 신호별 성과` : "전체 버전 · 신호별 성과"}</h2>
-            {/* 이슈 #29: 편집성 설명 대신 어느 범위의 값인지만 남긴다. */}
-            <p>{cohort ? "선택한 로직 버전 기준" : "전체 버전 혼합"}</p>
+            <h2>신호별 성과</h2>
           </div>
         </div>
         <div className="table-wrap">
@@ -2040,7 +1989,6 @@ function PendingStock({
     <>
       <div className="stock-head">
         <div>
-          <div className="eyebrow">미국 주식</div>
           <h2>{stock.symbol}</h2>
         </div>
         <div className="muted">시세 대기 중</div>

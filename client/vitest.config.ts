@@ -4,6 +4,8 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  // 이슈 #161: vite.config.ts의 __ASTRA_VERSION__ define을 vitest에도 동일하게 넣어 테스트가 깨지지 않게 한다.
+  define: { __ASTRA_VERSION__: JSON.stringify("dev") },
   test: {
     environment: "jsdom",
     // Testing Library의 렌더 자동 정리(cleanup)는 전역 afterEach 훅을 요구한다.

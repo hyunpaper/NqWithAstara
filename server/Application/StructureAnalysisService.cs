@@ -785,8 +785,7 @@ public sealed class StructureAnalysisService(
         if (!state.Running)
             return (200, Response(symbol, StructureAnalysisStatus.Stopped, now, "모니터링이 중지되어 있습니다.", null));
         if (state.Market.Start is not { } start || state.Market.End is not { } end || !MarketRules.IsOpen(now, start, end))
-            return (200, Response(symbol, StructureAnalysisStatus.MarketClosed, now,
-                "미국 정규장 외에는 구조 분석을 갱신하지 않습니다.", null));
+            return (200, Response(symbol, StructureAnalysisStatus.MarketClosed, now, null, null));
 
         // #64 §19-9: 마지막 평가가 예외로 끝났으면 워밍업도 정상도 아니다. 자료 부족과 구분되는 문구로 드러낸다.
         var failed = _failed.ContainsKey(symbol);
