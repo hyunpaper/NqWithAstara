@@ -48,6 +48,7 @@ import {
 } from "./structureSort";
 import type { StructureCohortReport, TradeStructure } from "./dashboardTypes";
 import { tradeEntryTooltip } from "./dashboardTypes";
+import { blockTradeLabel, flowSourceLabel } from "./tradeTape";
 
 type Bar = { time: string; close: number; ema?: number; vwap?: number };
 type Indicators = {
@@ -219,6 +220,9 @@ type Metrics = {
   flow5m: TickFlow | null;
   flow10m: TickFlow | null;
   updatedAt: string;
+  /** 이슈 #133: 체결강도 원천("ws"|"rest"|"none")과 블록 체결 건수. 구버전 서버에는 없다. */
+  flowSource?: string | null;
+  blockTradeCount?: number | null;
 };
 const api = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   const r = await fetch(url, init);
@@ -1743,8 +1747,18 @@ function MetricsCard({
                     ? "up"
                     : "down"
               }
-              help={`최근 ${f?.windowMinutes ?? 5}분 수집 표본의 매수÷매도 추정량`}
+              help={`최근 ${f?.windowMinutes ?? 5}분 수집 표본의 매수÷매도 추정량 · 원천 ${flowSourceLabel(metrics?.flowSource)}`}
               history={past(optInt(f5?.strength), optInt(f10?.strength))}
+            />
+            <MetricTile
+              label="체결강도 원천"
+              value={flowSourceLabel(metrics?.flowSource)}
+              help="실시간 틱이 60초 이상 끊기면 체결 내역(REST)으로 보정한다"
+            />
+            <MetricTile
+              label="블록 체결"
+              value={blockTradeLabel(metrics?.blockTradeCount)}
+              help="최근 50건 중 수량이 중앙값의 10배를 넘는 체결 · 매수/매도 구분 없음(미검증 상수)"
             />
             <MetricTile
               label="매수 체결 비중"
@@ -1819,8 +1833,11 @@ function MetricsCard({
             />
           </div>
           <p className="metrics-note">
-            체결강도·매수 비중은 수집된 웹소켓 틱 표본을 업틱/다운틱으로 분류한
-            값입니다(체결강도 100% 초과 = 매수 우위). 공매도 잔량 · 기관/외인
+            체결강도·매수 비중은 수집된 체결 표본을 업틱/다운틱으로 분류한
+            값입니다(체결강도 100% 초과 = 매수 우위). 웹소켓 틱이 60초 이상
+            끊기면 체결 내역(REST)으로 보정하며 원천을 함께 표시합니다. 블록
+            체결은 수량만 보는 추정치라 매수/매도 방향을 알 수 없습니다.
+            공매도 잔량 · 기관/외인
             수급 · 풋콜 비율 · 감마 데이터는 Toss Open API가 제공하지 않아
             표시하지 않습니다.
           </p>
