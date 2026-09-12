@@ -7,7 +7,8 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
     StructureAnalysisService? structure = null, StructureLiquidityFeed? liquidity = null,
     StructureAlertPublisher? alerts = null, SymbolMetadataService? metadata = null,
     FeeRateCheckService? feeCheck = null, TradeTapeFallbackService? tradeTape = null,
-    RealFillsService? realFills = null) : IMonitorSignals
+    RealFillsService? realFills = null, BarStoreService? barStore = null,
+    BenchmarkPollingService? benchmark = null) : IMonitorSignals
 {
     public bool Running => runtime.Snapshot().Running; public long Generation => runtime.Snapshot().Generation;
     public string ConnectionStatus => runtime.Snapshot().ConnectionStatus; public string ConnectionMessage => runtime.Snapshot().ConnectionMessage;
@@ -63,6 +64,7 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
                 else if (outcome == PollOutcome.Failed) Interlocked.Increment(ref failed);
             });
             CommitConnection(gen, items.Length, ok, warmup, invalid, failed);
+            if (benchmark is not null) await benchmark.PollAsync(market, ct);
         }
         catch (Exception ex) { runtime.TryCommit(gen, () => Signals.Clear()); runtime.TryCommit(gen, s => s with { ConnectionStatus = "error", ConnectionMessage = ex.Message, UpdatedAt = clock.GetUtcNow() }); diagnostics.PollFailed("market", ex); }
     }
@@ -76,6 +78,8 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
             var validQuote = double.IsFinite(quote.Price) && quote.Price > 0 && age >= TimeSpan.FromSeconds(-30) && age <= TimeSpan.FromMinutes(3) && market.Start <= quote.At && quote.At < market.End && now < market.End;
             if (!runtime.IsCurrent(gen)) return PollOutcome.Ignored;
             if (!validQuote || bars.Any(x => !ValidBar(x))) { runtime.TryCommit(gen, () => Signals.TryRemove(item.Symbol, out _)); return PollOutcome.Invalid; }
+            // 이슈 #165: 컨플루언스 측정 파이프라인(K4)의 저장 봉 — 완료 1분봉이 확정되는 지점에서 append한다.
+            if (barStore is not null) await barStore.SaveNewBarsAsync(item.Symbol, bars, token);
             if (bars.Length < 30 || quote.At - bars[^1].Timestamp > TimeSpan.FromMinutes(3))
             {
                 if (!await UpdateTrades(gen, t => SimulationEngine.Process(t, item.Symbol, bars, quote.Price, quote.At, 50, 0, []), token)) return PollOutcome.Ignored;
