@@ -40,6 +40,20 @@ Domain은 시계·저장소·HTTP에 의존하지 않는다. 평가 기준 시�
 `expiresAt`, `rejectionCodes`, `notes`, `plan.{missingLiquidity, validSpread, eligibilityCostModelVersion,
 realizedFillCostModelVersion, netR}`.
 
+#### `trend.components` (#146)
+
+`detail = "full"` 레코드에서만 `trend.components`가 실린다. `TrendEvaluator`가 이미 계산한 원값(raw)·변환값
+(value, tanh 등)을 그대로 노출하며 관측 크기를 줄이려고 `summary`·전이(`transition`) 레코드에서는 생략한다(§16,
+이슈 #44 캡 영향 없음).
+
+| 필드 | 의미 | 결측 |
+|---|---|---|
+| `emaDirection.{raw, value}` | (ema9-ema21)/atr1m, tanh 변환값 | atr1m 또는 ema 결측이면 둘 다 null |
+| `slopeDirection.{raw, value}` | ema21 lookback 기울기/atr1m, tanh 변환값 | 위와 동일 |
+| `vwapDirection.{raw, value}` | (종가-vwap)/max(vwapSd, atr1m, floor), tanh 변환값 | vwap 결측이면 둘 다 null |
+| `structureDirection.{raw, value}` | 확정 5분 피벗 delta의 tanh 평균 (raw는 항상 null, deltaHigh/deltaLow가 원값을 보존) | **5분 구조 자체가 결측이면(`trend.structureEvidenceMissing`) 필드 전체가 null** |
+| `efficiency.{raw, value}` | §16B 효율성(raw=value, 변환 없음) | 봉 부족이면 null |
+
 ### 2.1.1 재진입 코호트 태그 (#111)
 
 `SimTrade.Structure.reentry`는 **진입 시점에 직전 거래를 아는 계층**(`StructuralSimulation.Enter`)이 채우는
