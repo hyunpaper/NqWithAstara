@@ -7,6 +7,13 @@ public sealed class TossAuthException(string message, string guideUrl) : HttpReq
 
 public sealed record WatchItem(string Symbol, string Name);
 public sealed record TossTrade(string Symbol, decimal Price, decimal Volume, DateTimeOffset Timestamp, string Currency);
+public sealed record StockInfo(string Symbol, string Name, string SecurityType, string Market, bool IsCommonShare, string Status, decimal? LeverageFactor = null, decimal? SharesOutstanding = null);
+public sealed record TossAccount(int AccountSeq, string AccountType);
+public sealed record TossCommission(string MarketCountry, decimal Rate, DateOnly? StartDate, DateOnly? EndDate);
+public sealed record TossOrderExecution(decimal FilledQuantity, decimal AverageFilledPrice, decimal FilledAmount, decimal Commission, DateTimeOffset FilledAt);
+public sealed record TossOrder(string OrderId, string Symbol, string Side, string OrderType, string Status, DateTimeOffset OrderedAt, TossOrderExecution? Execution);
+public sealed record TossOrderPage(IReadOnlyList<TossOrder> Orders, string? NextCursor, bool HasNext);
+public sealed record TossHolding(string Symbol, decimal Quantity, decimal AveragePurchasePrice, decimal LastPrice);
 public sealed record Position(double EntryPrice, double Quantity, double? Target, double? Stop, string? TargetBasis = null, string? StopBasis = null);
 public sealed record PositionInput(double EntryPrice, double Quantity);
 public sealed record Candle(DateTimeOffset Timestamp, double Open, double High, double Low, double Close, double Volume);
