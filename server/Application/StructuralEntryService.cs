@@ -1,4 +1,5 @@
 using Astra.Server.Domain;
+using Astra.Server.Domain.Structure;
 
 namespace Astra.Server.Application;
 
@@ -19,17 +20,21 @@ public interface IStructuralTradeEntries
 /// 기존 거래 저장소에 대한 유일한 v5 쓰기 지점. 읽기-검사-쓰기를 store.Update 한 번으로 묶어
 /// 종목당 OPEN 1개 제한(버전 공통)과 EntryEventId 멱등성을 저장 시점에 원자적으로 재확인한다(§12.5).
 /// </summary>
-public sealed class StructuralTradeEntryService(ILocalStore store) : IStructuralTradeEntries
+public sealed class StructuralTradeEntryService(ILocalStore store, StructurePolicy? policy = null)
+    : IStructuralTradeEntries
 {
+    readonly StructurePolicy _policy = policy ?? StructurePolicy.Default;
+
     public async Task<StructuralEntryResult> TryEnterAsync(StructuralEntryRequest request, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
-        // 진입이 성립하지 않는 경우(멱등 재시도·OPEN 제한)에는 저장 파일을 다시 쓰지 않는다.
-        var preview = StructuralSimulation.Enter(await store.Read("simtrades.json", new List<SimTrade>()), request);
+        // 진입이 성립하지 않는 경우(멱등 재시도·OPEN 제한·손절 쿨다운)에는 저장 파일을 다시 쓰지 않는다.
+        var preview = StructuralSimulation.Enter(await store.Read("simtrades.json", new List<SimTrade>()), request,
+            _policy);
         if (preview.Outcome != StructuralEntryOutcome.Entered) return preview;
         return await store.Update("simtrades.json", new List<SimTrade>(), trades =>
         {
-            var result = StructuralSimulation.Enter(trades, request);
+            var result = StructuralSimulation.Enter(trades, request, _policy);
             return (result.Trades, result);
         });
     }
