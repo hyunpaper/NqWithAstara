@@ -1372,6 +1372,7 @@ export default function App() {
         <footer>
           본 화면의 시그널은 기술적 조건 충족 점수이며 수익 확률이나 투자 권유가
           아닙니다.
+          <span className="app-version">v{__ASTRA_VERSION__}</span>
         </footer>
       </main>
     </div>
