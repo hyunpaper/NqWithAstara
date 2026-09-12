@@ -13,16 +13,19 @@ flowchart LR
     S -->|작업 지시| W1[하위 에이전트 A]
     S -->|작업 지시| W2[하위 에이전트 B]
     W1 & W2 -->|브랜치 push + PR| R{감독자<br>코드 리뷰}
-    R -->|승인| M[rebase merge]
+    R -->|승인| M[merge commit]
     R -->|반려| W1
 ```
 
-- 하위 에이전트가 개발하고, **감독자(메인 에이전트)는 코드를 직접 읽고 리뷰한다.**
+- 하위 에이전트가 개발하고, **감독자(메인 에이전트)는 설계·지시·리뷰만 한다.** 감독자가 직접 코드를 작성하지 않는다 — 단 리뷰는 diff를 직접 읽는다.
 - CI 통과는 머지의 **필요조건이지 충분조건이 아니다.** 리뷰 없이 머지 금지.
+- 하위 에이전트 모델 등급: 설계 판단이 필요한 구현은 상위 모델, DTO·문구·단순 반복은 하위 모델. 사용량 70% 초과 시 하위 모델로 내린다. (Claude: opus/sonnet, Codex: 자체 등급 — 세부는 로컬 `AGENTS.md`)
+- 반복 절차(하위 에이전트 작업·머지·릴리즈)는 스킬로 고정해 사용한다. 절차를 바꾸면 스킬을 먼저 고친다.
 
 ## 2. 브랜치 전략
 
 ```mermaid
+%%{init: {'gitGraph': {'mainBranchName': 'master'}}}%%
 gitGraph
     commit id: "init"
     branch develop
@@ -32,11 +35,10 @@ gitGraph
     commit id: "work"
     commit id: "work2"
     checkout develop
-    merge feature/BE/zone-engine id: "rebase-merge"
-    branch release/COMMON/v1-0-0
-    commit id: "release-prep"
-    checkout main
-    merge release/COMMON/v1-0-0 id: "release"
+    merge feature/BE/zone-engine id: "merge-commit"
+    branch release/COMMON/104-v1-0-2609-1201
+    checkout master
+    merge release/COMMON/104-v1-0-2609-1201 id: "release" tag: "1.0.2609.1201"
 ```
 
 | 브랜치 | 역할 | 규칙 |
@@ -117,7 +119,8 @@ flowchart LR
 | 마일스톤 | 해당 주차 마일스톤 배정 — **주간, 월요일 시작**, 제목 `2026-Wnn (MM/DD ~ MM/DD)`. 없으면 생성 |
 | **어싸인** | **항상 `hyunpaper`** (에이전트는 계정을 공유하므로 주체 구분은 라벨·`Agent:` 표기로) |
 | 브랜치 | slug 앞에 이슈 번호: `refactor/COMMON/8-issue-workflow-docs` |
-| PR | 본문에 `Closes #N` — develop 머지 시 이슈 자동 close |
+| **진행 표시** | 작업을 시작하면 이슈에 **`Doing` 라벨**을 단다. 머지·close 시 제거 |
+| PR | 본문에 `Closes #N` — develop 머지 시 이슈 자동 close. **master 대상(release) PR은 자동 close되지 않으므로 수동으로 닫고 완료 코멘트를 남긴다** |
 
 ### 라벨 체계
 
@@ -126,7 +129,7 @@ flowchart LR
 | 성격 | `bug` `feature` `refactor` `test` `ci` `docs` `chore` `hotfix` |
 | 영역 | `BE` `FE` `COMMON` |
 | 도메인 | `structure-engine` `simulation` |
-| 메타 | `priority-high` `blocked` `agent:claude` `agent:codex` |
+| 메타 | `priority-high` `blocked` `Doing` `agent:claude` `agent:codex` |
 
 성격 라벨과 브랜치 `type`은 별개 축이다 (예: `bug` 이슈 → `fix/...` 브랜치). 라벨 중복 금지 — 같은 의미의 라벨을 새로 만들지 않는다.
 
@@ -141,7 +144,7 @@ flowchart LR
 ```mermaid
 flowchart LR
     A[develop에서<br>브랜치 분기] --> B[작업 + 커밋]
-    B --> C[최신 develop 위로<br>rebase 후 push]
+    B --> C[develop 최신 반영<br>브랜치에 develop 머지 후 push]
     C --> D[PR 생성 → develop]
     D --> E{CI: init / build / test}
     E -->|실패| B
@@ -155,14 +158,36 @@ flowchart LR
 
 - **Merge commit(Create a merge commit)만 사용한다.** rebase·squash 금지 (저장소 설정으로 비활성화됨). 그래프에 브랜치 가지와 머지 지점이 그대로 남는다. 머지 커밋 제목은 PR 제목이 자동 사용된다.
 - CI 3단계 전부 통과 + **감독자 리뷰 approve 코멘트** 없이는 머지하지 않는다.
-- 릴리즈: `develop` → `release/<area>/<slug>` 브랜치 → `master` PR (merge commit). master를 develop으로 역머지하지 않는다 — develop이 통합 히스토리의 기준이다.
-- 머지 후 작업 브랜치는 삭제된다 (원격 자동 + **로컬도 즉시 삭제**, `git fetch --prune`).
+- **머지 직전 develop 최신성 확인**: 브랜치의 merge-base가 `origin/develop` HEAD와 다르면 **그 브랜치의 worktree에서** develop을 머지(`chore(AREA): develop 머지 [agent]`)하고 CI를 다시 돈 뒤 머지한다. 병렬 에이전트가 먼저 머지한 변경을 놓치지 않기 위함. rebase는 쓰지 않는다.
+- CI `cancelled`는 `failure`가 아니다 — 재실행 후 판단한다.
+- 머지 후 작업 브랜치는 삭제된다 (원격 자동 + **로컬도 즉시 삭제**, `git fetch --prune`). worktree도 함께 제거.
 - 작업 종료 시 로컬 작업 사본은 항상 `develop` 체크아웃 + 최신 pull 상태로 복귀한다.
+
+### 릴리즈
+
+- `develop` → `release/COMMON/<이슈#>-v1-0-YYMM-DD##` → `master` PR (merge commit) → 머지 커밋에 태그. master를 develop으로 역머지하지 않는다 — develop이 통합 히스토리의 기준이다.
+- 버전 **`1.0.YYMM.DD##`** — 1.0 고정 + 연월 + 일 + 당일 차수(00부터). 예: `1.0.2609.1201` = 2026-09-12 두 번째 릴리즈.
+- 운영 빌드는 **별도 worktree**(`Astra-release-<태그>`)에서 `dotnet publish` — 실행 중 서비스가 bin을 잠근다.
+- **`StructurePolicy` 필드를 추가·변경한 릴리즈는 정규장 밖에서만 배포한다.** PolicyHash가 바뀌면 구조 엔진 래치(쿨다운·중복 방지 키)가 세션 중 리셋된다.
+- 절차 세부는 `astra-release` 스킬.
 
 ### 커밋 단위 (granularity)
 
 - **커밋은 기능/수정의 논리 단위로 분리한다.** 예: 리뷰 지적 3건이면 3커밋, "기능 구현 + 관련 테스트"는 한 커밋. 한 PR에 여러 커밋 권장 — merge commit 방식이라 가지 안의 커밋들이 히스토리에 그대로 보인다.
 - WIP·오타 수정 같은 잡커밋(fixup)은 머지 전에 정리한다 (머지 전 작업 브랜치에서는 rebase/force-push 허용).
+
+## 4.5 에이전트 작업 규칙 (병렬 안전)
+
+저장소 체크아웃(`Desktop/Astra`)은 **저장소이면서 동시에 운영 데이터 폴더**다(`App_Data/`·`appsettings.json`·`.runtime/`). 운영 서비스가 이 폴더를 CWD로 쓴다.
+
+| 규칙 | 이유 |
+|---|---|
+| 이슈별 **worktree**에서 작업한다: `git worktree add ../Astra-wt-<이슈#> <브랜치>` | 메인 체크아웃에서 `git switch`하면 운영 폴더가 바뀐다. 병렬 에이전트 간 충돌 방지 |
+| **`git stash` 금지** | stash 참조는 worktree 전체가 공유한다 — 다른 에이전트의 stash를 pop하는 사고가 실제로 났다. 임시 저장이 필요하면 WIP 커밋 후 머지 전 정리 |
+| **`git clean -fdx` 금지** | gitignore된 운영 데이터를 지운다 |
+| 권한 차단된 명령을 **우회하지 않는다** (예: `git credential fill` 차단 시 다른 자격증명 경로 탐색 금지) | 차단은 의도다. 멈추고 감독자에게 보고 |
+| 브랜치 최신화는 **그 브랜치의 worktree 안에서** develop을 머지 | 다른 worktree에 체크아웃된 브랜치를 건드리면 로컬 develop이 오염된다 |
+| 작업 완료 후 worktree·로컬 브랜치를 삭제 | 누적된 worktree가 다음 작업의 stash·빌드 잠금 사고를 만든다 |
 
 ## 5. 아키텍처
 
@@ -208,6 +233,7 @@ flowchart TB
 | `shadow` | 관측 전용 — simtrades/positions/알림에 **무쓰기** (바이트 동일성 테스트로 증명) |
 | `active` | 구조 엔진이 신규 진입 소유. 이미 열린 거래는 체결 시점의 FrozenPlan대로 청산 |
 
+- 운영은 `active`. **v4(점수 엔진) 진입 생성과 화면 표시는 제거됐다** — 대시보드·시그널 순위·거래 표는 v5 단독. v4 코드는 청산 경로에서만 레거시로 남는다.
 - 구조 근거가 없으면 **진입 보류가 정답** — ATR 배수/1.5R 폴백으로 목표·손절을 만들지 않는다.
 - 구조 엔진 소스는 레거시 진입점(`MarketRules.Enter`/`PriceLevels.*` 등)을 참조하지 않는다 (정적 테스트로 강제).
 
@@ -219,8 +245,10 @@ CI와 동일 스택: Node.js 22, .NET 9.
 node .github/scripts/repository-policy.mjs                     # 비밀/금지 경로 스캔
 node --test .github/scripts/repository-policy.test.mjs
 dotnet test server/tests/Astra.Server.Tests.csproj --configuration Release
-cd client && npm ci && npm run build
+cd client && npm ci && npm run build && npm test                # vitest + coverage
 ```
+
+테스트 커버리지 100%가 서버·클라이언트 공통 목표다. 신규 코드는 테스트를 동반한다.
 
 앱 실행/종료 스크립트는 로컬 전용이며 저장소에 포함하지 않는다 (`/scripts/`는 gitignore).
 
@@ -234,8 +262,9 @@ cd client && npm ci && npm run build
 | 런타임 데이터 | `App_Data/` `.runtime/` 로그 |
 | 로컬 설정 | `appsettings*.json` (**`appsettings.example.json`만 커밋**) |
 | 산출물 | `bin/` `obj/` `dist/` `node_modules/` `TestResults/` |
-| 작업 문서 | `WORK-LOG*.md` `ITERATIONS.md` `STRUCTURE-ENGINE-*.md` `REVIEW-*.md` `research/` 등 로컬 개발 로그 |
+| 작업 문서 | `WORK-LOG*.md` `ITERATIONS.md` `STRUCTURE-ENGINE-*.md` `REVIEW-*.md` `ARCHITECTURE.md` `research/` 등 로컬 개발 로그 |
+| 에이전트 운영 문서 | `AGENTS.md` `AGENT-WORKFLOW.md` `CODEX-HANDOFF.md` `CONVENTION-CHANGELOG.md` `LOGIC-INTERACTION-REVIEW-*.md` (`.git/info/exclude`로 제외 — 설계·결정 기록은 여기, 규칙은 이 README) |
 | 로컬 런처 | `*.cmd` |
-| 에이전트 상태 | `.claude/` `.codex/` 등 |
+| 에이전트 상태 | `.claude/` `.codex/` `.ai/` 등 |
 
 테스트는 라이브 외부 API에 의존하면 안 된다 (fake gateway/TimeProvider 사용).
