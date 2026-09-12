@@ -421,12 +421,14 @@ dotnet run --project server -- confluence-measure --from 2026-08-17 --to 2026-09
 | `pValue` | 귀무가설 적중률 0.5의 이항 정확검정 양측 p — `min(2·P(X≤k), 2·P(X≥k), 1)` |
 | BH 보정 | 기법 10개 동시, q=0.05. p를 오름차순으로 두고 `p(k) ≤ (k/m)·q`를 만족하는 최대 k까지 기각 |
 
-`status`는 `unverified`(n<50) · `rejected`(n≥50이지만 BH 미통과) · `verified`(n≥50 ∧ BH 통과)다.
-**표본 부족은 통과로 위장하지 않는다** — 가중치가 바뀌지 않는다는 뜻이다.
+`status`는 `unverified`(n<50이거나 BH 미통과) · `rejected`(BH 통과 ∧ 적중률<0.5, 입증된 열위) ·
+`verified`(BH 통과 ∧ 적중률≥0.5, 입증된 우위)다. **표본 부족은 통과로 위장하지 않는다** — `unverified`는
+가중치가 기준선 1.0에서 바뀌지 않는다는 뜻이다.
 
 ### 5B.4 재가중과 파일 스키마
 
-`w = clamp((적중률 − 0.5) × 2, 0, 1)`이며 **`verified`일 때만** 적용한다. `unverified`·`rejected`는 1.0을
+미검증 1.0이 **기준선**이다. 입증된 기법만 `w = clamp(1 + (적중률 − 0.5) × 2, 0, 2)`로 옮긴다 — 우위는
+1.0~2.0으로 올라가고(0.6 → 1.2, 0.75 → 1.5), 열위는 0~1.0으로 내려간다(0.4 → 0.8). `unverified`는 1.0을
 유지한다. 워크포워드는 측정 4주 → 적용 1주이며 측정 창 밖 날짜 폴더는 읽지 않는다.
 
 ```json
@@ -436,7 +438,7 @@ dotnet run --project server -- confluence-measure --from 2026-08-17 --to 2026-09
   "window": { "from": "2026-08-17", "to": "2026-09-13" },
   "horizonBars": 10,
   "weights": {
-    "MACD": { "w": 0.4, "n": 120, "hitRate": 0.7, "ci": [0.6042, 0.781], "brier": 0.22,
+    "MACD": { "w": 1.4, "n": 120, "hitRate": 0.7, "ci": [0.6042, 0.781], "brier": 0.22,
               "pValue": 0.0001, "status": "verified" }
   }
 }

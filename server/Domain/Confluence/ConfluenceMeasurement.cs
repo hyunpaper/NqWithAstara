@@ -10,13 +10,13 @@ public sealed record SignalOutcome(string Technique, string Symbol, DateTimeOffs
 /// <summary>기법 하나의 측정 상태 (C5, #169).</summary>
 public enum MeasurementStatus
 {
-    /// <summary>표본 부족(n &lt; 최소 표본). 가중치는 1.0으로 둔다.</summary>
+    /// <summary>표본 부족(n &lt; 최소 표본)이거나 BH 보정 미통과. 가중치는 기준선 1.0을 유지한다.</summary>
     Unverified,
 
-    /// <summary>표본은 충분하지만 BH 보정에서 귀무가설을 기각하지 못했다. 가중치는 1.0으로 둔다.</summary>
+    /// <summary>BH 통과 ∧ 적중률 &lt; 0.5 — 입증된 열위다. 가중치를 0~1.0으로 내린다.</summary>
     Rejected,
 
-    /// <summary>표본 충분 ∧ BH 통과. 이때만 적중률로 가중치를 만든다.</summary>
+    /// <summary>BH 통과 ∧ 적중률 ≥ 0.5 — 입증된 우위다. 가중치를 1.0~2.0으로 올린다.</summary>
     Verified
 }
 
@@ -121,8 +121,8 @@ public static class ConfluenceMeasurement
         for (var i = 0; i < names.Length; i++)
         {
             var row = rows[i];
-            var status = row.N < policy.MinimumSample ? MeasurementStatus.Unverified
-                : rejectedNull[i] ? MeasurementStatus.Verified
+            var status = row.N < policy.MinimumSample || !rejectedNull[i] ? MeasurementStatus.Unverified
+                : row.HitRate >= .5 ? MeasurementStatus.Verified
                 : MeasurementStatus.Rejected;
             result.Add(new TechniqueMeasurement(names[i], horizonBars, row.N, row.Hits,
                 IndicatorRounding.Ratio(row.HitRate), row.Ci, row.Brier, IndicatorRounding.Ratio(row.PValue),
@@ -131,9 +131,12 @@ public static class ConfluenceMeasurement
         return result.ToImmutable();
     }
 
-    /// <summary>재가중 규칙: verified일 때만 clamp((적중률−0.5)×2, 0, 1), 아니면 1.0 유지(C5).</summary>
+    /// <summary>
+    /// 재가중 규칙: 미검증 1.0을 기준선으로 두고 입증된 기법만 clamp(1 + (적중률−0.5)×2, 0, 2)로 옮긴다.
+    /// 우위는 1.0 위로, 열위는 1.0 아래로 간다.
+    /// </summary>
     public static double WeightOf(MeasurementStatus status, double hitRate) =>
-        status != MeasurementStatus.Verified
+        status == MeasurementStatus.Unverified
             ? ConfluenceAggregator.DefaultWeight
-            : IndicatorRounding.Ratio(Math.Clamp((hitRate - .5) * 2, 0, 1));
+            : IndicatorRounding.Ratio(Math.Clamp(1 + (hitRate - .5) * 2, 0, 2));
 }

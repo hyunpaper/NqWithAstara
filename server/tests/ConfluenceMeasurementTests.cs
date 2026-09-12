@@ -177,11 +177,11 @@ public sealed class ConfluenceMeasurementTests
         Assert.Equal(0.7810, row.Ci.High, 1e-4);
         Assert.Equal(0.22, row.Brier, 4);
         Assert.Equal("verified", row.StatusText);
-        Assert.Equal(0.4, row.Weight, 4);
+        Assert.Equal(1.4, row.Weight, 4);
     }
 
     [Fact]
-    public void SummaryLeavesACoinFlipTechniqueUnweighted()
+    public void SummaryLeavesACoinFlipTechniqueAtTheBaseline()
     {
         var outcomes = Outcomes(TechniqueNames.Rsi, 100, 50, 0.6);
 
@@ -189,12 +189,12 @@ public sealed class ConfluenceMeasurementTests
             .Single(x => x.Technique == TechniqueNames.Rsi);
 
         Assert.Equal(0.5, row.HitRate, 4);
-        Assert.Equal("rejected", row.StatusText);
+        Assert.Equal("unverified", row.StatusText);
         Assert.Equal(1, row.Weight);
     }
 
     [Fact]
-    public void SummaryDrivesAThirtyPercentTechniqueToZeroWeight()
+    public void SummaryPushesAThirtyPercentTechniqueBelowTheBaseline()
     {
         var outcomes = Outcomes(TechniqueNames.AdxDmi, 100, 30, 0.6);
 
@@ -202,8 +202,8 @@ public sealed class ConfluenceMeasurementTests
             .Single(x => x.Technique == TechniqueNames.AdxDmi);
 
         Assert.Equal(0.3, row.HitRate, 4);
-        Assert.Equal("verified", row.StatusText);
-        Assert.Equal(0, row.Weight);
+        Assert.Equal("rejected", row.StatusText);
+        Assert.Equal(0.6, row.Weight, 4);
     }
 
     [Fact]
@@ -231,7 +231,8 @@ public sealed class ConfluenceMeasurementTests
 
         Assert.Equal(10, rows.Length);
         Assert.Equal(TechniqueNames.Macd, Assert.Single(rows, x => x.StatusText == "verified").Technique);
-        Assert.Equal(9, rows.Count(x => x.StatusText == "rejected"));
+        Assert.Equal(9, rows.Count(x => x.StatusText == "unverified"));
+        Assert.All(rows.Where(x => x.StatusText == "unverified"), row => Assert.Equal(1, row.Weight));
     }
 
     [Fact]
@@ -248,13 +249,23 @@ public sealed class ConfluenceMeasurementTests
     }
 
     [Fact]
-    public void WeightMappingClampsToZeroOne()
+    public void WeightMappingMovesAroundTheBaselineOfOne()
     {
-        Assert.Equal(0.5, ConfluenceMeasurement.WeightOf(MeasurementStatus.Verified, 0.75), 4);
-        Assert.Equal(1, ConfluenceMeasurement.WeightOf(MeasurementStatus.Verified, 1), 4);
-        Assert.Equal(0, ConfluenceMeasurement.WeightOf(MeasurementStatus.Verified, 0.4), 4);
+        Assert.Equal(1.2, ConfluenceMeasurement.WeightOf(MeasurementStatus.Verified, 0.6), 4);
+        Assert.Equal(1.5, ConfluenceMeasurement.WeightOf(MeasurementStatus.Verified, 0.75), 4);
+        Assert.Equal(0.8, ConfluenceMeasurement.WeightOf(MeasurementStatus.Rejected, 0.4), 4);
+        Assert.Equal(1, ConfluenceMeasurement.WeightOf(MeasurementStatus.Verified, 0.5), 4);
         Assert.Equal(1, ConfluenceMeasurement.WeightOf(MeasurementStatus.Unverified, 0.9), 4);
-        Assert.Equal(1, ConfluenceMeasurement.WeightOf(MeasurementStatus.Rejected, 0.9), 4);
+        Assert.Equal(1, ConfluenceMeasurement.WeightOf(MeasurementStatus.Unverified, 0.1), 4);
+    }
+
+    [Fact]
+    public void WeightMappingClampsToZeroTwo()
+    {
+        Assert.Equal(2, ConfluenceMeasurement.WeightOf(MeasurementStatus.Verified, 1), 4);
+        Assert.Equal(2, ConfluenceMeasurement.WeightOf(MeasurementStatus.Verified, 1.5), 4);
+        Assert.Equal(0, ConfluenceMeasurement.WeightOf(MeasurementStatus.Rejected, 0), 4);
+        Assert.Equal(0, ConfluenceMeasurement.WeightOf(MeasurementStatus.Rejected, -0.5), 4);
     }
 
     internal static ImmutableArray<IndicatorBar> Flat(int count, decimal close)
@@ -544,7 +555,7 @@ public sealed class ConfluenceWeightsFileTests
     {
         var weights = Sample().ToWeights();
 
-        Assert.Equal(0.4, weights.Values[TechniqueNames.Macd]);
+        Assert.Equal(1.4, weights.Values[TechniqueNames.Macd]);
         Assert.Equal(1, weights.Values[TechniqueNames.Rsi]);
     }
 
@@ -605,7 +616,7 @@ public sealed class ConfluenceWeightsFileTests
 
             Assert.Null(error);
             Assert.False(document.IsDefault);
-            Assert.Equal(0.4, document.Weights[TechniqueNames.Macd].W);
+            Assert.Equal(1.4, document.Weights[TechniqueNames.Macd].W);
             Assert.Equal(10, document.HorizonBars);
         }
         finally { Directory.Delete(root, true); }
@@ -654,7 +665,7 @@ public sealed class ConfluenceWeightsApiTests
         Assert.Equal(10, payload.GetProperty("horizonBars").GetInt32());
         Assert.Equal("2026-08-14", payload.GetProperty("window").GetProperty("from").GetString());
         var macd = payload.GetProperty("weights").GetProperty(TechniqueNames.Macd);
-        Assert.Equal(0.4, macd.GetProperty("w").GetDouble(), 4);
+        Assert.Equal(1.4, macd.GetProperty("w").GetDouble(), 4);
         Assert.Equal(100, macd.GetProperty("n").GetInt32());
         Assert.Equal("verified", macd.GetProperty("status").GetString());
         Assert.Equal(2, macd.GetProperty("ci").GetArrayLength());
