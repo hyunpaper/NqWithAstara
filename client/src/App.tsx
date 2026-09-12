@@ -59,6 +59,8 @@ import {
   type NewsSentimentResponse,
 } from "./newsTypes";
 import { scoreBadge, scoreBadgeTitle } from "./newsFormat";
+import ConfluencePanel from "./ConfluencePanel";
+import { gaugeTone, scoreText2 } from "./confluenceFormat";
 
 type Bar = { time: string; close: number; ema?: number; vwap?: number };
 type Indicators = {
@@ -433,6 +435,8 @@ export default function App() {
     // 이슈 #152: 뉴스 감성. news.enabled(health)와 sentiment 응답 enabled가 모두 true일 때만 렌더한다.
     [newsHealthEnabled, setNewsHealthEnabled] = useState<boolean | null>(null),
     [newsSentiment, setNewsSentiment] = useState<NewsSentimentResponse | null>(null),
+    // 이슈 #168: 사이드바 미니 배지는 ConfluencePanel의 기존 폴링 결과를 그대로 쓴다(추가 호출 없음, §4).
+    [confluenceScore, setConfluenceScore] = useState<{ symbol: string; score: number | null } | null>(null),
     [form, setForm] = useState({ entryPrice: "", quantity: "" });
   const seenSetups = useRef<Record<string, string>>({});
   const seenBreakouts = useRef<Record<string, string>>({});
@@ -606,6 +610,9 @@ export default function App() {
       previousRunning.current = state.running;
     }
   }, [state, alertsOn]);
+  useEffect(() => {
+    setConfluenceScore(null);
+  }, [selected]);
   useEffect(() => {
     if (!selected) return;
     const draft = formDrafts.current[selected];
@@ -829,6 +836,10 @@ export default function App() {
               ? findSymbolScore(newsSentiment?.symbols ?? [], w.symbol)
               : null;
             const newsBadge = scoreBadge(newsScore?.score);
+            const confluence =
+              confluenceScore?.symbol === w.symbol && confluenceScore.score != null
+                ? confluenceScore.score
+                : null;
             return (
               <div
                 className={`watch-row ${selected === w.symbol ? "active" : ""}`}
@@ -848,6 +859,14 @@ export default function App() {
                       title={scoreBadgeTitle(newsScore?.count, newsScore?.latestAt)}
                     >
                       {newsBadge.label}
+                    </span>
+                  )}
+                  {confluence != null && (
+                    <span
+                      className={`confluence-mini-badge ${gaugeTone(confluence)}`}
+                      title="컨플루언스 점수(관측 전용)"
+                    >
+                      {scoreText2(confluence)}
                     </span>
                   )}
                   {s && (
@@ -1353,6 +1372,13 @@ export default function App() {
           />
         )}
         {selected && <LiquidityPanel key={selected} symbol={selected} />}
+        {selected && (
+          <ConfluencePanel
+            key={selected}
+            symbol={selected}
+            onScore={(symbol, score) => setConfluenceScore({ symbol, score })}
+          />
+        )}
         {selected && newsUiEnabled && <NewsPanel key={selected} symbol={selected} />}
         </div>
         <footer>
