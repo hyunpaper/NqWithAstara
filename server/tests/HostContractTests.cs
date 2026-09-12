@@ -64,6 +64,10 @@ public sealed class HostBootTests(AstraHostFixture host) : IClassFixture<AstraHo
         Assert.NotNull(services.GetRequiredService<StructureLiquidityFeed>());
         Assert.NotNull(services.GetRequiredService<IStructuralTradeEntries>());
         Assert.NotNull(services.GetRequiredService<FeeRateCheckService>());
+        Assert.NotNull(services.GetRequiredService<IBarStore>());
+        Assert.NotNull(services.GetRequiredService<BarStoreService>());
+        Assert.NotNull(services.GetRequiredService<BenchmarkPollingService>());
+        Assert.NotNull(services.GetRequiredService<ConfluenceOptions>());
     }
 
     [Fact]
@@ -106,6 +110,20 @@ public sealed class HttpContractTests(AstraHostFixture host) : IClassFixture<Ast
         Assert.False(json.RootElement.TryGetProperty("CredentialsRequired", out _));
         Assert.Equal(JsonValueKind.Array, json.RootElement.GetProperty("warnings").ValueKind);
         Assert.Equal(0, json.RootElement.GetProperty("warnings").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task HealthCarriesTheAdditiveBarsSection()
+    {
+        using var client = host.Factory.CreateClient();
+        using var json = await ReadJson(await client.GetAsync("/api/health"));
+
+        var bars = json.RootElement.GetProperty("bars");
+        Assert.Equal(JsonValueKind.Number, bars.GetProperty("days").ValueKind);
+        Assert.Equal(JsonValueKind.Number, bars.GetProperty("todayBars").ValueKind);
+        var benchmark = bars.GetProperty("benchmark");
+        Assert.Equal("QQQ", benchmark.GetProperty("symbol").GetString());
+        Assert.Equal(JsonValueKind.Number, benchmark.GetProperty("todayBars").ValueKind);
     }
 
     [Fact]
