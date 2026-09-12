@@ -169,6 +169,12 @@ public sealed class StructureAnalysisService(
     /// </summary>
     public string EntryOwner => _options.Mode == StructureEngineMode.Active ? EntryOwnerV5 : EntryOwnerV4;
 
+    /// <summary>
+    /// 이슈 #118: off/shadow는 진입 경로가 없으므로 READY 성립이 곧 episode 소비이고, active는 ENTERED만 소비한다.
+    /// active와 shadow의 후보 집합을 같게 유지하는 파리티 기준이다(#27/#28).
+    /// </summary>
+    bool ConsumeEpisodeOnReady => _options.Mode != StructureEngineMode.Active;
+
     /// <summary>세션 종료·모니터링 중지 시 메모리를 정리한다(§16 "메모리도 세션 종료 시 정리한다").</summary>
     public void Clear() { _cache.Clear(); _published.Clear(); _latches.Clear(); _failed.Clear(); _tickUnknowns.Clear(); }
 
@@ -278,7 +284,8 @@ public sealed class StructureAnalysisService(
                     // 저장 성공 뒤에만 래치를 올린다(§12.6). 종결된 후보의 tombstone이 여기서 남는다.
                     // #107: 이 경로는 진입을 시도하지 않으므로 직전 full 평가에서 막힌 후보도 그대로 소비하지 않는다.
                     _latches[request.Symbol] = StructuralLifecycle.Commit(latch, lastBarStart, refreshed,
-                        latch.RetiredZoneIds, liveSignature, liveRecord.ObservationId, cached.EntryBlocked);
+                        latch.RetiredZoneIds, liveSignature, liveRecord.ObservationId, cached.EntryBlocked,
+                        ConsumeEpisodeOnReady);
                     await PersistAsync(ct);
                 }
 
@@ -420,7 +427,7 @@ public sealed class StructureAnalysisService(
                 ? ImmutableArray.Create(blockedId)
                 : ImmutableArray<string>.Empty;
             var committed = StructuralLifecycle.Commit(latch, lastBarStart, candidates,
-                displayLayer.RetiredZoneIds, signature, observationId, entryBlocked);
+                displayLayer.RetiredZoneIds, signature, observationId, entryBlocked, ConsumeEpisodeOnReady);
             _latches[request.Symbol] = committed;
             await PersistAsync(ct);
 
