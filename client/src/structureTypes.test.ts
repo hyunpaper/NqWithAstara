@@ -18,6 +18,7 @@ import {
   priceRange,
   qualityComponentLabel,
   setupKindLabel,
+  sidebarConfluenceScore,
   sourceKindLabel,
   sourceNameLabel,
   sourceStatusLabel,
@@ -26,6 +27,7 @@ import {
   zoneRoleGroup,
   zoneRoleLabel,
 } from "./structureTypes";
+import type { StructureSummaryRow } from "./structureTypes";
 
 describe("arr", () => {
   it("배열이 아니면 빈 배열을 돌려준다", () => {
@@ -358,5 +360,35 @@ describe("missingComponentTexts", () => {
     expect(missingComponentTexts(["vwap", ""])).toEqual([
       "VWAP — 세션 거래량이 아직 없어 VWAP을 계산하지 못했습니다",
     ]);
+  });
+});
+
+// 이슈 #181: 사이드바 전 종목 컨플루언스 배지 — K3 선택 종목 최신값이 structureSummary 캐시보다 우선한다.
+describe("sidebarConfluenceScore", () => {
+  const rowWithConfluence = (score: number | null): StructureSummaryRow => ({
+    symbol: "AAPL",
+    confluence: { score, warmupCount: 0, weightsVersion: "uniform.1", barEnd: "2026-09-12T00:31:00Z" },
+  });
+
+  it("선택 종목이고 pin 값이 있으면 pin을 우선한다", () => {
+    expect(sidebarConfluenceScore({ symbol: "AAPL", score: 0.5 }, "AAPL", rowWithConfluence(-0.2))).toBe(0.5);
+  });
+
+  it("다른 종목 행이면 pin을 무시하고 structureSummary 캐시값을 쓴다", () => {
+    expect(sidebarConfluenceScore({ symbol: "AAPL", score: 0.5 }, "MSFT", rowWithConfluence(-0.2))).toBe(-0.2);
+  });
+
+  it("pin이 없으면(다른 종목이거나 아직 폴링 전) structureSummary 캐시값을 쓴다", () => {
+    expect(sidebarConfluenceScore(null, "AAPL", rowWithConfluence(0.7))).toBe(0.7);
+  });
+
+  it("캐시도 없으면(워밍업·미보유) null이고 배지가 숨겨진다", () => {
+    expect(sidebarConfluenceScore(null, "AAPL", { symbol: "AAPL" })).toBeNull();
+    expect(sidebarConfluenceScore(null, "AAPL", { symbol: "AAPL", confluence: null })).toBeNull();
+    expect(sidebarConfluenceScore(null, "AAPL", undefined)).toBeNull();
+  });
+
+  it("pin.score가 null이면(폴링 중) structureSummary 캐시값으로 대체한다", () => {
+    expect(sidebarConfluenceScore({ symbol: "AAPL", score: null }, "AAPL", rowWithConfluence(0.3))).toBe(0.3);
   });
 });

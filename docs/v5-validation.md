@@ -93,6 +93,10 @@ realizedFillCostModelVersion, netR}`.
 additive `confluence: {score, warmupCount, weightsVersion}` 요약을 돌려준다. 두 경로 모두 **조회가 계산을
 유발하지 않는다** — 마지막 완료 봉 평가에서 캐시된 값만 읽는다.
 
+`GET /api/state`의 `structureSummary.symbols[]` 각 행도 같은 캐시에서 읽은 additive
+`confluence: {score, warmupCount, weightsVersion, barEnd}`를 싣는다(#181). 캐시가 없거나 warmup이면 `null`이며
+새 계산·호출은 일으키지 않는다.
+
 ### 2.1.1 재진입 코호트 태그 (#111)
 
 `SimTrade.Structure.reentry`는 **진입 시점에 직전 거래를 아는 계층**(`StructuralSimulation.Enter`)이 채우는

@@ -36,6 +36,7 @@ import type {
   StructureSummary,
   StructureSummaryRow,
 } from "./structureTypes";
+import { sidebarConfluenceScore } from "./structureTypes";
 import {
   LiveSortKey,
   compareByEntryQuality,
@@ -435,7 +436,8 @@ export default function App() {
     // 이슈 #152: 뉴스 감성. news.enabled(health)와 sentiment 응답 enabled가 모두 true일 때만 렌더한다.
     [newsHealthEnabled, setNewsHealthEnabled] = useState<boolean | null>(null),
     [newsSentiment, setNewsSentiment] = useState<NewsSentimentResponse | null>(null),
-    // 이슈 #168: 사이드바 미니 배지는 ConfluencePanel의 기존 폴링 결과를 그대로 쓴다(추가 호출 없음, §4).
+    // 이슈 #168/#181: 선택 종목은 ConfluencePanel의 기존 폴링 결과를, 나머지 행은
+    // structureSummary 캐시 요약을 그대로 쓴다(추가 호출 없음, §4).
     [confluenceScore, setConfluenceScore] = useState<{ symbol: string; score: number | null } | null>(null),
     [form, setForm] = useState({ entryPrice: "", quantity: "" });
   const seenSetups = useRef<Record<string, string>>({});
@@ -836,10 +838,8 @@ export default function App() {
               ? findSymbolScore(newsSentiment?.symbols ?? [], w.symbol)
               : null;
             const newsBadge = scoreBadge(newsScore?.score);
-            const confluence =
-              confluenceScore?.symbol === w.symbol && confluenceScore.score != null
-                ? confluenceScore.score
-                : null;
+            // 이슈 #181: K3 폴링 최신값(선택 종목)이 없으면 structureSummary 캐시로 전 종목 배지를 채운다.
+            const confluence = sidebarConfluenceScore(confluenceScore, w.symbol, rowOf(w.symbol));
             return (
               <div
                 className={`watch-row ${selected === w.symbol ? "active" : ""}`}

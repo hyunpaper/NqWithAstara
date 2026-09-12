@@ -23,8 +23,9 @@ public sealed record ConfluenceTechniqueDto(string Name, double Score, double Co
 public sealed record ConfluenceDto(DateTimeOffset BarEnd, double? Score, int WarmupCount, string PolicyHash,
     string WeightsVersion, ConfluenceTechniqueDto[] Techniques);
 
-/// <summary>`/api/structure/{symbol}`에 additive로 붙는 요약 (C4, #167).</summary>
-public sealed record ConfluenceSummaryDto(double? Score, int WarmupCount, string WeightsVersion);
+/// <summary>`/api/structure/{symbol}`·`structureSummary` 행에 additive로 붙는 요약 (C4, #167 / #181).</summary>
+public sealed record ConfluenceSummaryDto(double? Score, int WarmupCount, string WeightsVersion,
+    DateTimeOffset? BarEnd = null);
 
 /// <summary>`GET /api/confluence/{symbol}` 응답 (#167). 조회가 계산을 유발하지 않는다.</summary>
 public sealed record ConfluenceResponse(string Symbol, string Status, string PolicyHash, string WeightsVersion,
@@ -62,7 +63,7 @@ public sealed class ConfluenceService(
 
     public ConfluenceSummaryDto? Summary(string symbol) =>
         _scores.TryGetValue(symbol, out var score)
-            ? new ConfluenceSummaryDto(score.Score, score.WarmupCount, score.WeightsVersion)
+            ? new ConfluenceSummaryDto(score.Score, score.WarmupCount, score.WeightsVersion, score.BarEnd)
             : null;
 
     /// <summary>매 poll의 호가 스냅샷을 링버퍼에 남긴다. 세션이 바뀌면 이전 세션 스냅샷은 버린다.</summary>

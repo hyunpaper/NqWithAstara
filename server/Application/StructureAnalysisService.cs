@@ -851,7 +851,9 @@ public sealed class StructureAnalysisService(
                     warnings = failed
                         ? (view?.Warnings ?? []).Append(WarningEvaluationFailed).Distinct(StringComparer.Ordinal)
                             .OrderBy(x => x, StringComparer.Ordinal).ToArray()
-                        : view?.Warnings ?? []
+                        : view?.Warnings ?? [],
+                    // 이슈 #181: additive `confluence` — 캐시 읽기만, warmup·미보유면 null.
+                    confluence = confluence?.Summary(symbol)
                 };
             })
             .ToArray();
