@@ -52,6 +52,15 @@ import type { StructureCohortReport, TradeStructure } from "./dashboardTypes";
 import { tradeEntryTooltip } from "./dashboardTypes";
 import { blockTradeLabel, flowSourceLabel } from "./tradeTape";
 import { turnoverText } from "./metricsFormat";
+import NewsPanel from "./NewsPanel";
+import {
+  findSymbolScore,
+  normalizeNewsHealth,
+  normalizeSentimentResponse,
+  shouldRenderNewsUi,
+  type NewsSentimentResponse,
+} from "./newsTypes";
+import { scoreBadge } from "./newsFormat";
 
 type Bar = { time: string; close: number; ema?: number; vwap?: number };
 type Indicators = {
@@ -433,6 +442,9 @@ export default function App() {
     [liveSortChoice, setLiveSortChoice] = useState(
       () => localStorage.getItem("astra-live-sort") || "",
     ),
+    // 이슈 #152: 뉴스 감성. news.enabled(health)와 sentiment 응답 enabled가 모두 true일 때만 렌더한다.
+    [newsHealthEnabled, setNewsHealthEnabled] = useState<boolean | null>(null),
+    [newsSentiment, setNewsSentiment] = useState<NewsSentimentResponse | null>(null),
     [form, setForm] = useState({ entryPrice: "", quantity: "" });
   const seenSetups = useRef<Record<string, string>>({});
   const seenBreakouts = useRef<Record<string, string>>({});
@@ -478,11 +490,26 @@ export default function App() {
       loadingState.current = false;
     }
   };
+  // 이슈 #152: 실패는 조용히 무시하고 이전 값을 유지한다(설계 §4).
+  const loadNews = async () => {
+    try {
+      const health = await api<{ news?: unknown }>("/api/health");
+      setNewsHealthEnabled(normalizeNewsHealth(health.news)?.enabled ?? false);
+    } catch {
+      /* 이전 값 유지 */
+    }
+    try {
+      setNewsSentiment(normalizeSentimentResponse(await api("/api/news/sentiment")));
+    } catch {
+      /* 이전 값 유지 */
+    }
+  };
   useEffect(() => {
     let active = true;
     let id: ReturnType<typeof setTimeout>;
     const poll = async () => {
       await load(true);
+      await loadNews();
       if (active) id = setTimeout(poll, 3000);
     };
     void poll();
@@ -715,6 +742,9 @@ export default function App() {
   };
   const signal = state?.signals.find((x) => x.symbol === selected);
   const selectedWatch = state?.watchlist.find((x) => x.symbol === selected);
+  // 이슈 #152: news.enabled(health) 또는 sentiment.enabled가 false면 뉴스 UI를 아무것도 그리지 않는다.
+  const newsUiEnabled = shouldRenderNewsUi(newsHealthEnabled, newsSentiment?.enabled);
+  const marketNewsBadge = newsUiEnabled ? scoreBadge(newsSentiment?.market?.score) : null;
   // ── 이슈 #26/#88: 모드별 정렬 ──
   // active/shadow = v5 계열 정렬(v5 상태/추세 강도/추세 방향/진입 품질/종목명) 중 선택.
   // off·summary 부재는 v5 분석이 없으므로 선택지 없이 종목 알파벳순으로 고정한다.
@@ -811,6 +841,10 @@ export default function App() {
         <div className="watch-list">
           {state?.watchlist.map((w) => {
             const s = state.signals.find((v) => v.symbol === w.symbol);
+            const newsScore = newsUiEnabled
+              ? findSymbolScore(newsSentiment?.symbols ?? [], w.symbol)
+              : null;
+            const newsBadge = scoreBadge(newsScore?.score);
             return (
               <div
                 className={`watch-row ${selected === w.symbol ? "active" : ""}`}
@@ -824,6 +858,18 @@ export default function App() {
                     <b>{w.symbol}</b>
                     <small>{w.name}</small>
                   </div>
+                  {newsBadge && (
+                    <span
+                      className={newsBadge.className}
+                      title={
+                        newsScore?.latestAt
+                          ? `최근 기사 ${new Date(newsScore.latestAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })} KST`
+                          : "뉴스 감성"
+                      }
+                    >
+                      {newsBadge.label}
+                    </span>
+                  )}
                   {s && (
                     <span
                       className={(s.changePercent ?? 0) >= 0 ? "up" : "down"}
@@ -899,6 +945,11 @@ export default function App() {
             </div>
           </div>
           <div className="header-actions">
+            {marketNewsBadge && (
+              <span className={marketNewsBadge.className} title="시장 분위기 · 뉴스 감성 점수">
+                시장 분위기 {marketNewsBadge.label}
+              </span>
+            )}
             <FeeWarningBadge warnings={state?.warnings} />
             <div className={`market ${state?.market.isOpen ? "open" : ""}`}>
               <span />
@@ -1336,6 +1387,7 @@ export default function App() {
           />
         )}
         {selected && <LiquidityPanel key={selected} symbol={selected} />}
+        {selected && newsUiEnabled && <NewsPanel key={selected} symbol={selected} />}
         </div>
         <footer>
           본 화면의 시그널은 기술적 조건 충족 점수이며 수익 확률이나 투자 권유가
