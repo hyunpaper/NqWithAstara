@@ -19,7 +19,8 @@ public static partial class ConfluenceTechniques
             Candle(input, policy),
             MultiTimeframeAlignment(input, policy),
             Squeeze(input, policy),
-            VolatilityBreakout(input, policy)
+            VolatilityBreakout(input, policy),
+            RelativeVolumeDaily(input, policy)
         ];
     }
 
@@ -106,6 +107,33 @@ public static partial class ConfluenceTechniques
         return TechniqueSignal.Create(name, score, confidence,
             ("squeeze", now ? 1 : 0), ("released", released ? 1 : 0), ("keltnerUpper", upper),
             ("keltnerLower", lower), ("bollingerUpper", bands[i].Upper), ("bollingerLower", bands[i].Lower));
+    }
+
+    // ── 일 단위 RVOL: 당일 누적 거래량 / 최근 20거래일 같은 시각 누적 평균, tanh(rvol−1)×당일 방향 ──
+    public static TechniqueSignal RelativeVolumeDaily(ConfluenceInput input, ConfluencePolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(policy);
+        var name = TechniqueNames.RelativeVolumeDaily;
+        if (Last(input) is not { } i) return TechniqueSignal.WarmingUp(name);
+
+        var elapsed = (int)Math.Round((input.Bars[i].End - input.SessionStart).TotalMinutes,
+            MidpointRounding.AwayFromZero);
+        decimal cumulative = 0;
+        for (var k = 0; k <= i; k++) cumulative += input.Bars[k].Volume;
+
+        var sessions = input.PreviousSessionVolumes.IsDefault
+            ? ImmutableArray<SessionVolumeProfile>.Empty
+            : input.PreviousSessionVolumes;
+        var rvol = DailyRelativeVolume.Compute(cumulative, elapsed, sessions,
+            policy.DailyRelativeVolumeLookbackSessions);
+        if (rvol is not { } value)
+            return TechniqueSignal.WarmingUp(name, ("sessions", sessions.Length), ("elapsedMinutes", elapsed));
+
+        var direction = ConfluenceMath.Sign((double)(input.Bars[i].Close - input.Bars[0].Open));
+        return TechniqueSignal.Create(name, ConfluenceMath.Tanh(value - 1) * direction, 1,
+            ("relativeVolumeDaily", value), ("direction", direction), ("elapsedMinutes", elapsed),
+            ("cumulativeVolume", (double)cumulative), ("sessions", sessions.Length));
     }
 
     // ── 변동성 돌파(재정의판): 목표가 = 정규장 첫 완료봉 시가 + 전일 레인지 × K(0.5 고정, 미검증) ──

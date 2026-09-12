@@ -95,6 +95,9 @@ public sealed record ConfluencePolicy
     public int VolatilityBreakoutFilterDays { get; init; } = 3;
     public double VolatilityBreakoutFilterConfidence { get; init; } = .5;
 
+    /// <summary>일 단위 RVOL이 같은 시각 누적 거래량을 비교하는 과거 거래일 수. 모자라면 warmup이다.</summary>
+    public int DailyRelativeVolumeLookbackSessions { get; init; } = 20;
+
     /// <summary>
     /// C4 상관군. 같은 정보축 묶음은 군 안에서 1/n로 나눈다. `군이름:기법,기법` 형식이며 2·3군이
     /// 들어오면 이 목록만 늘어난다. 1군 채택 목록에는 각 군에 한 기법씩만 있어 실질 계수는 1.0이다.

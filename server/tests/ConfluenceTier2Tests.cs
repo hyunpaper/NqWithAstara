@@ -258,4 +258,63 @@ public sealed class ConfluenceTier2Tests
         Assert.True(ConfluenceTechniques.VolatilityBreakout(
             Cf.Input(Cf.Ramp(10, 100, .05), previousDaily: PreviousDaily(99)), Policy).Warmup);
     }
+    static ImmutableArray<SessionVolumeProfile> Profiles(int count, int minutes, decimal perMinute) =>
+        Enumerable.Range(0, count)
+            .Select(i => new SessionVolumeProfile(new DateOnly(2026, 8, 1).AddDays(i),
+                [..Enumerable.Range(1, minutes).Select(k => perMinute * k)]))
+            .ToImmutableArray();
+
+    [Fact]
+    public void SessionVolumeProfile_carries_the_last_cumulative_value_across_missing_minutes()
+    {
+        var bars = ImmutableArray.Create(Cf.Bar(0, 100, 500), Cf.Bar(3, 100, 700));
+
+        var profile = SessionVolumeProfile.FromBars(new DateOnly(2026, 9, 11), Cf.SessionStart, bars);
+
+        Assert.Equal(new[] { 500m, 500m, 500m, 1200m }, profile.Cumulative.ToArray());
+        Assert.Equal(500m, profile.At(2));
+        Assert.Equal(1200m, profile.At(9));
+        Assert.Null(profile.At(0));
+    }
+
+    [Fact]
+    public void RvolDaily_is_positive_when_today_outpaces_the_twenty_session_average_and_price_is_up()
+    {
+        var signal = ConfluenceTechniques.RelativeVolumeDaily(
+            Cf.Input(Cf.Ramp(30, 100, .05), previousVolumes: Profiles(20, 60, 1000)), Policy);
+
+        Assert.False(signal.Warmup);
+        Assert.Equal(30, Cf.Evidence(signal, "elapsedMinutes"));
+        Assert.Equal(1, Cf.Evidence(signal, "relativeVolumeDaily"));
+        Assert.Equal(0, signal.Score, 4);
+        Assert.Equal(1, signal.Confidence);
+
+        var busy = ConfluenceTechniques.RelativeVolumeDaily(
+            Cf.Input(Cf.Ramp(30, 100, .05), previousVolumes: Profiles(20, 60, 500)), Policy);
+
+        Assert.Equal(2, Cf.Evidence(busy, "relativeVolumeDaily"));
+        Assert.Equal(Math.Tanh(1), busy.Score, 4);
+    }
+
+    [Fact]
+    public void RvolDaily_flips_sign_with_the_session_direction()
+    {
+        var signal = ConfluenceTechniques.RelativeVolumeDaily(
+            Cf.Input(Cf.Ramp(30, 100, -.05), previousVolumes: Profiles(20, 60, 500)), Policy);
+
+        Assert.Equal(-Math.Tanh(1), signal.Score, 4);
+        Assert.Equal(-1, Cf.Evidence(signal, "direction"));
+    }
+
+    [Fact]
+    public void RvolDaily_is_warmup_without_twenty_prior_sessions()
+    {
+        var short_ = ConfluenceTechniques.RelativeVolumeDaily(
+            Cf.Input(Cf.Ramp(30, 100, .05), previousVolumes: Profiles(19, 60, 500)), Policy);
+
+        Assert.True(short_.Warmup);
+        Assert.Equal(19, Cf.Evidence(short_, "sessions"));
+        Assert.True(ConfluenceTechniques.RelativeVolumeDaily(Cf.Input(Cf.Ramp(30, 100, .05)), Policy).Warmup);
+        Assert.True(ConfluenceTechniques.RelativeVolumeDaily(Cf.Input([]), Policy).Warmup);
+    }
 }
