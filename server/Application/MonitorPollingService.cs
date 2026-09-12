@@ -5,7 +5,8 @@ namespace Astra.Server.Application;
 public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway toss, IRealtimeMarketStream stream,
     MonitorRuntimeState runtime, TimeProvider clock, IMonitorDiagnostics diagnostics,
     StructureAnalysisService? structure = null, StructureLiquidityFeed? liquidity = null,
-    StructureAlertPublisher? alerts = null, SymbolMetadataService? metadata = null) : IMonitorSignals
+    StructureAlertPublisher? alerts = null, SymbolMetadataService? metadata = null,
+    FeeRateCheckService? feeCheck = null) : IMonitorSignals
 {
     public bool Running => runtime.Snapshot().Running; public long Generation => runtime.Snapshot().Generation;
     public string ConnectionStatus => runtime.Snapshot().ConnectionStatus; public string ConnectionMessage => runtime.Snapshot().ConnectionMessage;
@@ -31,6 +32,8 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
                 runtime.TryCommit(gen, () => { Signals.Clear(); _setups.Clear(); _breakouts.Clear(); _daily.Clear(); structure?.Clear(); alerts?.Clear(); metadata?.Clear(); });
                 runtime.TryCommit(gen, s => s with { ConnectionStatus = "connected", ConnectionMessage = "미국 정규장 외에는 신호를 생성하지 않습니다.", UpdatedAt = clock.GetUtcNow() }); return;
             }
+            // 이슈 #130: 폴링 서비스가 세션 진입을 감지하는 지점 — 세션당 1회 수수료 정합을 확인한다.
+            if (feeCheck is not null && market.Start is { } sessionStart) await feeCheck.CheckOnSessionEntryAsync(sessionStart, ct);
             var watch = await store.Read("watchlist.json", new List<WatchItem>()); var oldTrades = await store.Read("simtrades.json", new List<SimTrade>()); if (!runtime.IsCurrent(gen)) return;
             // Reconcile any previous-session records after giving their final bars a chance
             // to produce a deterministic stop/target outcome.

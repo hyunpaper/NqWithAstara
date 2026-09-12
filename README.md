@@ -237,6 +237,7 @@ flowchart TB
 - 운영은 `active`. **v4(점수 엔진) 진입 생성과 화면 표시는 제거됐다** — 대시보드·시그널 순위·거래 표는 v5 단독. v4 코드는 청산 경로에서만 레거시로 남는다.
 - 구조 근거가 없으면 **진입 보류가 정답** — ATR 배수/1.5R 폴백으로 목표·손절을 만들지 않는다.
 - 구조 엔진 소스는 레거시 진입점(`MarketRules.Enter`/`PriceLevels.*` 등)을 참조하지 않는다 (정적 테스트로 강제).
+- `StructurePolicy.RoundTripFeePercent`를 바꾸면 PolicyHash가 바뀌어 래치가 리셋되므로, 정규장 밖에서만 재기동한다.
 
 ## 6. 로컬 검증 (PR 전 필수)
 

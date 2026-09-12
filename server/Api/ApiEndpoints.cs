@@ -6,7 +6,7 @@ public static class ApiEndpoints
 {
     public static IEndpointRouteBuilder MapAstraApi(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/api/health", (MonitorRuntimeState r) => { var s = r.Snapshot(); return Results.Ok(new { app = "Astra", status = "ready", connection = s.ConnectionStatus, credentialsRequired = s.ConnectionStatus is "idle" or "error", guideUrl = s.ConnectionMessage.Contains("허용 IP") ? "https://developers.tossinvest.com/docs" : null }); });
+        app.MapGet("/api/health", (MonitorRuntimeState r, FeeRateCheckService? feeCheck) => { var s = r.Snapshot(); return Results.Ok(new { app = "Astra", status = "ready", connection = s.ConnectionStatus, credentialsRequired = s.ConnectionStatus is "idle" or "error", guideUrl = s.ConnectionMessage.Contains("허용 IP") ? "https://developers.tossinvest.com/docs" : null, warnings = feeCheck?.Warnings ?? Array.Empty<string>() }); });
         app.MapGet("/api/state", async (StateQueryService q) => Results.Ok(await q.GetAsync())); app.MapGet("/api/search", SearchAsync);
         app.MapPost("/api/watchlist", AddWatchAsync);
         app.MapDelete("/api/watchlist/{symbol}", async (string symbol, MonitorControlService c, CancellationToken ct) => { await c.RemoveAsync(symbol, ct); return Results.NoContent(); });

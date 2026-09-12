@@ -63,6 +63,7 @@ public sealed class HostBootTests(AstraHostFixture host) : IClassFixture<AstraHo
         Assert.NotNull(services.GetRequiredService<StructureEngineOptions>());
         Assert.NotNull(services.GetRequiredService<StructureLiquidityFeed>());
         Assert.NotNull(services.GetRequiredService<IStructuralTradeEntries>());
+        Assert.NotNull(services.GetRequiredService<FeeRateCheckService>());
     }
 
     [Fact]
@@ -103,6 +104,8 @@ public sealed class HttpContractTests(AstraHostFixture host) : IClassFixture<Ast
         // camelCase 직렬화 — PascalCase 키가 아니어야 한다.
         Assert.True(json.RootElement.TryGetProperty("credentialsRequired", out _));
         Assert.False(json.RootElement.TryGetProperty("CredentialsRequired", out _));
+        Assert.Equal(JsonValueKind.Array, json.RootElement.GetProperty("warnings").ValueKind);
+        Assert.Equal(0, json.RootElement.GetProperty("warnings").GetArrayLength());
     }
 
     [Fact]
@@ -156,6 +159,7 @@ public sealed class HttpContractTests(AstraHostFixture host) : IClassFixture<Ast
         var root = json.RootElement;
         Assert.True(root.TryGetProperty("running", out _));
         Assert.True(root.TryGetProperty("watchlist", out _));
+        Assert.Equal(JsonValueKind.Array, root.GetProperty("warnings").ValueKind);
 
         var summary = root.GetProperty("structureSummary");
         Assert.Equal("off", summary.GetProperty("mode").GetString());
