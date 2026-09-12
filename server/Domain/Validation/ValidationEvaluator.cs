@@ -77,9 +77,16 @@ public sealed record QualityDiscrimination(EvaluationVerdict Verdict, IReadOnlyL
     IReadOnlyList<QualityBandPoint> Bands, int ComparableBands, double? MeanSpreadPercent, bool? Monotonic,
     bool? IntervalsSeparated, string Caveat);
 
+/// <summary>
+/// #111: READY 후보가 진입으로 이어지지 않은 사유별 건수. <see cref="Events"/>는 이벤트 기준(같은 이벤트의
+/// 반복 poll은 한 건)이고 <see cref="Symbols"/>는 그 이벤트가 걸친 종목 수다. 0건도 그대로 보고한다.
+/// </summary>
+public sealed record EntryBlockCount(string Code, string Label, int Events, int Symbols);
+
 public sealed record ValidationEvaluation(DateTimeOffset AsOf, EvaluationThresholds Thresholds,
     CohortEvaluation Overall, IReadOnlyList<EvaluationGroup> Groups, RejectedCandidateReport Rejected,
-    QualityDiscrimination QualityBands, IReadOnlyList<string> Caveats);
+    QualityDiscrimination QualityBands, IReadOnlyList<EntryBlockCount> EntryBlocks,
+    IReadOnlyList<string> Caveats);
 
 public static class ValidationEvaluator
 {
@@ -125,7 +132,7 @@ public static class ValidationEvaluator
         };
 
         return new ValidationEvaluation(asOf, limits, Cohort("ALL", "전체", true, rows, limits), groups,
-            Rejected(rows, virtualPaths), Discrimination(rows, limits), StandardCaveats);
+            Rejected(rows, virtualPaths), Discrimination(rows, limits), EntryBlocks(rows), StandardCaveats);
     }
 
     // ── 코호트 ────────────────────────────────────────────────────────────────────────────────
@@ -220,6 +227,17 @@ public static class ValidationEvaluator
             ? (EvaluationVerdict.Observed, Array.Empty<string>())
             : (EvaluationVerdict.InsufficientSample, reasons);
     }
+
+    /// <summary>#111: 진입 차단 사유를 코드별로 따로 센다 — 두 코드를 합치면 지연과 차단을 구분할 수 없다.</summary>
+    static IReadOnlyList<EntryBlockCount> EntryBlocks(IReadOnlyList<LinkedCandidate> rows) =>
+        new[] { EntryBlockCodes.SuppressedBySamePollExit, EntryBlockCodes.BlockedByStopCooldown }
+            .Select(code =>
+            {
+                var hits = rows.Where(x => x.RejectionCodes.Contains(code, StringComparer.Ordinal)).ToArray();
+                return new EntryBlockCount(code, EntryBlockCodes.Label(code), hits.Length,
+                    hits.Select(x => x.Symbol).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+            })
+            .ToArray();
 
     static IReadOnlyList<RejectReasonCount> Reasons(IReadOnlyList<LinkedCandidate> rows, int take) =>
         rows.SelectMany(x => x.RejectionCodes).GroupBy(x => x, StringComparer.Ordinal)

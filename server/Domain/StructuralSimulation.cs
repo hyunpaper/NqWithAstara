@@ -33,7 +33,9 @@ public enum StructuralEntryOutcome
 /// </summary>
 public sealed record StructuralEntryRequest(string Symbol, DateTimeOffset TriggerBarStart,
     DateTimeOffset EnteredAt, DateTimeOffset SessionEnd, FrozenStructureContext Context,
-    IReadOnlyList<DateTimeOffset>? CompletedBarStarts = null, DateTimeOffset? SessionStart = null);
+    IReadOnlyList<DateTimeOffset>? CompletedBarStarts = null, DateTimeOffset? SessionStart = null,
+    // #111: 목표 구간의 zone lineage(병합으로 흡수된 ID). 없으면 재진입 태그는 ID 동일 여부만 본다.
+    IReadOnlyList<string>? TargetZoneAliases = null);
 
 public sealed record StructuralEntryResult(List<SimTrade> Trades, StructuralEntryOutcome Outcome, SimTrade? Trade);
 
@@ -108,12 +110,13 @@ public static class StructuralSimulation
 
         // 결정적 ID: 같은 이벤트의 재시도가 다른 거래처럼 보이지 않게 한다(§16B 재시작 규칙과 같은 방향).
         var id = StructureMath.SourceId("simtrade", request.Symbol, request.Context.EntryEventId)[..8];
+        var context = request.Context with { Reentry = Reentry(trades, request) };
         var trade = new SimTrade(id, request.Symbol, plan.Kind, request.EnteredAt, entry, target, stop,
             TargetBasis, StopBasis, "OPEN", null, null, null, entry,
             Score: null, ExtSigma: null, RelVolume: null, BuyShare: null, Rsi: null,
             Reasons: [plan.Explanation], Logic: plan.EngineVersion, LastEvaluatedBarAt: null,
             SessionEnd: request.SessionEnd, ExitEstimated: null, LastPriceAt: request.EnteredAt,
-            TriggerBarAt: request.TriggerBarStart, Structure: request.Context,
+            TriggerBarAt: request.TriggerBarStart, Structure: context,
             Execution: new ExecutionProvenance(
                 new DateTimeOffset(request.EnteredAt.Year, request.EnteredAt.Month, request.EnteredAt.Day,
                     request.EnteredAt.Hour, request.EnteredAt.Minute, 0, request.EnteredAt.Offset),
@@ -145,9 +148,41 @@ public static class StructuralSimulation
         if (latestStop is not { } stoppedAt) return false;
         if (request.SessionStart is { } sessionStart && stoppedAt < sessionStart) return false;
 
-        var stopBarStart = new DateTimeOffset(stoppedAt.Year, stoppedAt.Month, stoppedAt.Day, stoppedAt.Hour,
-            stoppedAt.Minute, 0, stoppedAt.Offset);
-        var completed = bars.Count(x => x > stopBarStart && x <= request.TriggerBarStart);
-        return completed < cooldownBars;
+        return BarCounting.CompletedBarsSince(stoppedAt, bars, request.TriggerBarStart) is { } completed
+               && completed < cooldownBars;
+    }
+
+    /// <summary>
+    /// #111 재진입 코호트 태그. 같은 심볼의 가장 최근 청산 거래를 직전 거래로 보고 관측값만 남긴다 — 이 값으로
+    /// 진입을 막거나 허용하지 않는다. 직전 거래가 없으면 모든 값이 null이고(첫 진입), 셀 수 없는 값은
+    /// 추정하지 않고 null로 둔다(§16A). 봉 수는 쿨다운과 같은 세기 규칙(<see cref="BarCounting"/>)이다.
+    /// </summary>
+    static ReentryTags Reentry(List<SimTrade> trades, StructuralEntryRequest request)
+    {
+        SimTrade? previous = null;
+        foreach (var trade in trades)
+        {
+            if (!trade.Symbol.Equals(request.Symbol, StringComparison.OrdinalIgnoreCase)) continue;
+            if (trade.ExitAt is not { } exit) continue;
+            if (previous?.ExitAt is not { } best || exit > best) previous = trade;
+        }
+        if (previous?.ExitAt is not { } exitedAt) return new ReentryTags(null, null, null, null, null);
+
+        // 이전 세션의 청산은 이번 세션의 완료 봉으로 셀 수 없다. 사유·품질 태그는 그대로 남긴다.
+        var withinSession = request.SessionStart is not { } start || exitedAt >= start;
+        var bars = withinSession
+            ? BarCounting.CompletedBarsSince(exitedAt, request.CompletedBarStarts, request.TriggerBarStart)
+            : null;
+        return new ReentryTags(bars, previous.Status, SameTargetZone(previous, request),
+            previous.Structure?.EntryQualityAtEntry, previous.Structure?.TrendAtEntry);
+    }
+
+    /// <summary>직전 거래의 목표 구간이 이번 계획과 같은 lineage인지. 직전 거래에 동결 계획이 없으면 판정 불가(null).</summary>
+    static bool? SameTargetZone(SimTrade previous, StructuralEntryRequest request)
+    {
+        if (previous.Structure?.PlanSnapshot.TargetZoneId is not { Length: > 0 } previousZone) return null;
+        if (string.Equals(previousZone, request.Context.PlanSnapshot.TargetZoneId, StringComparison.Ordinal))
+            return true;
+        return request.TargetZoneAliases?.Contains(previousZone, StringComparer.Ordinal) == true;
     }
 }

@@ -40,6 +40,36 @@ Domain은 시계·저장소·HTTP에 의존하지 않는다. 평가 기준 시�
 `expiresAt`, `rejectionCodes`, `notes`, `plan.{missingLiquidity, validSpread, eligibilityCostModelVersion,
 realizedFillCostModelVersion, netR}`.
 
+### 2.1.1 재진입 코호트 태그 (#111)
+
+`SimTrade.Structure.reentry`는 **진입 시점에 직전 거래를 아는 계층**(`StructuralSimulation.Enter`)이 채우는
+관측용 태그다. 진입·청산 판정에 쓰이지 않으며, 이 태그를 근거로 정책을 바꾸지 않는다 —
+B-1(동일 targetZoneId 세션 내 소비)·#47 쿨다운 키 kind 제거 판단의 **입력 데이터**일 뿐이다.
+
+| 필드 | 형 | 의미 |
+|---|---|---|
+| `reentry.sameSymbolWithinBars` | `int?` | 같은 심볼 직전 거래의 **청산 봉을 0번째**로 세어 이번 진입 트리거 봉까지 닫힌 완료 봉 수. #117 손절 쿨다운과 같은 규칙(`BarCounting.CompletedBarsSince`)이다 |
+| `reentry.prevExitStatus` | `string?` | 직전 거래의 청산 사유(STOP / TARGET / EOD / CUT …) |
+| `reentry.sameTargetZone` | `bool?` | 직전 거래와 `PlanSnapshot.TargetZoneId`가 같은 lineage인지. 진입 계획의 zone `Aliases`(병합으로 흡수된 ID)까지 포함해 비교하고, 직전 거래에 동결 계획이 없으면 `null` |
+| `reentry.prevEntryQuality` | `double?` | 직전 진입의 `EntryQualityAtEntry` |
+| `reentry.prevTrend` | `string?` | 직전 진입의 `TrendAtEntry` |
+
+결측 규칙(§3.2)을 그대로 따른다.
+
+- `reentry` 객체 자체가 없으면 **태그 도입 이전 데이터**(미수집)다. "첫 진입"으로 바꾸지 않는다.
+- **첫 진입**은 `reentry` 객체가 있고 다섯 값이 모두 `null`이다.
+- 완료 봉 근거가 없거나 직전 청산이 이전 세션이면 `sameSymbolWithinBars`만 `null`이고 나머지 태그는 남는다.
+
+`/api/sim`의 `structure.groups`는 이 태그를 세 차원으로 분리한다.
+
+| 차원 | 집단 |
+|---|---|
+| `reentry` | `FIRST_ENTRY` · `R0_2` · `R3_5` · `R6_PLUS` · `REENTRY_BARS_UNCOLLECTED` · `REENTRY_UNTAGGED` |
+| `reentryTargetZone` | `FIRST_ENTRY` · `SAME_TARGET_ZONE` · `OTHER_TARGET_ZONE` · `TARGET_ZONE_UNCOLLECTED` · `REENTRY_UNTAGGED` |
+| `reentryPrevExit` | `FIRST_ENTRY` · `PREV_STOP` · `PREV_TARGET` · `PREV_EOD` · `PREV_CUT` · … · `REENTRY_UNTAGGED` |
+
+미수집 집단은 `collected=false`로 나가며 0건 성과로 읽지 않는다.
+
 ### 2.2 연결 키
 
 ```
@@ -141,6 +171,19 @@ C-2. 일봉 context level은 세션 시작 전 이미 알려진 원천이지만,
 - **관측 승률(%)**: 분모는 실현 손익이 유효한 청산 건이다. 표본이 없으면 `null`이며 0%가 아니다.
 - **계획 netR 평균**: 동결 계획의 계획값이다. 실현 손익과 **절대 합산하지 않는다**.
 - **상위 거절 사유**: 선택 편향을 눈으로 볼 수 있게 분포로 남긴다.
+
+### 4.2.1 진입 차단 사유 (#111)
+
+`evaluation.entryBlocks`는 READY 후보가 진입으로 이어지지 않은 사유를 **코드별로 따로** 센다.
+두 코드는 성격이 달라 한 숫자로 합치지 않는다.
+
+| 코드 | 뜻 |
+|---|---|
+| `V5_ENTRY_SUPPRESSED_BY_SAME_POLL_EXIT` | #106 — 같은 poll에 청산이 있어 이번 poll의 진입만 건너뛴 건. 쿨다운이 아니라 **1 poll 지연**이다 |
+| `V5_ENTRY_BLOCKED_BY_STOP_COOLDOWN` | #117 — 직전 손절 이후 완료 봉이 정책 개수만큼 쌓이지 않아 **차단**된 건 |
+
+`events`는 이벤트 기준(같은 이벤트의 반복 poll은 한 건), `symbols`는 그 이벤트가 걸친 종목 수다.
+근거는 후보의 `rejectionCodes`(#107)이며 0건도 그대로 보고한다.
 
 ### 4.3 표본 충분성 — "검증 불가"를 통과로 위장하지 않는다
 
