@@ -191,6 +191,58 @@ def tick_reference(prices):
     return out
 
 
+def candle_bars(seed, count):
+    """장악형·망치·핀바가 섞이도록 만든 합성 봉. 값은 4자리로 고정해 C#/TA-Lib 입력을 동일하게 둔다."""
+    rng = np.random.default_rng(seed)
+    times = bar_times(count)
+    bars = []
+    price = 100.0
+    for i in range(count):
+        open_ = price
+        close = price + rng.normal(0, 0.25)
+        spread = abs(rng.normal(0, 0.2)) + 0.05
+        high = max(open_, close) + spread
+        low = min(open_, close) - spread
+        if i % 9 == 4:
+            open_ = price - 0.15
+            close = price + 0.9
+            high = close + 0.05
+            low = open_ - 0.05
+        if i % 9 == 7:
+            open_ = price + 0.35
+            close = price + 0.40
+            high = close + 0.02
+            low = price - 1.4
+        if i % 9 == 1 and bars:
+            bottom = bars[-1]["low"] - 0.02
+            open_ = bottom
+            close = bottom + 0.02
+            high = close + 0.01
+            low = bottom - 1.1
+        bars.append(
+            {
+                "start": times[i][0],
+                "end": times[i][1],
+                "open": round(float(open_), 4),
+                "high": round(float(high), 4),
+                "low": round(float(low), 4),
+                "close": round(float(close), 4),
+                "volume": float(int(rng.integers(800, 5000))),
+            }
+        )
+        price = bars[-1]["close"]
+    return bars
+
+
+def pinbar_reference(bars):
+    out = []
+    for bar in bars:
+        span = bar["high"] - bar["low"]
+        tail = min(bar["open"], bar["close"]) - bar["low"]
+        out.append(100 if span > 0 and tail >= span * 2.0 / 3.0 else 0)
+    return out
+
+
 def main():
     normal = random_walk_bars(seed=20260912, count=60, gap_at=31, doji_at=44)
     boundary = flat_bars(30)
@@ -356,6 +408,20 @@ def main():
             "expected15m": aggregate_reference(partial, 15),
         },
     )
+
+    for label, bars in (("normal", candle_bars(seed=20260912, count=60)), ("boundary", flat_bars(20))):
+        open_, high, low, close, _ = arrays(bars)
+        write(
+            f"cdl-{label}.json",
+            {
+                "source": "TA-Lib 0.7.1 CDLENGULFING·CDLHAMMER, 핀바는 수기(꼬리 >= 범위 2/3)",
+                "bars": bars,
+                "expectedEngulfing": [int(v) for v in talib.CDLENGULFING(open_, high, low, close)],
+                "expectedHammer": [int(v) for v in talib.CDLHAMMER(open_, high, low, close)],
+                "expectedPinBar": pinbar_reference(bars),
+            },
+        )
+
 
     normal_ticks = [10.0, 10.01, 10.012, 10.005, 9.999, 9.999, 10.5, 10.4999]
     write(

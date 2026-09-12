@@ -41,8 +41,13 @@ public sealed class ConfluenceService(
     TimeProvider clock,
     ConfluencePolicy? policy = null,
     ConfluenceWeights? weights = null,
-    IBenchmarkBarSource? benchmark = null)
+    IBenchmarkBarSource? benchmark = null,
+    TickFlowTape? tape = null,
+    IIntradayVolumeProfileSource? volumeProfiles = null)
 {
+    /// <summary>LR_DELTA가 체결 시각에 호가를 맞출 수 있도록 남기는 최대 스냅샷 수(poll 주기 기준 15분 여유).</summary>
+    public const int QuoteHistoryLimit = 240;
+
     public const string StatusReady = "ready";
     public const string StatusWarmup = "warmup";
 
@@ -74,14 +79,15 @@ public sealed class ConfluenceService(
         if (liquidity is not { BidSize: { } bid, AskSize: { } ask, At: { } at }) return;
         if (!double.IsFinite(bid) || !double.IsFinite(ask) || bid < 0 || ask < 0 || bid + ask <= 0) return;
 
-        var window = Math.Max(1, _policy.OrderBookPollWindow);
+        var snapshot = new OrderBookSnapshot(at, bid, ask, liquidity.BestBid, liquidity.BestAsk);
+        var window = Math.Max(_policy.OrderBookPollWindow, QuoteHistoryLimit);
         _books.AddOrUpdate(symbol,
-            _ => new QuoteRing(session, [new OrderBookSnapshot(at, bid, ask)]),
+            _ => new QuoteRing(session, [snapshot]),
             (_, current) =>
             {
                 var snapshots = current.SessionStart == session ? current.Snapshots : [];
                 if (snapshots.Length > 0 && snapshots[^1].ObservedAt == at) return new QuoteRing(session, snapshots);
-                var next = snapshots.Add(new OrderBookSnapshot(at, bid, ask));
+                var next = snapshots.Add(snapshot);
                 if (next.Length > window) next = next.RemoveRange(0, next.Length - window);
                 return new QuoteRing(session, next);
             });
@@ -100,7 +106,10 @@ public sealed class ConfluenceService(
         var lastBar = bars[^1];
         var relativeVolume = SessionIndicators.RelativeVolume(bars, lastBar.Start, _policy.RelativeVolumeLookbackBars);
         var input = new ConfluenceInput(symbol, sessionStart, Convert(bars), BenchmarkBars(sessionStart),
-            Book(symbol, sessionStart), relativeVolume, PreviousSessionClose(dailyBars, sessionStart));
+            Book(symbol, sessionStart), relativeVolume, PreviousSessionClose(dailyBars, sessionStart),
+            PreviousDailyBars(dailyBars, sessionStart),
+            volumeProfiles?.Profiles(symbol, DateOnly.FromDateTime(sessionStart.Date)) ?? [],
+            Trades(symbol, lastBar.End));
 
         var signals = ConfluenceTechniques.Evaluate(input, _policy);
         var score = ConfluenceAggregator.Aggregate(symbol, lastBar.End, signals, _policy, _weights.Values,
@@ -160,6 +169,30 @@ public sealed class ConfluenceService(
         foreach (var bar in bars)
             result.Add(new IndicatorBar(bar.Start, bar.End, bar.Open, bar.High, bar.Low, bar.Close,
                 (decimal)bar.Volume));
+        return result.ToImmutable();
+    }
+
+    /// <summary>LR_DELTA 창(15분)에 들어오는 체결. 테이프가 없으면 비어 있고 기법은 c=0이 된다.</summary>
+    ImmutableArray<ConfluenceTrade> Trades(string symbol, DateTimeOffset barEnd)
+    {
+        if (tape is null) return ImmutableArray<ConfluenceTrade>.Empty;
+        var from = barEnd - TimeSpan.FromMinutes(Math.Max(1, _policy.LeeReadyWindowMinutes));
+        var prints = tape.Prints(symbol, from, barEnd);
+        if (prints.Count == 0) return ImmutableArray<ConfluenceTrade>.Empty;
+        var result = ImmutableArray.CreateBuilder<ConfluenceTrade>(prints.Count);
+        foreach (var print in prints) result.Add(new ConfluenceTrade(print.At, print.Price, print.Volume));
+        return result.ToImmutable();
+    }
+
+    /// <summary>VOL_BREAKOUT이 보는 전일까지의 완료 일봉. 당일 일봉은 넣지 않는다(C6).</summary>
+    static ImmutableArray<IndicatorBar> PreviousDailyBars(IReadOnlyList<Candle>? dailyBars,
+        DateTimeOffset sessionStart)
+    {
+        if (dailyBars is null || dailyBars.Count == 0) return ImmutableArray<IndicatorBar>.Empty;
+        var result = ImmutableArray.CreateBuilder<IndicatorBar>(dailyBars.Count);
+        foreach (var bar in dailyBars.Where(x => x.Timestamp < sessionStart).OrderBy(x => x.Timestamp))
+            result.Add(new IndicatorBar(bar.Timestamp, bar.Timestamp.AddDays(1), (decimal)bar.Open,
+                (decimal)bar.High, (decimal)bar.Low, (decimal)bar.Close, (decimal)bar.Volume));
         return result.ToImmutable();
     }
 

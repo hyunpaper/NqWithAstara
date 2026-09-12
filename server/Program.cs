@@ -63,6 +63,9 @@ builder.Services.AddSingleton(x =>
     return document;
 });
 builder.Services.AddSingleton(x => x.GetRequiredService<ConfluenceWeightsDocument>().ToWeights());
+builder.Services.AddSingleton<IIntradayVolumeProfileSource>(x => new BarStoreVolumeProfiles(
+    x.GetRequiredService<IBarStore>(),
+    x.GetRequiredService<ConfluencePolicy>().DailyRelativeVolumeLookbackSessions));
 builder.Services.AddSingleton<ConfluenceService>();
 // 이슈 #151: 뉴스 감성(선택 기능). News:Enabled 기본 false이며 false면 피드·Ollama를 호출하지 않는다.
 builder.Services.AddSingleton(_ => { var news = new NewsOptions(); builder.Configuration.GetSection("News").Bind(news); return news; });

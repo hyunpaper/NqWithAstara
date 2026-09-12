@@ -220,7 +220,7 @@ public sealed class ConfluenceMeasurementTests
     }
 
     [Fact]
-    public void SummaryAppliesTheCorrectionAcrossAllTenTechniquesAtOnce()
+    public void SummaryAppliesTheCorrectionAcrossEveryTechniqueAtOnce()
     {
         var outcomes = Outcomes(TechniqueNames.Macd, 100, 70, 0.6)
             .Concat(TechniqueNames.All.Where(x => x != TechniqueNames.Macd)
@@ -229,9 +229,9 @@ public sealed class ConfluenceMeasurementTests
 
         var rows = ConfluenceMeasurement.Summarize(outcomes, 10, MeasurementPolicy.Default);
 
-        Assert.Equal(10, rows.Length);
+        Assert.Equal(TechniqueNames.All.Length, rows.Length);
         Assert.Equal(TechniqueNames.Macd, Assert.Single(rows, x => x.StatusText == "verified").Technique);
-        Assert.Equal(9, rows.Count(x => x.StatusText == "unverified"));
+        Assert.Equal(TechniqueNames.All.Length - 1, rows.Count(x => x.StatusText == "unverified"));
         Assert.All(rows.Where(x => x.StatusText == "unverified"), row => Assert.Equal(1, row.Weight));
     }
 
@@ -369,11 +369,32 @@ public sealed class ConfluenceReplayTests
         var report = await new ConfluenceReplay(store).RunAsync(new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 8),
             10, "QQQ", CancellationToken.None);
 
-        Assert.Equal(10, report.Techniques.Length);
+        Assert.Equal(TechniqueNames.All.Length, report.Techniques.Length);
         Assert.Equal(0, report.Techniques.Single(x => x.Technique == TechniqueNames.OrderBookImbalance).N);
         Assert.Equal(0, report.Techniques.Single(x => x.Technique == TechniqueNames.RelativeStrength).N);
         Assert.True(report.Signals > 0);
         Assert.All(report.Techniques, row => Assert.Equal(10, row.HorizonBars));
+    }
+
+    /// <summary>2군 6개도 같은 측정 대상이며, 저장되지 않는 호가·체결에 기대는 기법만 표본 0이다 (C3-2, #170).</summary>
+    [Fact]
+    public async Task ReplayMeasuresTheSecondTierTechniquesToo()
+    {
+        var store = new MemoryBars();
+        foreach (var day in new[] { "2026-09-01", "2026-09-02", "2026-09-03" })
+            store.Seed(day, "TSLA", 90);
+
+        var report = await new ConfluenceReplay(store).RunAsync(new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 3),
+            10, "QQQ", CancellationToken.None);
+
+        string[] tier2 =
+        [
+            TechniqueNames.Candle, TechniqueNames.MultiTimeframeAlignment, TechniqueNames.Squeeze,
+            TechniqueNames.VolatilityBreakout, TechniqueNames.RelativeVolumeDaily, TechniqueNames.LeeReadyDelta
+        ];
+        foreach (var name in tier2) Assert.Single(report.Techniques, x => x.Technique == name);
+        Assert.Equal(0, report.Techniques.Single(x => x.Technique == TechniqueNames.LeeReadyDelta).N);
+        Assert.True(report.Techniques.Single(x => x.Technique == TechniqueNames.VolatilityBreakout).N > 0);
     }
 
     [Fact]
@@ -726,7 +747,7 @@ public sealed class ConfluenceMeasureCommandTests
             Assert.Contains("| 기법 | 지평 |", output.ToString());
             var document = ConfluenceWeightsStore.Load(root, out var error);
             Assert.Null(error);
-            Assert.Equal(10, document.Weights.Count);
+            Assert.Equal(TechniqueNames.All.Length, document.Weights.Count);
         }
         finally { Directory.Delete(root, true); }
     }
