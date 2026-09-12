@@ -20,6 +20,8 @@ builder.Services.AddSingleton<IStructureObservationStore, StructureObservationSt
 builder.Services.AddSingleton<IStructuralTradeEntries, StructuralTradeEntryService>();
 // 이슈 #26: v5 알림 이벤트 발행자 — active gate 안 commit 지점에서만 발행되고 /api/state가 소비한다.
 builder.Services.AddSingleton<StructureAlertPublisher>();
+// 이슈 #132: 종목 메타(`/stocks`) 세션 캐시 — 구조 게이트와 회전율 지표가 공유한다.
+builder.Services.AddSingleton<SymbolMetadataService>();
 builder.Services.AddSingleton<StructureObservationWriter>(); builder.Services.AddSingleton<StructureAnalysisService>();
 // 이슈 #41: 폴링 → 구조 엔진 호가 배선. 새 게이트웨이가 아니라 LiquidityQueryService 캐시를 공유한다.
 builder.Services.AddSingleton<StructureLiquidityFeed>();
