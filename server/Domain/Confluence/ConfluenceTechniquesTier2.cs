@@ -18,7 +18,8 @@ public static partial class ConfluenceTechniques
         [
             Candle(input, policy),
             MultiTimeframeAlignment(input, policy),
-            Squeeze(input, policy)
+            Squeeze(input, policy),
+            VolatilityBreakout(input, policy)
         ];
     }
 
@@ -105,6 +106,40 @@ public static partial class ConfluenceTechniques
         return TechniqueSignal.Create(name, score, confidence,
             ("squeeze", now ? 1 : 0), ("released", released ? 1 : 0), ("keltnerUpper", upper),
             ("keltnerLower", lower), ("bollingerUpper", bands[i].Upper), ("bollingerLower", bands[i].Lower));
+    }
+
+    // ── 변동성 돌파(재정의판): 목표가 = 정규장 첫 완료봉 시가 + 전일 레인지 × K(0.5 고정, 미검증) ──
+    public static TechniqueSignal VolatilityBreakout(ConfluenceInput input, ConfluencePolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(policy);
+        var name = TechniqueNames.VolatilityBreakout;
+        if (Last(input) is not { } i) return TechniqueSignal.WarmingUp(name);
+
+        var daily = input.PreviousDailyBars;
+        var atr = Atr(input, policy)[i];
+        if (daily.IsDefaultOrEmpty || atr.Warmup || atr.Value is not { } range || range <= 0)
+            return TechniqueSignal.WarmingUp(name);
+
+        var previousRange = (double)(daily[^1].High - daily[^1].Low);
+        if (previousRange <= 0) return TechniqueSignal.WarmingUp(name, ("previousRange", previousRange));
+
+        var sessionOpen = (double)input.Bars[0].Open;
+        var target = sessionOpen + previousRange * policy.VolatilityBreakoutK;
+        var close = (double)input.Bars[i].Close;
+        var score = close >= target
+            ? Math.Min((close - target) / range, 1)
+            : ConfluenceMath.Clamp((close - target) / previousRange, -1, 0);
+
+        // 3~5일 MA 필터: 첫봉 시가가 전 N거래일 종가 평균 위일 때만 온전한 confidence를 준다.
+        var filterDays = Math.Max(1, policy.VolatilityBreakoutFilterDays);
+        double? average = daily.Length >= filterDays
+            ? daily.TakeLast(filterDays).Average(x => (double)x.Close)
+            : null;
+        var confidence = average is { } mean && sessionOpen > mean ? 1 : policy.VolatilityBreakoutFilterConfidence;
+        return TechniqueSignal.Create(name, score, confidence,
+            ("target", target), ("previousRange", previousRange), ("k", policy.VolatilityBreakoutK),
+            ("sessionOpen", sessionOpen), ("close", close), ("atr", range), ("filterAverage", average));
     }
 
     /// <summary>BB(20,2)가 KC 안에 완전히 들어갔는가. 둘 중 하나라도 warmup이면 null이다.</summary>

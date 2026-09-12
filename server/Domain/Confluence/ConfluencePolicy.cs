@@ -88,6 +88,13 @@ public sealed record ConfluencePolicy
     public double SqueezeActiveConfidence { get; init; } = .5;
     public double SqueezeIdleConfidence { get; init; } = .3;
 
+    /// <summary>변동성 돌파 계수 K — 원 전략의 표준값 0.5 고정이며 성과로 탐색하지 않았다(미검증).</summary>
+    public double VolatilityBreakoutK { get; init; } = .5;
+
+    /// <summary>변동성 돌파 MA 필터 거래일 수와, 필터를 통과하지 못했을 때의 confidence.</summary>
+    public int VolatilityBreakoutFilterDays { get; init; } = 3;
+    public double VolatilityBreakoutFilterConfidence { get; init; } = .5;
+
     /// <summary>
     /// C4 상관군. 같은 정보축 묶음은 군 안에서 1/n로 나눈다. `군이름:기법,기법` 형식이며 2·3군이
     /// 들어오면 이 목록만 늘어난다. 1군 채택 목록에는 각 군에 한 기법씩만 있어 실질 계수는 1.0이다.

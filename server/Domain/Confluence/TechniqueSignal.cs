@@ -46,12 +46,13 @@ public static class TechniqueNames
     public const string Candle = "CANDLE";
     public const string MultiTimeframeAlignment = "MTA_ALIGN";
     public const string Squeeze = "SQUEEZE";
+    public const string VolatilityBreakout = "VOL_BREAKOUT";
 
     public static readonly ImmutableArray<string> All =
     [
         Macd, Rsi, BollingerPercentB, AdxDmi, VwapDeviation, RelativeVolume, AtrChannel, OpeningRange,
         RelativeStrength, OrderBookImbalance,
-        Candle, MultiTimeframeAlignment, Squeeze
+        Candle, MultiTimeframeAlignment, Squeeze, VolatilityBreakout
     ];
 }
 

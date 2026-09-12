@@ -193,4 +193,69 @@ public sealed class ConfluenceTier2Tests
         Assert.True(ConfluenceTechniques.Squeeze(Cf.Input(Cf.Closes(Cf.Flat(20, 100))), Policy).Warmup);
         Assert.True(ConfluenceTechniques.Squeeze(Cf.Input([]), Policy).Warmup);
     }
+    static ImmutableArray<IndicatorBar> PreviousDaily(double close, double high = 102, double low = 100)
+    {
+        var day = Cf.SessionStart.AddDays(-1);
+        return Enumerable.Range(0, 3)
+            .Select(i => new IndicatorBar(day.AddDays(-i), day.AddDays(-i).AddHours(6.5), (decimal)close,
+                (decimal)high, (decimal)low, (decimal)close, 1_000_000m))
+            .Reverse()
+            .ToImmutableArray();
+    }
+
+    [Fact]
+    public void VolatilityBreakout_clamps_a_wide_breakout_at_one_atr()
+    {
+        var signal = ConfluenceTechniques.VolatilityBreakout(
+            Cf.Input(Cf.Ramp(30, 100, .05), previousDaily: PreviousDaily(99)), Policy);
+
+        Assert.False(signal.Warmup);
+        Assert.Equal(1, signal.Score, 4);
+        Assert.Equal(1, signal.Confidence);
+        Assert.Equal(101, Cf.Evidence(signal, "target"));
+        Assert.Equal(.5, Cf.Evidence(signal, "k"));
+    }
+
+    [Fact]
+    public void VolatilityBreakout_scales_a_narrow_breakout_by_atr()
+    {
+        var bars = Cf.Closes(Cf.Flat(29, 100)).Add(Cf.Bar(29, 101.05));
+
+        var signal = ConfluenceTechniques.VolatilityBreakout(
+            Cf.Input(bars, previousDaily: PreviousDaily(99)), Policy);
+
+        Assert.Equal(.05 / Cf.Evidence(signal, "atr")!.Value, signal.Score, 3);
+        Assert.InRange(signal.Score, .1, .3);
+    }
+
+    [Fact]
+    public void VolatilityBreakout_goes_negative_in_proportion_to_the_previous_range_below_the_target()
+    {
+        var bars = Cf.Closes(Cf.Flat(29, 100)).Add(Cf.Bar(29, 100.5));
+
+        var signal = ConfluenceTechniques.VolatilityBreakout(
+            Cf.Input(bars, previousDaily: PreviousDaily(99)), Policy);
+
+        Assert.Equal(-.25, signal.Score, 4);
+    }
+
+    [Fact]
+    public void VolatilityBreakout_halves_confidence_when_the_session_opens_below_the_three_day_average()
+    {
+        var signal = ConfluenceTechniques.VolatilityBreakout(
+            Cf.Input(Cf.Ramp(30, 100, .05), previousDaily: PreviousDaily(101)), Policy);
+
+        Assert.Equal(Policy.VolatilityBreakoutFilterConfidence, signal.Confidence, 4);
+        Assert.Equal(101, Cf.Evidence(signal, "filterAverage"));
+    }
+
+    [Fact]
+    public void VolatilityBreakout_is_warmup_without_a_previous_session_range()
+    {
+        Assert.True(ConfluenceTechniques.VolatilityBreakout(Cf.Input(Cf.Ramp(30, 100, .05)), Policy).Warmup);
+        Assert.True(ConfluenceTechniques.VolatilityBreakout(
+            Cf.Input(Cf.Ramp(30, 100, .05), previousDaily: PreviousDaily(99, high: 100, low: 100)), Policy).Warmup);
+        Assert.True(ConfluenceTechniques.VolatilityBreakout(
+            Cf.Input(Cf.Ramp(10, 100, .05), previousDaily: PreviousDaily(99)), Policy).Warmup);
+    }
 }
