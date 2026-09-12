@@ -60,7 +60,7 @@ import {
   shouldRenderNewsUi,
   type NewsSentimentResponse,
 } from "./newsTypes";
-import { scoreBadge } from "./newsFormat";
+import { scoreBadge, scoreBadgeTitle } from "./newsFormat";
 
 type Bar = { time: string; close: number; ema?: number; vwap?: number };
 type Indicators = {
@@ -861,11 +861,7 @@ export default function App() {
                   {newsBadge && (
                     <span
                       className={newsBadge.className}
-                      title={
-                        newsScore?.latestAt
-                          ? `최근 기사 ${new Date(newsScore.latestAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })} KST`
-                          : "뉴스 감성"
-                      }
+                      title={scoreBadgeTitle(newsScore?.count, newsScore?.latestAt)}
                     >
                       {newsBadge.label}
                     </span>
@@ -946,7 +942,10 @@ export default function App() {
           </div>
           <div className="header-actions">
             {marketNewsBadge && (
-              <span className={marketNewsBadge.className} title="시장 분위기 · 뉴스 감성 점수">
+              <span
+                className={marketNewsBadge.className}
+                title={scoreBadgeTitle(newsSentiment?.market?.count, newsSentiment?.market?.latestAt)}
+              >
                 시장 분위기 {marketNewsBadge.label}
               </span>
             )}
