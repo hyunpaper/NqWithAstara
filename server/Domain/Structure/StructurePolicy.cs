@@ -33,6 +33,13 @@ public sealed record StructurePolicy
     public double ZoneEligibilityStrength { get; init; } = .35;
     public double MaxRiskPercent { get; init; } = 2.0;
     public double MinimumNetR { get; init; } = 1.2;
+
+    /// <summary>
+    /// §9.3 비용 반영 손익비 상한(#209). netR이 이 값을 넘으면 계획을 거절한다. 목표·손절을 조작하지 않는다(§19-5).
+    /// 손익비가 지나치게 좋은 계획은 구조가 좋은 것이 아니라 진입가가 무효화 지점에 붙어 있다는 뜻이다.
+    /// 단일 국면 표본(122건)에서 고른 잠정값이며 검증된 최적값이 아니다(§16A).
+    /// </summary>
+    public double MaxNetR { get; init; } = 2.0;
     public int EntryCutoffBeforeCloseMinutes { get; init; } = 40;
     public int CandidateTtlMinutes { get; init; } = 5;
     public int BreakoutCooldownMinutes { get; init; } = 30;

@@ -114,7 +114,7 @@ public sealed class StructureBottleneckVerificationTests
         Assert.True(trend.State is TrendState.Up or TrendState.Transition, $"state={trend.State}");
 
         var atr = SessionAtr.At(all, SessionAtr.Series(all, P), Fx.At(59));   // structureCutoff 기준
-        var zones = ImmutableArray.Create(D2.Support(102.90m, 103.10m), D2.Resistance(105.20m, 105.50m));
+        var zones = ImmutableArray.Create(D2.Support(102.90m, 103.10m), D2.Resistance(104.60m, 104.90m));
         var episodes = ImmutableArray.Create(D2.Episode("support-zone", 55, 58));
         var result = SetupDetector.Detect(SetupDetectionRequest.Create(Fx.Symbol, Fx.SessionStart, Fx.SessionEnd,
             analysisAsOf, analysisAsOf, all, zones, episodes, trend, atr, 103.35m, analysisAsOf,

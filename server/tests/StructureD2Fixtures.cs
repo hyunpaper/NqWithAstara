@@ -31,6 +31,9 @@ static class D2
             ImmutableArray<string>.Empty, history.ToImmutableArray(), profileOnly, retired);
     }
 
+    /// <summary>#209 netR 상한 밖의 주제를 다루는 fixture용 정책. 상한 자체는 <c>StructureMaxNetRTests</c>가 고정한다.</summary>
+    public static readonly StructurePolicy WideNetR = StructurePolicy.Default with { MaxNetR = 100 };
+
     public static PriceZone Support(decimal lower, decimal upper, double strength = .6, string id = "support-zone",
         int confirmedMinute = 5, bool eligible = true) =>
         Zone(id, lower, upper, ZoneRole.Support, strength, eligible, confirmedMinute);

@@ -104,6 +104,9 @@ public static class StructuralPlanner
     public const string EntryInsideResistance = "ENTRY_INSIDE_RESISTANCE";
     public const string CostExceedsRoom = "COST_EXCEEDS_ROOM";
     public const string InsufficientRewardToRisk = "INSUFFICIENT_REWARD_TO_RISK";
+
+    /// <summary>#209 §9.3: netR이 <see cref="StructurePolicy.MaxNetR"/>를 넘었다. 진입가가 무효화 지점에 붙어 있다는 신호다.</summary>
+    public const string ExcessiveRewardToRisk = "EXCESSIVE_REWARD_TO_RISK";
     public const string RiskTooWide = "RISK_TOO_WIDE";
     public const string StopNotBelowEntry = "STOP_NOT_BELOW_ENTRY";
     public const string StopNotPositive = "STOP_NOT_POSITIVE";
@@ -229,6 +232,7 @@ public static class StructuralPlanner
             {
                 netR = netReward.Value / netRisk.Value;
                 if (netReward > 0 && netR < (decimal)policy.MinimumNetR) reasons.Add(InsufficientRewardToRisk);
+                if (netReward > 0 && netR > (decimal)policy.MaxNetR) reasons.Add(ExcessiveRewardToRisk);
             }
         }
 

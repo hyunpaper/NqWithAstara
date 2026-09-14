@@ -13,7 +13,7 @@ using Xunit;
 /// </summary>
 public sealed class StructureMinimumStopTests
 {
-    static readonly StructurePolicy P = StructurePolicy.Default;
+    static readonly StructurePolicy P = D2.WideNetR;
 
     // ── #43 관측 재현: TSLA 12f42a9e ──
 

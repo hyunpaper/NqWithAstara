@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using Astra.Server;
 using Astra.Server.Application;
 using Astra.Server.Domain;
@@ -11,7 +11,7 @@ using Xunit;
 /// </summary>
 public sealed class StructureD6StructuralSimulationTests
 {
-    static readonly StructurePolicy P = D6.PolicyWithoutTheReboundTrendFloor;
+    static readonly StructurePolicy P = D6.WiringPolicy;
 
     static StructuralTradePlan PlanA()
     {
@@ -204,7 +204,7 @@ public sealed class StructureD6StructuralSimulationTests
 /// </summary>
 public sealed class StructureD6ActiveWiringTests
 {
-    static readonly StructurePolicy P = D6.PolicyWithoutTheReboundTrendFloor;
+    static readonly StructurePolicy P = D6.WiringPolicy;
 
     sealed record Harness(MonitorPollingService Poller, RecordingStore Store, MemoryObservationStore Observations,
         MonitorRuntimeState Runtime, StructureAnalysisService Structure, MovableClock Clock,
@@ -500,9 +500,11 @@ public sealed class StructureD6ActiveWiringTests
 /// </summary>
 static class D6
 {
-    /// <summary>이 fixture는 signedTrend -57의 하락 국면이라 #208 REBOUND 추세 하한에 걸린다. 배선 검증이 목적이므로 하한만 비활성화한다.</summary>
-    public static StructurePolicy PolicyWithoutTheReboundTrendFloor { get; } =
-        StructurePolicy.Default with { TrendStateThreshold = 1000 };
+    /// <summary>
+    /// 배선 검증용 정책. 이 fixture는 signedTrend -57의 하락 국면이라 #208 REBOUND 추세 하한에 걸리고,
+    /// 계획 netR이 약 3.7이라 #209 MaxNetR 상한에도 걸린다. 둘 다 이 파일들의 검증 대상이 아니므로 함께 푼다.
+    /// </summary>
+    public static StructurePolicy WiringPolicy { get; } = D2.WideNetR with { TrendStateThreshold = 1000 };
 
     public static MarketSession Session => new(true, "정규장", null, Fx.SessionStart, Fx.SessionEnd);
 

@@ -1,4 +1,4 @@
-﻿using Astra.Server;
+using Astra.Server;
 using Astra.Server.Application;
 using Astra.Server.Domain;
 using Astra.Server.Domain.Structure;
@@ -182,7 +182,7 @@ public sealed class StructureStopReentryCooldownTests
 
 public sealed class StructureStopReentryCooldownWiringTests
 {
-    static readonly StructurePolicy P = D6.PolicyWithoutTheReboundTrendFloor;
+    static readonly StructurePolicy P = D6.WiringPolicy;
 
     sealed record Harness(StructureAnalysisService Structure, RecordingStore Store, MemoryObservationStore Observations,
         MonitorRuntimeState Runtime, GateClock Clock, long Generation, MarketSession Session);

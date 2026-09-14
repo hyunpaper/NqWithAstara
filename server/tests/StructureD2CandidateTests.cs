@@ -433,7 +433,7 @@ public sealed class StructureD2CandidateTests
     public void AnInvalidatedEventIsNeverRevivedByARecoveringQuote()
     {
         var resistance = D2.Resistance(100.80m, 101.00m, id: "breakout-zone");
-        var zones = ImmutableArray.Create(resistance, D2.Resistance(102.80m, 103.10m, id: "target-zone"));
+        var zones = ImmutableArray.Create(resistance, D2.Resistance(102.40m, 102.70m, id: "target-zone"));
         var bars = BreakoutBars(101.00m, 101.10m);
 
         var invalidated = SetupDetector.Detect(Request(bars, zones, ImmutableArray<TouchEpisode>.Empty,
