@@ -54,6 +54,12 @@ realizedFillCostModelVersion, netR}`.
 | `structureDirection.{raw, value}` | 확정 5분 피벗 delta의 tanh 평균 (raw는 항상 null, deltaHigh/deltaLow가 원값을 보존) | **5분 구조 자체가 결측이면(`trend.structureEvidenceMissing`) 필드 전체가 null** |
 | `efficiency.{raw, value}` | §16B 효율성(raw=value, 변환 없음) | 봉 부족이면 null |
 
+추세 표시는 §7/D10/D12의 현재 계약을 따른다. `structureDirection`의 delta 분모는
+`sqrt(StructureDirectionAtrScaleBars) * Atr1mAtAsOf`이며 기본값은 `sqrt(5) * ATR1m`이다.
+상태 `TRANSITION`은 가격 family와 구조 family의 부호가 반대이고 `efficiency >= 0.25`일 때만 붙는다.
+`efficiency < 0.25`이면 방향 충돌이 있어도 `RANGE`다. 따라서 `TRANSITION`은 "UP/DOWN 미충족 전체"가
+아니며, PULLBACK 게이트가 죽은 구간까지 넓어지지 않도록 이 순서를 유지한다.
+
 #### `confluence` (#167)
 
 `detail = "full"` 레코드에서만 `confluence`가 실린다. 컨플루언스 층(설계 C1)은 v5 구조 판정과 **분리된 별도
@@ -113,6 +119,10 @@ additive `confluence: {score, warmupCount, weightsVersion}` 요약을 돌려준�
 `confluence: {score, warmupCount, weightsVersion, barEnd}`를 싣는다(#181). 캐시가 없거나 warmup이면 `null`이며
 새 계산·호출은 일으키지 않는다.
 
+컨플루언스 측정과 v5 구조 엔진의 ATR14 첫 봉 TR 정의는 같은 세션 스코프를 쓴다. 저장 봉에는 전일 종가가
+없으므로 첫 봉 TR은 `High-Low`이고, 이후 TR만 `max(H-L, abs(H-prevClose), abs(L-prevClose))`다. 전일 종가를
+가정해 첫 봉 TR을 만들지 않는다.
+
 ### 2.1.1 재진입 코호트 태그 (#111)
 
 `SimTrade.Structure.reentry`는 **진입 시점에 직전 거래를 아는 계층**(`StructuralSimulation.Enter`)이 채우는
@@ -157,10 +167,30 @@ B-1(동일 targetZoneId 세션 내 소비)·#47 쿨다운 키 kind 제거 판단
 ### 2.3 상태 체인
 
 ```
-후보(WAIT) → 결정(READY / REJECTED / INVALIDATED / EXPIRED) → 진입(ENTERED) → 거래 → 결과(TARGET/STOP/EOD/...)
+후보(Wait) → 결정(Ready / Rejected / Invalidated / Expired) → 진입(Entered) → 거래 → 결과(TARGET/STOP/EOD/...)
 ```
 
-`CandidateOutcome`은 최종 관측의 `state`에서 오고, 알 수 없는 문자열은 `Unknown`으로 남긴다(추측하지 않는다).
+코드 enum 이름은 `Wait/Ready/Rejected/Invalidated/Expired/Entered/Unknown`이고, 관측 JSON의 `state` 문자열은
+대문자 `WAIT/READY/REJECTED/INVALIDATED/EXPIRED/ENTERED`다. `CandidateOutcome`은 최종 관측의 `state`에서 오고,
+알 수 없는 문자열은 `Unknown`으로 남긴다(추측하지 않는다). `Wait`는 트리거 전, `Ready`는 유효 계획,
+`Rejected`는 확인된 트리거의 위험·비용·품질 거절, `Invalidated`는 구조 또는 실시간 유지 조건 붕괴,
+`Expired`는 TTL 만료, `Entered`는 실제 시뮬 진입이다. `Rejected/Invalidated/Expired/Entered`는 같은
+`EventId`에서 되살리지 않는다.
+
+### 2.4 ATR 명명과 구조 ID
+
+`Atr1m`은 쓰인 시각에 따라 의미가 다르므로 검증 문서에서는 다음 이름으로 구분한다. DTO 필드명은 기존 호환을
+유지하더라도 설명은 이 기준으로 읽는다.
+
+| 이름 | 기준 시각 | 사용처 |
+|---|---|---|
+| `Atr1mAtCutoff` | `structureCutoff = triggerBarStart` | Zone 폭, 계획 buffer, stop/target 계산 |
+| `Atr1mAtAsOf` | `analysisAsOf` | 추세 표시, `structureDirection`의 `sqrt(5) * ATR1m` 분모 |
+| `AtrAtTouch` | episode 첫 접촉 봉 종료 | 반응 excursion 정규화 |
+
+profile 원천 ID는 cutoff를 포함하지 않는 안정 ID다. 같은 가격 bin 구성이 다음 cutoff에서도 유지되면 같은 profile
+source ID를 유지하며, profile은 Zone의 영구 대표 ID가 될 수 없다. 비-profile 원천과 병합된 Zone은 그 lineage를
+따르고, profile-only Zone은 표시용 임시 구간이라 거래 anchor/target 자격이 없다.
 
 ---
 
@@ -235,6 +265,19 @@ C-2. 일봉 context level은 세션 시작 전 이미 알려진 원천이지만,
 | `mode` | shadow / active |
 
 진입 품질 구간은 순위 지표의 중립 구간이며 "좋음/나쁨" 라벨을 붙이지 않는다(설계 §9.4).
+
+EntryQuality는 후보 위치 품질을 비교하는 값이며 승률이나 매수 확률이 아니다. 현재 §9.4의 공통 필수 5요소는
+`invalidationQuality`, `targetQuality`, `roomQuality`, `extensionQuality`, `triggerVolumeQuality`다.
+`roomQuality = 1 - exp(-max(netR, 0) / 2)`는 MaxNetR 필터와 별개의 참고 구성요소로 남기며, 품질 구간
+분석에서도 독립 차원으로 읽는다. PULLBACK/BREAKOUT은 `alignmentQuality`, REBOUND는 `reclaimQuality`가
+추가 필수다. 필수 요소가 `null`이면 EntryQuality도 `null`이고 READY가 될 수 없으며, 필수 요소가 0이면
+EntryQuality는 0이고 READY가 될 수 없다.
+
+REBOUND는 D12 이후에도 counter-trend setup이지만 무제한 반추세 허용이 아니다. `signedTrend < -TrendStateThreshold`
+(기본 -25)이면 `TREND_DEEPLY_OPPOSES_REBOUND`로 `Rejected`가 되고 관측에는 남는다. 트리거 봉은 양봉이어야 하며,
+같은 봉·같은 zone·같은 anchor에서 PULLBACK 후보가 있으면 REBOUND를 만들지 않는다. `signedTrend >= -25` 범위에서는
+기존처럼 `alignmentQuality`를 요구하지 않고 `reclaimQuality`로 품질을 평가한다. 이 결정은 #111 replay 표본
+91건을 근거로 D10 3항 유예를 해제한 D12 계약이며, 새 `StructurePolicy` 필드가 없어 PolicyHash는 바뀌지 않는다.
 
 ### 4.2 각 코호트가 보고하는 값
 
