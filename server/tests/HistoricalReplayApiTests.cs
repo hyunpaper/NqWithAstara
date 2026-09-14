@@ -112,6 +112,18 @@ public sealed class HistoricalReplayApiTests : IDisposable
         Assert.Equal(JsonValueKind.Number, symbol.GetProperty("losses").ValueKind);
         Assert.Equal(JsonValueKind.Number, symbol.GetProperty("pnlPercent").ValueKind);
         Assert.Equal(JsonValueKind.Object, symbol.GetProperty("exits").ValueKind);
+        Assert.Equal(JsonValueKind.Number, symbol.GetProperty("grossPnlPercent").ValueKind);
+        Assert.Equal(JsonValueKind.Number, symbol.GetProperty("feePercent").ValueKind);
+        Assert.Equal(JsonValueKind.Null, symbol.GetProperty("slippagePercent").ValueKind);
+        var source = result.GetProperty("sourceQuality").EnumerateArray().First(x =>
+            x.GetProperty("symbol").GetString() == "TSLA");
+        Assert.Equal(20, source.GetProperty("requiredDailySeed").GetInt32());
+        Assert.Equal(1, source.GetProperty("availableDailySeed").GetInt32());
+        Assert.Equal("session-reset", source.GetProperty("carryPolicy").GetString());
+        Assert.Equal(JsonValueKind.String, source.GetProperty("newestBar").ValueKind);
+        using var trades = JsonDocument.Parse(await client.GetStringAsync($"/api/replays/{id}/trades"));
+        Assert.Equal(JsonValueKind.Array, trades.RootElement.ValueKind);
+        Assert.True(File.Exists(Path.Combine(_root, "App_Data", "replays", id, "trades.jsonl")));
         using var latest = JsonDocument.Parse(await client.GetStringAsync("/api/replays/latest"));
         Assert.Equal(id, latest.RootElement.GetProperty("id").GetString());
         Assert.True(File.Exists(Path.Combine(_root, "App_Data", "replay-runs.json")));
@@ -195,6 +207,14 @@ public sealed class HistoricalReplayApiTests : IDisposable
     {
         using var client = _factory.CreateClient();
         var response = await client.PostAsync("/api/replays/unknown/cancel", null);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task TradeEndpointReturnsNotFoundForUnknownReplay()
+    {
+        using var client = _factory.CreateClient();
+        var response = await client.GetAsync("/api/replays/unknown/trades");
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
