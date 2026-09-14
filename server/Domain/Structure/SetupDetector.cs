@@ -381,7 +381,7 @@ public static class SetupDetector
         var quality = EntryQualityEvaluator.Evaluate(new EntryQualityInput(hypothesis.Kind,
             hypothesis.Zone.Strength?.Value, planning.TargetZone?.Strength?.Value, planning.NetR, entryReference,
             hypothesis.Anchor, request.Atr1mAtStructureCutoff, relativeVolume, request.Trend.SignedTrend,
-            trigger.Close, hypothesis.Zone.Upper), policy);
+            trigger.Close, hypothesis.Zone.Upper, planning.Buffer), policy);
 
         var notes = new SortedSet<string>(hypothesis.Notes, StringComparer.Ordinal);
         foreach (var note in entryNotes) notes.Add(note);

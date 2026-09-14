@@ -27,7 +27,8 @@ public sealed record EntryQualityResult(double? Score, ImmutableArray<QualityCom
 /// </summary>
 public sealed record EntryQualityInput(SetupKind Kind, double? InvalidationStrength, double? TargetStrength,
     decimal? NetR, decimal EntryReference, decimal? InvalidationAnchor, double? Atr1mAtPlan,
-    double? RelativeVolume, double? SignedTrend, decimal? TriggerClose, decimal? SupportUpper);
+    double? RelativeVolume, double? SignedTrend, decimal? TriggerClose, decimal? SupportUpper,
+    decimal? StopBuffer = null);
 
 /// <summary>
 /// 설계 §9.4/§16B. 종류별 필수 구성요소의 기하평균(§16A)만 점수로 만들고 참고 지표는 넣지 않는다.
@@ -84,14 +85,15 @@ public static class EntryQualityEvaluator
         // §16A: ATR 결측·0·비유한은 결측으로 흘린다. IndicatorFloor는 NaN 방지용이며 결측 대체값이 아니다.
         double? usableAtr = input.Atr1mAtPlan is { } a && double.IsFinite(a) && a > 0 ? a : null;
 
-        // extensionQuality=exp(-max(Entry-anchor,0)/max(ATR1m,0.01)/3)
+        // extensionQuality=exp(-max((Entry-anchor)-stopBuffer,0)/max(ATR1m,0.01)/3)
+        // #209: 손절 buffer는 진입가가 anchor에서 떨어진 거리가 아니라 손절 자체의 폭이다 — 추격 거리에서 뺀다.
         double? extensionRaw = null;
         double? extension = null;
         if (input.InvalidationAnchor is { } anchor)
         {
             if (usableAtr is { } atr)
             {
-                var distance = (double)(input.EntryReference - anchor);
+                var distance = (double)(input.EntryReference - anchor - (input.StopBuffer ?? 0m));
                 if (distance < 0) distance = 0;
                 extensionRaw = distance / Math.Max(atr, policy.IndicatorFloor);
                 extension = Normalized(Math.Exp(-extensionRaw.Value / policy.ExtensionQualityAtrScale));

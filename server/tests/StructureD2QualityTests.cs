@@ -199,6 +199,21 @@ public sealed class StructureD2QualityTests
     }
 
     [Fact]
+    public void ExtensionQualityDistanceSubtractsTheStopBufferFromTheChaseDistance()
+    {
+        var withoutBuffer = EntryQualityEvaluator.Evaluate(Input(), P);
+        var withBuffer = EntryQualityEvaluator.Evaluate(Input() with { StopBuffer = .15m }, P);
+
+        Assert.Equal((100 - 99.15) / .2, withoutBuffer.Components.Single(x => x.Name == "extensionQuality").Raw!.Value, 12);
+        Assert.Equal((100 - 99.15 - .15) / .2, withBuffer.Components.Single(x => x.Name == "extensionQuality").Raw!.Value, 12);
+        Assert.True(withBuffer.Score > withoutBuffer.Score);
+
+        var overBuffer = EntryQualityEvaluator.Evaluate(Input() with { StopBuffer = 2.00m }, P);
+        Assert.Equal(0, overBuffer.Components.Single(x => x.Name == "extensionQuality").Raw!.Value);
+        Assert.Equal(1, overBuffer.Components.Single(x => x.Name == "extensionQuality").Value);
+    }
+
+    [Fact]
     public void NegativeNetRIsFlooredAtZeroRoomRatherThanThrowing()
     {
         var result = EntryQualityEvaluator.Evaluate(Input(netR: -2.0m), P);
