@@ -49,6 +49,54 @@ public sealed class ApplicationServiceTests
     }
 
     [Fact]
+    public async Task ReorderStoresGivenOrderWhenSymbolSetMatches()
+    {
+        var fixture = new ControlFixture();
+        await fixture.Store.Write("watchlist.json", new List<WatchItem> { new("AAPL", "Apple"), new("MSFT", "Microsoft"), new("NVDA", "Nvidia") });
+        var result = await fixture.Control.ReorderAsync(["nvda", "AAPL", "MSFT"], default);
+        var durable = await fixture.Store.Read("watchlist.json", new List<WatchItem>());
+        Assert.Equal(WatchlistChangeStatus.Ok, result.Status);
+        Assert.Equal(["NVDA", "AAPL", "MSFT"], durable.Select(x => x.Symbol));
+        Assert.Equal(["Nvidia", "Apple", "Microsoft"], durable.Select(x => x.Name));
+    }
+
+    [Fact]
+    public async Task ReorderRejectsAnySetMismatchWithoutTouchingStoredOrder()
+    {
+        string[][] cases = [["AAPL"], ["AAPL", "AAPL"], ["AAPL", "TSLA"], ["AAPL", "MSFT", "TSLA"], ["AAPL", "MSFT", ""]];
+        foreach (var symbols in cases)
+        {
+            var fixture = new ControlFixture();
+            await fixture.Store.Write("watchlist.json", new List<WatchItem> { new("AAPL", "Apple"), new("MSFT", "Microsoft") });
+            var result = await fixture.Control.ReorderAsync(symbols, default);
+            var durable = await fixture.Store.Read("watchlist.json", new List<WatchItem>());
+            Assert.Equal(WatchlistChangeStatus.Invalid, result.Status);
+            Assert.Equal(["AAPL", "MSFT"], durable.Select(x => x.Symbol));
+        }
+    }
+
+    [Fact]
+    public async Task ReorderRejectsEmptyRequestOnEmptyWatchlist()
+    {
+        var fixture = new ControlFixture();
+        Assert.Equal(WatchlistChangeStatus.Invalid, (await fixture.Control.ReorderAsync([], default)).Status);
+        Assert.Equal(WatchlistChangeStatus.Invalid, (await fixture.Control.ReorderAsync(null, default)).Status);
+    }
+
+    [Fact]
+    public async Task ReorderKeepsSubscriptionsUntouchedWhileRunning()
+    {
+        var fixture = new ControlFixture();
+        await fixture.Store.Write("watchlist.json", new List<WatchItem> { new("AAPL", "Apple"), new("MSFT", "Microsoft") });
+        await fixture.Control.StartAsync(default);
+        var before = fixture.Stream.StartCalls;
+        var result = await fixture.Control.ReorderAsync(["MSFT", "AAPL"], default);
+        Assert.Equal(WatchlistChangeStatus.Ok, result.Status);
+        Assert.Equal(before, fixture.Stream.StartCalls);
+        Assert.Equal(["AAPL", "MSFT"], fixture.Stream.Symbols);
+    }
+
+    [Fact]
     public async Task PositionRejectsEntryAtCentPrecisionBoundary()
     {
         var store = new MemoryStore(); await store.Write("watchlist.json", new List<WatchItem> { new("PENNY", "Penny") });
@@ -132,12 +180,12 @@ public sealed class ApplicationServiceTests
     }
     sealed class FakeStream : IRealtimeMarketStream
     {
-        public string[] Symbols { get; private set; } = []; public CancellationToken LastStartToken { get; private set; }
+        public string[] Symbols { get; private set; } = []; public CancellationToken LastStartToken { get; private set; } public int StartCalls { get; private set; }
         public TossTrade? Trade { get; set; }
         public string Status => Symbols.Length > 0 ? "connected" : "idle"; public string Message => "test"; public DateTimeOffset? LastTickAt => null;
         public bool TryGetLatest(string symbol, out TossTrade trade) { trade = Trade!; return Trade is not null && Trade.Symbol == symbol; }
         public (decimal Buy, decimal Sell)? Flow(string symbol, DateTimeOffset from, DateTimeOffset to) => null;
-        public Task StartAsync(IEnumerable<string> symbols, Func<CancellationToken, Task<string>> token, bool allowed, CancellationToken ct = default) { LastStartToken = ct; Symbols = symbols.Order().ToArray(); return Task.CompletedTask; }
+        public Task StartAsync(IEnumerable<string> symbols, Func<CancellationToken, Task<string>> token, bool allowed, CancellationToken ct = default) { StartCalls++; LastStartToken = ct; Symbols = symbols.Order().ToArray(); return Task.CompletedTask; }
         public Task StopAsync(CancellationToken ct = default) { Symbols = []; return Task.CompletedTask; }
     }
     sealed class FixedClock(DateTimeOffset now) : TimeProvider { public DateTimeOffset Now { get; set; } = now; public override DateTimeOffset GetUtcNow() => Now.ToUniversalTime(); public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.Utc; }

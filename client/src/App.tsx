@@ -17,7 +17,6 @@ import {
   Plus,
   Search,
   Square,
-  Trash2,
   Wifi,
   WifiOff,
   X,
@@ -54,6 +53,7 @@ import { tradeEntryTooltip } from "./dashboardTypes";
 import { blockTradeLabel, flowSourceLabel } from "./tradeTape";
 import { turnoverText } from "./metricsFormat";
 import NewsPanel from "./NewsPanel";
+import type { NewsSymbolScore } from "./newsTypes";
 import {
   findSymbolScore,
   normalizeNewsHealth,
@@ -62,9 +62,13 @@ import {
   type NewsSentimentResponse,
 } from "./newsTypes";
 import { scoreBadge, scoreBadgeTitle } from "./newsFormat";
+import type { Badge } from "./newsFormat";
 import ConfluencePanel from "./ConfluencePanel";
 import { gaugeTone, scoreText2 } from "./confluenceFormat";
 import HistoricalReplayPanel from "./HistoricalReplayPanel";
+import { WatchList } from "./WatchRowContent";
+import type { WatchListItem } from "./WatchRowContent";
+import { WATCH_ORDER_URL, watchOrderRequest } from "./watchReorder";
 
 type Bar = { time: string; close: number; ema?: number; vwap?: number };
 type Indicators = {
@@ -86,25 +90,6 @@ type Position = {
   status: string;
 };
 
-export function WatchRowContent({
-  symbol,
-  name,
-  children,
-}: {
-  symbol: string;
-  name: string;
-  children?: ReactNode;
-}) {
-  return (
-    <>
-      <div className="watch-identity">
-        <b>{symbol}</b>
-        <small>{name}</small>
-      </div>
-      {children && <div className="watch-metrics">{children}</div>}
-    </>
-  );
-}
 type Signal = {
   symbol: string;
   name: string;
@@ -285,6 +270,34 @@ const money = (v: number | null | undefined) =>
         currency: "USD",
         minimumFractionDigits: 2,
       }).format(v);
+const watchBadges = (
+  newsBadge: Badge | null,
+  newsScore: NewsSymbolScore | null,
+  confluence: number | null,
+): ReactNode[] => {
+  const badges: ReactNode[] = [];
+  if (newsBadge)
+    badges.push(
+      <span
+        key="news"
+        className={newsBadge.className}
+        title={scoreBadgeTitle(newsScore?.count, newsScore?.latestAt)}
+      >
+        {newsBadge.label}
+      </span>,
+    );
+  if (confluence != null)
+    badges.push(
+      <span
+        key="confluence"
+        className={`confluence-mini-badge ${gaugeTone(confluence)}`}
+        title="컨플루언스 점수(관측 전용)"
+      >
+        {scoreText2(confluence)}
+      </span>,
+    );
+  return badges;
+};
 const percent = (v: number | null | undefined) =>
   v == null ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
 const beep = () => {
@@ -794,6 +807,25 @@ export default function App() {
           return compareByV5State(rowOf(a.symbol), rowOf(b.symbol));
       }
     });
+  const watchItems: WatchListItem[] = (state?.watchlist ?? []).map((w) => {
+    const s = state?.signals.find((v) => v.symbol === w.symbol);
+    const newsScore = newsUiEnabled
+      ? findSymbolScore(newsSentiment?.symbols ?? [], w.symbol)
+      : null;
+    // 이슈 #181: K3 폴링 최신값(선택 종목)이 없으면 structureSummary 캐시로 전 종목 배지를 채운다.
+    const confluence = sidebarConfluenceScore(confluenceScore, w.symbol, rowOf(w.symbol));
+    return {
+      symbol: w.symbol,
+      name: w.name,
+      change: s
+        ? {
+            label: percent(s.changePercent),
+            tone: ((s.changePercent ?? 0) >= 0 ? "up" : "down") as "up" | "down",
+          }
+        : null,
+      badges: watchBadges(scoreBadge(newsScore?.score), newsScore, confluence),
+    };
+  });
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!selected) return;
@@ -854,72 +886,28 @@ export default function App() {
             )}
           </div>
         )}
-        <div className="watch-list">
-          {state?.watchlist.map((w) => {
-            const s = state.signals.find((v) => v.symbol === w.symbol);
-            const newsScore = newsUiEnabled
-              ? findSymbolScore(newsSentiment?.symbols ?? [], w.symbol)
-              : null;
-            const newsBadge = scoreBadge(newsScore?.score);
-            // 이슈 #181: K3 폴링 최신값(선택 종목)이 없으면 structureSummary 캐시로 전 종목 배지를 채운다.
-            const confluence = sidebarConfluenceScore(confluenceScore, w.symbol, rowOf(w.symbol));
-            return (
-              <div
-                className={`watch-row ${selected === w.symbol ? "active" : ""}`}
-                key={w.symbol}
-              >
-                <button
-                  className="watch-select"
-                  onClick={() => setSelected(w.symbol)}
-                >
-                  <WatchRowContent symbol={w.symbol} name={w.name}>
-                    {newsBadge && (
-                      <span
-                        className={newsBadge.className}
-                        title={scoreBadgeTitle(newsScore?.count, newsScore?.latestAt)}
-                      >
-                        {newsBadge.label}
-                      </span>
-                    )}
-                    {confluence != null && (
-                      <span
-                        className={`confluence-mini-badge ${gaugeTone(confluence)}`}
-                        title="컨플루언스 점수(관측 전용)"
-                      >
-                        {scoreText2(confluence)}
-                      </span>
-                    )}
-                    {s && (
-                      <span
-                        className={(s.changePercent ?? 0) >= 0 ? "up" : "down"}
-                      >
-                        {percent(s.changePercent)}
-                      </span>
-                    )}
-                  </WatchRowContent>
-                </button>
-                <button
-                  className="delete"
-                  aria-label={`${w.symbol} 관심종목 삭제`}
-                  onClick={() =>
-                    mutate(() =>
-                      api(`/api/watchlist/${w.symbol}`, { method: "DELETE" }),
-                    )
-                  }
-                >
-                  <Trash2 size={14} />
-                </button>
+        <WatchList
+          items={watchItems}
+          selected={selected}
+          onSelect={setSelected}
+          onDelete={(symbol) =>
+            mutate(() => api(`/api/watchlist/${symbol}`, { method: "DELETE" }))
+          }
+          saveOrder={async (symbols) => {
+            await api(WATCH_ORDER_URL, watchOrderRequest(symbols));
+            await load();
+          }}
+          onError={setError}
+          empty={
+            state && !state.watchlist.length ? (
+              <div className="empty-side">
+                검색으로 관심종목을
+                <br />
+                추가해 주세요.
               </div>
-            );
-          })}
-          {state && !state.watchlist.length && (
-            <div className="empty-side">
-              검색으로 관심종목을
-              <br />
-              추가해 주세요.
-            </div>
-          )}
-        </div>
+            ) : null
+          }
+        />
         <div className="side-footer">
           <div>
             <span
