@@ -1,8 +1,8 @@
-export type ReplayStatus = "queued" | "running" | "canceling" | "canceled" | "completed" | "failed";
+export type ReplayStatus = "queued" | "running" | "canceling" | "canceled" | "completed" | "no-data" | "failed";
 
 export type ReplaySymbolResult = {
   symbol: string;
-  signals: number;
+  signals: number | null;
   virtualEntries: number | null;
   wins: number | null;
   losses: number | null;
@@ -26,6 +26,12 @@ export type HistoricalReplayRun = {
   createdAt: string;
   completedAt: string | null;
   failureReason: string | null;
+  dataStatus: "unknown" | "available" | "partial" | "no-data";
+  dataReason: string | null;
+  sourceQuality: Array<{
+    symbol: string; rawBars: number; actualTradingDays: number; reachedRequestedStart: boolean;
+    oldestBar: string | null; dataStatus: "available" | "partial" | "no-data"; reason: string | null;
+  }>;
   aggregate: Omit<ReplaySymbolResult, "symbol" | "tradeReplayStatus" | "unavailableReason"> | null;
   symbols: ReplaySymbolResult[];
   resultKind: "historical-virtual";
@@ -37,5 +43,5 @@ export function replayValue(value: number | null | undefined, suffix = ""): stri
 }
 
 export function replayStatusLabel(status: ReplayStatus): string {
-  return { queued: "대기", running: "실행 중", canceling: "중지 중", canceled: "중지됨", completed: "완료", failed: "실패" }[status];
+  return { queued: "대기", running: "실행 중", canceling: "중지 중", canceled: "중지됨", completed: "완료", "no-data": "데이터 없음", failed: "실패" }[status];
 }

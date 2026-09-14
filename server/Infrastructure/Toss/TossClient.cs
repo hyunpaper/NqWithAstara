@@ -61,10 +61,11 @@ public sealed class TossClient(HttpClient http)
         }
         return bars.DistinctBy(x => x.Timestamp).OrderBy(x => x.Timestamp).ToArray();
     }
-    public async Task<IReadOnlyList<Candle>> HistoricalCandles(string symbol, DateTimeOffset from,
+    public async Task<Application.Backtest.HistoricalBarReadResult> HistoricalCandles(string symbol, DateTimeOffset from,
         DateTimeOffset to, CancellationToken ct)
     {
-        var bars = new List<Candle>(); string? before = null;
+        var bars = new List<Candle>(); string? before = null; var rawCount = 0; DateTimeOffset? oldest = null;
+        var reachedStart = false; string? stopReason = null;
         for (var page = 0; page < 80; page++)
         {
             var path = $"api/v1/candles?symbol={Uri.EscapeDataString(symbol)}&interval=1m&count=200&adjusted=true" +
@@ -73,13 +74,18 @@ public sealed class TossClient(HttpClient http)
             var fetched = result.GetProperty("candles").EnumerateArray()
                 .Select(x => new Candle(x.GetProperty("timestamp").GetDateTimeOffset(), D(x, "openPrice"),
                     D(x, "highPrice"), D(x, "lowPrice"), D(x, "closePrice"), D(x, "volume"))).ToArray();
+            rawCount += fetched.Length;
+            if (fetched.Length > 0) oldest = oldest is null ? fetched.Min(x => x.Timestamp) :
+                DateTimeOffset.Compare(oldest.Value, fetched.Min(x => x.Timestamp)) <= 0 ? oldest : fetched.Min(x => x.Timestamp);
             bars.AddRange(fetched.Where(x => x.Timestamp >= from && x.Timestamp < to));
-            if (fetched.Length == 0 || fetched.Min(x => x.Timestamp) < from) break;
+            if (fetched.Length == 0) { stopReason = "Toss가 빈 페이지를 반환했습니다."; break; }
+            if (fetched.Min(x => x.Timestamp) <= from) { reachedStart = true; break; }
             before = result.TryGetProperty("nextBefore", out var next) && next.ValueKind == JsonValueKind.String
                 ? next.GetString() : null;
-            if (before is null) break;
+            if (before is null) { stopReason = "Toss가 다음 페이지 커서를 반환하지 않았습니다."; break; }
+            if (page == 79) stopReason = "Toss 페이지 조회 상한에 도달했습니다.";
         }
-        return bars.OrderBy(x => x.Timestamp).ToArray();
+        return new(bars.OrderBy(x => x.Timestamp).ToArray(), rawCount, reachedStart, oldest, stopReason);
     }
     public async Task<IReadOnlyList<Candle>> DailyCandles(string symbol, CancellationToken ct) { using var d = await Get($"api/v1/candles?symbol={Uri.EscapeDataString(symbol)}&interval=1d&count=30&adjusted=true", ct); return d.RootElement.GetProperty("result").GetProperty("candles").EnumerateArray().Select(x => new Candle(x.GetProperty("timestamp").GetDateTimeOffset(), D(x, "openPrice"), D(x, "highPrice"), D(x, "lowPrice"), D(x, "closePrice"), D(x, "volume"))).DistinctBy(x => x.Timestamp).OrderBy(x => x.Timestamp).ToArray(); }
     static double D(JsonElement x, string p) => double.Parse(x.GetProperty(p).GetString()!, System.Globalization.CultureInfo.InvariantCulture);

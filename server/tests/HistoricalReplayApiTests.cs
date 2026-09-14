@@ -15,6 +15,49 @@ namespace Astra.Server.Tests;
 
 public sealed class HistoricalReplayApiTests : IDisposable
 {
+    [Fact]
+    public async Task EmptyHistoricalDataReturnsNoDataAndUnavailableValues()
+    {
+        var isolatedRoot = Directory.CreateTempSubdirectory("astra-replay-no-data-").FullName;
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseContentRoot(isolatedRoot);
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IHistoricalBarSource>();
+                services.AddSingleton<IHistoricalBarSource, EmptyHistoricalSource>();
+            });
+        });
+        try
+        {
+            var store = factory.Services.GetRequiredService<ILocalStore>();
+            await store.Write("watchlist.json", new List<WatchItem> { new("TSLA", "Tesla") });
+            await store.Write("simtrades.json", new[] { "운영 거래" });
+            using var client = factory.CreateClient();
+            var response = await client.PostAsJsonAsync("/api/replays", new { from = "2026-01-01", to = "2026-03-31" });
+            using var started = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            var id = started.RootElement.GetProperty("id").GetString()!;
+            JsonElement result = default;
+            for (var i = 0; i < 100; i++)
+            {
+                await Task.Delay(20);
+                using var read = JsonDocument.Parse(await client.GetStringAsync($"/api/replays/{id}"));
+                result = read.RootElement.Clone();
+                if (result.GetProperty("status").GetString() == "no-data") break;
+            }
+
+            Assert.Equal("no-data", result.GetProperty("status").GetString());
+            Assert.Equal("no-data", result.GetProperty("dataStatus").GetString());
+            Assert.Equal(JsonValueKind.Null, result.GetProperty("aggregate").ValueKind);
+            var symbol = Assert.Single(result.GetProperty("symbols").EnumerateArray());
+            Assert.Equal(JsonValueKind.Null, symbol.GetProperty("signals").ValueKind);
+            Assert.Equal("unavailable", symbol.GetProperty("tradeReplayStatus").GetString());
+            Assert.Equal(2, result.GetProperty("sourceQuality").GetArrayLength());
+            Assert.Equal(new[] { "운영 거래" }, await store.Read("simtrades.json", Array.Empty<string>()));
+        }
+        finally { try { Directory.Delete(isolatedRoot, true); } catch { } }
+    }
+
     readonly string _root = Directory.CreateTempSubdirectory("astra-replay-api-").FullName;
     readonly WebApplicationFactory<Program> _factory;
 
@@ -180,13 +223,13 @@ public sealed class HistoricalReplayApiTests : IDisposable
     {
         public string Name => "mock";
         public bool Adjusted => false;
-        public Task<IReadOnlyList<Candle>> ReadAsync(string symbol, DateTimeOffset from, DateTimeOffset to,
+        public Task<HistoricalBarReadResult> ReadAsync(string symbol, DateTimeOffset from, DateTimeOffset to,
             CancellationToken ct)
         {
             var start = DateTimeOffset.Parse("2026-09-08T13:30:00Z");
             IReadOnlyList<Candle> bars = Enumerable.Range(0, 90).Select(i =>
                 new Candle(start.AddMinutes(i), 100 + i, 101 + i, 99 + i, 100.5 + i, 1000)).ToArray();
-            return Task.FromResult(bars);
+            return Task.FromResult(new HistoricalBarReadResult(bars, bars.Count, true, bars.Min(x => x.Timestamp), null));
         }
     }
 
@@ -196,13 +239,21 @@ public sealed class HistoricalReplayApiTests : IDisposable
         public bool Adjusted => false;
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public async Task<IReadOnlyList<Candle>> ReadAsync(string symbol, DateTimeOffset from, DateTimeOffset to,
+        public async Task<HistoricalBarReadResult> ReadAsync(string symbol, DateTimeOffset from, DateTimeOffset to,
             CancellationToken ct)
         {
             Started.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, ct);
-            return Array.Empty<Candle>();
+            return new HistoricalBarReadResult([], 0, false, null, "빈 응답");
         }
+    }
+
+    sealed class EmptyHistoricalSource : IHistoricalBarSource
+    {
+        public string Name => "mock";
+        public bool Adjusted => false;
+        public Task<HistoricalBarReadResult> ReadAsync(string symbol, DateTimeOffset from, DateTimeOffset to,
+            CancellationToken ct) => Task.FromResult(new HistoricalBarReadResult([], 0, false, null, "빈 응답"));
     }
 
     sealed record WeightMarker(string Marker);

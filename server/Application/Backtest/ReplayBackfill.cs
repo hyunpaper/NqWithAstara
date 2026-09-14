@@ -8,9 +8,12 @@ public interface IHistoricalBarSource
 {
     string Name { get; }
     bool Adjusted { get; }
-    Task<IReadOnlyList<Candle>> ReadAsync(string symbol, DateTimeOffset from, DateTimeOffset to,
+    Task<HistoricalBarReadResult> ReadAsync(string symbol, DateTimeOffset from, DateTimeOffset to,
         CancellationToken ct);
 }
+
+public sealed record HistoricalBarReadResult(IReadOnlyList<Candle> Bars, int RawBarCount,
+    bool ReachedRequestedStart, DateTimeOffset? OldestBar, string? StopReason);
 
 public sealed record ReplayImportRow(string Day, string Symbol, int ExpectedBars, int ActualBars, int Gaps,
     int Duplicates, DateTimeOffset? FirstBar, DateTimeOffset? LastBar, bool BenchmarkMissing)
@@ -20,7 +23,11 @@ public sealed record ReplayImportRow(string Day, string Symbol, int ExpectedBars
 
 public sealed record ReplayImportReport(string Source, DateTimeOffset FetchedAt, DateTimeOffset AsOf, DateOnly From, DateOnly To,
     bool Adjusted, string TimeZone, string Benchmark, ImmutableArray<string> Watchlist,
-    bool HistoricalWatchlistUnavailable, ImmutableArray<ReplayImportRow> Rows);
+    bool HistoricalWatchlistUnavailable, string DataStatus, string? DataReason,
+    ImmutableArray<ReplayImportSourceRow> Sources, ImmutableArray<ReplayImportRow> Rows);
+
+public sealed record ReplayImportSourceRow(string Symbol, int RawBars, int ActualTradingDays,
+    bool ReachedRequestedStart, DateTimeOffset? OldestBar, string DataStatus, string? Reason);
 
 public sealed class ReplayBackfill(IHistoricalBarSource source, TimeProvider clock)
 {
@@ -41,12 +48,26 @@ public sealed class ReplayBackfill(IHistoricalBarSource source, TimeProvider clo
         var start = EasternOffset(from, 0, 0);
         var end = EasternOffset(to.AddDays(1), 0, 0);
         var normalized = new Dictionary<string, Dictionary<DateOnly, Normalized>>(StringComparer.OrdinalIgnoreCase);
+        var reads = new Dictionary<string, HistoricalBarReadResult>(StringComparer.OrdinalIgnoreCase);
         foreach (var symbol in all)
         {
             ct.ThrowIfCancellationRequested();
             var raw = await source.ReadAsync(symbol, start, end, ct);
-            normalized[symbol] = Normalize(raw, from, to);
+            reads[symbol] = raw;
+            normalized[symbol] = Normalize(raw.Bars, from, to);
         }
+
+        var sourceRows = all.Select(symbol => SourceRow(symbol, reads[symbol], normalized[symbol])).ToImmutableArray();
+        var benchmarkRow = sourceRows.First(x => string.Equals(x.Symbol, benchmark, StringComparison.OrdinalIgnoreCase));
+        var dataStatus = sourceRows.All(x => x.ActualTradingDays == 0) || benchmarkRow.ActualTradingDays == 0 ? "no-data" :
+            sourceRows.Any(x => x.DataStatus != "available") ? "partial" : "available";
+        var dataReason = dataStatus switch
+        {
+            "no-data" when sourceRows.All(x => x.ActualTradingDays == 0) => "요청 기간에 사용할 수 있는 봉이 없습니다.",
+            "no-data" => $"벤치마크 {benchmark.ToUpperInvariant()} 데이터가 없습니다.",
+            "partial" => "일부 종목 데이터가 없거나 요청 시작일까지 페이지를 조회하지 못했습니다.",
+            _ => null
+        };
 
         var barsRoot = Path.Combine(Path.GetFullPath(root), "bars");
         if (Directory.Exists(barsRoot)) Directory.Delete(barsRoot, true);
@@ -64,11 +85,25 @@ public sealed class ReplayBackfill(IHistoricalBarSource source, TimeProvider clo
             }
 
         var report = new ReplayImportReport(source.Name, fetchedAt, end, from, to, source.Adjusted, "UTC",
-            benchmark.ToUpperInvariant(), [..symbols], true, rows.ToImmutable());
+            benchmark.ToUpperInvariant(), [..symbols], true, dataStatus, dataReason, sourceRows, rows.ToImmutable());
         Directory.CreateDirectory(root);
         await File.WriteAllTextAsync(Path.Combine(root, "import-report.json"),
             JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }), ct);
         return report;
+    }
+
+    static ReplayImportSourceRow SourceRow(string symbol, HistoricalBarReadResult read,
+        Dictionary<DateOnly, Normalized> normalized)
+    {
+        var status = normalized.Count == 0 ? "no-data" : read.ReachedRequestedStart ? "available" : "partial";
+        var reason = status switch
+        {
+            "no-data" => read.StopReason ?? "요청 기간에 수집된 원시 봉이 없습니다.",
+            "partial" => read.StopReason ?? "페이지네이션이 요청 시작일에 도달하지 못했습니다.",
+            _ => null
+        };
+        return new ReplayImportSourceRow(symbol, read.RawBarCount, normalized.Count,
+            read.ReachedRequestedStart, read.OldestBar, status, reason);
     }
 
     static Dictionary<DateOnly, Normalized> Normalize(IEnumerable<Candle> source, DateOnly from, DateOnly to)

@@ -10,21 +10,26 @@ public sealed record HistoricalReplayRequest(DateOnly From, DateOnly To);
 
 public sealed record HistoricalReplayExitCounts(int Stop, int Target, int Eod);
 
-public sealed record HistoricalReplaySymbolResult(string Symbol, int Signals, int? VirtualEntries, int? Wins,
+public sealed record HistoricalReplaySymbolResult(string Symbol, int? Signals, int? VirtualEntries, int? Wins,
     int? Losses, double? PnlPercent, double? AverageHoldingMinutes, HistoricalReplayExitCounts? Exits,
     string TradeReplayStatus, string? UnavailableReason);
 
-public sealed record HistoricalReplayAggregate(int Signals, int? VirtualEntries, int? Wins, int? Losses,
+public sealed record HistoricalReplayAggregate(int? Signals, int? VirtualEntries, int? Wins, int? Losses,
     double? PnlPercent, double? AverageHoldingMinutes, HistoricalReplayExitCounts? Exits);
 
 public sealed record HistoricalReplayQuality(string Symbol, int ExpectedBars, int ActualBars, int Gaps, int Duplicates,
     double MissingRate, bool BenchmarkMissing);
 
+public sealed record HistoricalReplaySourceQuality(string Symbol, int RawBars, int ActualTradingDays,
+    bool ReachedRequestedStart, DateTimeOffset? OldestBar, string DataStatus, string? Reason);
+
 public sealed record HistoricalReplayRun(string Id, DateOnly From, DateOnly To, ImmutableArray<string> Watchlist,
     string Benchmark, string Source, string PolicyHash, string WeightsVersion, string Status,
     DateTimeOffset CreatedAt, DateTimeOffset? CompletedAt, string? FailureReason,
     ImmutableArray<HistoricalReplayQuality> DataQuality, HistoricalReplayAggregate? Aggregate,
-    ImmutableArray<HistoricalReplaySymbolResult> Symbols, string ResultKind, string Notice);
+    ImmutableArray<HistoricalReplaySymbolResult> Symbols, string ResultKind, string Notice,
+    string DataStatus = "unknown", string? DataReason = null,
+    ImmutableArray<HistoricalReplaySourceQuality>? SourceQuality = null);
 
 public sealed record HistoricalReplayStartResult(int HttpStatus, HistoricalReplayRun? Run, string? Message);
 
@@ -93,7 +98,7 @@ public sealed class HistoricalReplayService
             ? current with { Status = "canceling" }
             : current);
         if (run is null) return new(404, null, "과거 replay 작업을 찾을 수 없습니다.");
-        if (run.Status is "completed" or "failed" or "canceled") return new(200, run, null);
+        if (run.Status is "completed" or "no-data" or "failed" or "canceled") return new(200, run, null);
 
         if (_work.TryGetValue(id, out var work))
         {
@@ -132,14 +137,31 @@ public sealed class HistoricalReplayService
             var replayRoot = ReplayDirectory(queued.Id);
             var import = await new ReplayBackfill(_bars, _clock).RunAsync(replayRoot, queued.Watchlist,
                 queued.Benchmark, queued.From, queued.To, work.Cancellation.Token);
+            var sourceQuality = import.Sources.Select(x => new HistoricalReplaySourceQuality(x.Symbol, x.RawBars,
+                x.ActualTradingDays, x.ReachedRequestedStart, x.OldestBar, x.DataStatus, x.Reason)).ToImmutableArray();
+            if (import.DataStatus == "no-data")
+            {
+                var unavailable = queued.Watchlist.Select(symbol => Unavailable(symbol,
+                    import.Sources.FirstOrDefault(x => string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase))?.Reason
+                    ?? import.DataReason)).ToImmutableArray();
+                await UpdateAsync(queued.Id, current => current.Status == "running" ? current with
+                {
+                    Status = "no-data", CompletedAt = _clock.GetUtcNow(), Source = import.Source,
+                    FailureReason = import.DataReason, DataStatus = import.DataStatus, DataReason = import.DataReason,
+                    SourceQuality = sourceQuality, Aggregate = null, Symbols = unavailable
+                } : current);
+                return;
+            }
             var measurement = await new ConfluenceReplay(_barStores.Create(Path.Combine(replayRoot, "bars")),
                 _confluencePolicy).RunAsync(queued.From, queued.To, 10, queued.Benchmark, work.Cancellation.Token);
             var replayStore = _barStores.Create(Path.Combine(replayRoot, "bars"));
             var replayed = await new HistoricalStructureTradeReplay(replayStore, _structurePolicy).RunAsync(
                 queued.From, queued.To, queued.Watchlist, work.Cancellation.Token);
-            var symbols = queued.Watchlist.Select(symbol => Result(symbol,
-                measurement.BySymbol.TryGetValue(symbol, out var techniques) ? techniques.Sum(x => x.N) : 0,
-                replayed.GetValueOrDefault(symbol)))
+            var symbols = queued.Watchlist.Select(symbol =>
+                import.Sources.First(x => string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase)).DataStatus == "no-data"
+                ? Unavailable(symbol, import.Sources.First(x => string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase)).Reason)
+                : Result(symbol, measurement.BySymbol.TryGetValue(symbol, out var techniques) ? techniques.Sum(x => x.N) : 0,
+                    replayed.GetValueOrDefault(symbol)))
                 .ToImmutableArray();
             var quality = import.Rows.Select(x => new HistoricalReplayQuality(x.Symbol, x.ExpectedBars, x.ActualBars,
                 x.Gaps, x.Duplicates, x.MissingRate, x.BenchmarkMissing)).ToImmutableArray();
@@ -148,6 +170,9 @@ public sealed class HistoricalReplayService
             {
                 Status = "completed", CompletedAt = _clock.GetUtcNow(),
                 Source = import.Source,
+                DataStatus = import.DataStatus,
+                DataReason = import.DataReason,
+                SourceQuality = sourceQuality,
                 DataQuality = quality,
                 Symbols = symbols,
                 Aggregate = Aggregate(symbols)
@@ -175,6 +200,10 @@ public sealed class HistoricalReplayService
         }
     }
 
+    static HistoricalReplaySymbolResult Unavailable(string symbol, string? reason) =>
+        new(symbol, null, null, null, null, null, null, null, "unavailable",
+            reason ?? "요청 기간의 종목 데이터가 없습니다.");
+
     static HistoricalReplaySymbolResult Result(string symbol, int signals, ImmutableArray<SimTrade> trades)
     {
         var closed = trades.Where(x => x.Status != "OPEN" && x.ExitAt.HasValue).ToArray();
@@ -192,7 +221,7 @@ public sealed class HistoricalReplayService
         var exits = new HistoricalReplayExitCounts(symbols.Sum(x => x.Exits?.Stop ?? 0),
             symbols.Sum(x => x.Exits?.Target ?? 0), symbols.Sum(x => x.Exits?.Eod ?? 0));
         var entries = symbols.Sum(x => x.VirtualEntries ?? 0);
-        return new HistoricalReplayAggregate(symbols.Sum(x => x.Signals), entries,
+        return new HistoricalReplayAggregate(symbols.Any(x => x.Signals.HasValue) ? symbols.Sum(x => x.Signals ?? 0) : null, entries,
             symbols.Sum(x => x.Wins ?? 0), symbols.Sum(x => x.Losses ?? 0),
             Math.Round(symbols.Sum(x => x.PnlPercent ?? 0), 2),
             entries == 0 ? 0 : Math.Round(symbols.Sum(x => (x.AverageHoldingMinutes ?? 0) * (x.VirtualEntries ?? 0)) / entries, 1),

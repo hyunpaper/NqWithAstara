@@ -13,6 +13,7 @@ describe("과거 replay 표시", () => {
     expect(replayStatusLabel("canceling")).toBe("중지 중");
     expect(replayStatusLabel("canceled")).toBe("중지됨");
     expect(replayStatusLabel("completed")).toBe("완료");
+    expect(replayStatusLabel("no-data")).toBe("데이터 없음");
     expect(replayStatusLabel("failed")).toBe("실패");
   });
 
