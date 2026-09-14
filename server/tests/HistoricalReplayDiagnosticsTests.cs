@@ -112,6 +112,22 @@ public sealed class HistoricalReplayDiagnosticsTests
     }
 
     [Fact]
+    public void ItMarksMalformedCollectedSlippageAsUnverifiable()
+    {
+        var malformed = JsonNode.Parse(JsonSerializer.Serialize(new HistoricalReplayTradeResult(
+            Trade("MALFORMED-SLIPPAGE"), -.2, .2, null, -.4)))!.AsObject();
+        malformed["SlippagePercent"] = "unknown";
+
+        Assert.True(HistoricalReplayDiagnosticTrade.TryRead(malformed.ToJsonString(), out var row));
+        var diagnostics = HistoricalReplayDiagnosticsBuilder.Build([row!]);
+
+        Assert.Equal(0, diagnostics.Summary.CostCollectedTrades);
+        Assert.Equal(1, diagnostics.Summary.CostUncollectedTrades);
+        Assert.Equal(1, diagnostics.Summary.UnverifiableTrades);
+        Assert.Equal(0, diagnostics.Summary.ReconciledTrades);
+    }
+
+    [Fact]
     public void ItDoesNotMutateTheStoredTradeRowsItReceives()
     {
         var rows = new[]

@@ -135,7 +135,8 @@ public static class HistoricalReplayDiagnosticsBuilder
     {
         var netRows = rows.Where(x => x.NetPnlPercent.Finite).ToArray();
         var wins = netRows.Count(x => x.NetPnlPercent.Value > 0);
-        var costs = rows.Where(x => x.GrossPnlPercent.Finite && x.FeePercent.Finite && x.NetPnlPercent.Finite).ToArray();
+        var costs = rows.Where(x => x.GrossPnlPercent.Finite && x.FeePercent.Finite && x.NetPnlPercent.Finite &&
+            (!x.SlippagePercent.Present || x.SlippagePercent.Null || x.SlippagePercent.Finite)).ToArray();
         var differences = costs.Select(x => Math.Abs(x.GrossPnlPercent.Value!.Value - x.FeePercent.Value!.Value -
             (x.SlippagePercent.Finite ? x.SlippagePercent.Value!.Value : 0) - x.NetPnlPercent.Value!.Value)).ToArray();
         var reconciled = differences.Count(x => x <= .000001d);
