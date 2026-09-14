@@ -50,6 +50,8 @@ builder.Services.AddSingleton<MonitorRuntimeState>(); builder.Services.AddSingle
 builder.Services.AddSingleton<MonitorControlService>(); builder.Services.AddSingleton<MetricsQueryService>(); builder.Services.AddSingleton<LiquidityQueryService>(); builder.Services.AddSingleton<SimulationReportQueryService>(); builder.Services.AddSingleton<ValidationQueryService>(); builder.Services.AddSingleton<CatalogQueryService>(); builder.Services.AddSingleton<PositionService>(); builder.Services.AddSingleton<StateQueryService>(); builder.Services.AddSingleton(TimeProvider.System);
 // 이슈 #130: 실계좌 US 왕복 수수료와 StructurePolicy.RoundTripFeePercent 정합 확인.
 builder.Services.AddSingleton<FeeRateCheckService>();
+// 이슈 #213: 코드 기본 수수료 단일 출처와 설정 바인딩 결과가 갈라지면 기동 시 경고한다.
+builder.Services.AddSingleton<TradingCostPolicyCheckService>();
 // 이슈 #131: 실계좌 체결(읽기 전용) 수집과 v5 대조 보고서. 주문 생성·정정·취소는 호출하지 않는다.
 builder.Services.AddSingleton<IRealFillStore, RealFillStore>();
 builder.Services.AddSingleton<RealFillsService>(); builder.Services.AddSingleton<RealVsV5QueryService>();
@@ -88,6 +90,7 @@ builder.Services.AddSingleton<NewsRuntimeState>(); builder.Services.AddSingleton
 builder.Services.AddHostedService(x => x.GetRequiredService<MonitorService>());
 builder.Services.AddHostedService<NewsService>();
 var app = builder.Build();
+app.Services.GetRequiredService<TradingCostPolicyCheckService>();
 var clientRoot = Environment.GetEnvironmentVariable("ASTRA_CLIENT_ROOT") ?? Path.Combine(app.Environment.ContentRootPath, "..", "client"); var clientDist = Path.GetFullPath(Path.Combine(clientRoot, "dist"));
 if (Directory.Exists(clientDist)) { var files = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(clientDist); app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = files }); app.UseStaticFiles(new StaticFileOptions { FileProvider = files }); }
 app.MapAstraApi();
