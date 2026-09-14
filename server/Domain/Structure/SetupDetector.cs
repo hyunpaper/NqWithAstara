@@ -381,7 +381,7 @@ public static class SetupDetector
         var quality = EntryQualityEvaluator.Evaluate(new EntryQualityInput(hypothesis.Kind,
             hypothesis.Zone.Strength?.Value, planning.TargetZone?.Strength?.Value, planning.NetR, entryReference,
             hypothesis.Anchor, request.Atr1mAtStructureCutoff, relativeVolume, request.Trend.SignedTrend,
-            trigger.Close, hypothesis.Zone.Upper), policy);
+            trigger.Close, hypothesis.Zone.Upper, planning.Buffer), policy);
 
         var notes = new SortedSet<string>(hypothesis.Notes, StringComparer.Ordinal);
         foreach (var note in entryNotes) notes.Add(note);
@@ -474,8 +474,7 @@ public static class SetupDetector
 public static class CandidateSelection
 {
     /// <summary>
-    /// 같은 종류: EntryQuality 내림차순 → netR 내림차순 → ZoneId ordinal.
-    /// 종류 간: EntryQuality 내림차순 → 종류 문자열 ordinal → EventId ordinal.
+    /// 정렬 키는 (종류 문자열 ordinal, EventId ordinal)뿐이다 — 성과 지표를 대표 선택에 쓰지 않는다(§9.4, #209).
     /// 같은 중복 방지 키에서는 실제 신규 거래 후보를 1개만 남긴다.
     /// </summary>
     public static EntryCandidate? SelectPreferred(IEnumerable<EntryCandidate> candidates)
@@ -486,18 +485,15 @@ public static class CandidateSelection
 
         var perKey = ready
             .GroupBy(x => x.DuplicateGuardKey, StringComparer.Ordinal)
-            .Select(group => group
-                .OrderByDescending(x => x.EntryQuality!.Value)
-                .ThenByDescending(x => x.NetR ?? decimal.MinValue)
-                .ThenBy(x => x.ZoneId, StringComparer.Ordinal)
-                .First());
+            .Select(group => Ordered(group).First());
 
-        return perKey
-            .OrderByDescending(x => x.EntryQuality!.Value)
-            .ThenBy(x => x.KindName, StringComparer.Ordinal)
-            .ThenBy(x => x.EventId, StringComparer.Ordinal)
-            .First();
+        return Ordered(perKey).First();
     }
+
+    static IOrderedEnumerable<EntryCandidate> Ordered(IEnumerable<EntryCandidate> candidates) =>
+        candidates
+            .OrderBy(x => x.KindName, StringComparer.Ordinal)
+            .ThenBy(x => x.EventId, StringComparer.Ordinal);
 
     /// <summary>READY가 없을 때 화면에 보일 대표 상태. UNKNOWN/WAIT를 실패나 0점으로 숨기지 않는다(§19-9).</summary>
     public static CandidateDisposition Summarize(IEnumerable<EntryCandidate> candidates)

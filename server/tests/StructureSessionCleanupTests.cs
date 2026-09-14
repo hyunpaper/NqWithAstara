@@ -7,7 +7,7 @@ using Xunit;
 
 public sealed class StructureSessionCleanupTests
 {
-    static readonly StructurePolicy P = StructurePolicy.Default;
+    static readonly StructurePolicy P = D2.WideNetR;
     static readonly StructureAlertDraft Draft =
         new(StructureAlertPublisher.TypeReady, "TEST|event-A", "PULLBACK", 50.0, 1.2m);
 

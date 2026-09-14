@@ -1,4 +1,4 @@
-﻿using Astra.Server;
+using Astra.Server;
 using Astra.Server.Application;
 using Astra.Server.Domain;
 using Astra.Server.Domain.Structure;
@@ -34,18 +34,28 @@ public sealed class StructureStopReentryCooldownTests
             Logic: "v5-structure.1", SessionEnd: Fx.SessionEnd);
 
     [Fact]
-    public void AStopExitBlocksTheSameSymbolUntilThreeCompletedBarsHaveClosed()
+    public void AStopExitBlocksTheSameSymbolUntilTwentyCompletedBarsHaveClosed()
     {
         var stopped = Closed("STOP", Fx.At(30).AddSeconds(20));
 
-        var twoBarsLater = StructuralSimulation.Enter([stopped], Request(32, BarStartsThrough(32)), P);
-        Assert.Equal(StructuralEntryOutcome.BlockedByStopCooldown, twoBarsLater.Outcome);
-        Assert.Null(twoBarsLater.Trade);
-        Assert.Single(twoBarsLater.Trades);
+        var nineteenBarsLater = StructuralSimulation.Enter([stopped], Request(49, BarStartsThrough(49)), P);
+        Assert.Equal(StructuralEntryOutcome.BlockedByStopCooldown, nineteenBarsLater.Outcome);
+        Assert.Null(nineteenBarsLater.Trade);
+        Assert.Single(nineteenBarsLater.Trades);
 
-        var threeBarsLater = StructuralSimulation.Enter([stopped], Request(33, BarStartsThrough(33)), P);
-        Assert.Equal(StructuralEntryOutcome.Entered, threeBarsLater.Outcome);
-        Assert.Equal(2, threeBarsLater.Trades.Count);
+        var twentyBarsLater = StructuralSimulation.Enter([stopped], Request(50, BarStartsThrough(50)), P);
+        Assert.Equal(StructuralEntryOutcome.Entered, twentyBarsLater.Outcome);
+        Assert.Equal(2, twentyBarsLater.Trades.Count);
+    }
+
+    [Fact]
+    public void TheOldThreeBarBoundaryNoLongerReleasesTheCooldown()
+    {
+        var stopped = Closed("STOP", Fx.At(30).AddSeconds(20));
+
+        Assert.Equal(20, P.StopReentryCooldownBars);
+        Assert.Equal(StructuralEntryOutcome.BlockedByStopCooldown,
+            StructuralSimulation.Enter([stopped], Request(33, BarStartsThrough(33)), P).Outcome);
     }
 
     [Fact]
@@ -164,7 +174,7 @@ public sealed class StructureStopReentryCooldownTests
     [Fact]
     public void TheCooldownBarCountIsPartOfThePolicyHash()
     {
-        Assert.Equal(3, P.StopReentryCooldownBars);
+        Assert.Equal(20, P.StopReentryCooldownBars);
         Assert.NotEqual(P.PolicyHash, (P with { StopReentryCooldownBars = 5 }).PolicyHash);
     }
 
@@ -182,7 +192,7 @@ public sealed class StructureStopReentryCooldownTests
 
 public sealed class StructureStopReentryCooldownWiringTests
 {
-    static readonly StructurePolicy P = D6.PolicyWithoutTheReboundTrendFloor;
+    static readonly StructurePolicy P = D6.WiringPolicy;
 
     sealed record Harness(StructureAnalysisService Structure, RecordingStore Store, MemoryObservationStore Observations,
         MonitorRuntimeState Runtime, GateClock Clock, long Generation, MarketSession Session);
@@ -224,7 +234,7 @@ public sealed class StructureStopReentryCooldownWiringTests
         StructureLatchStorage.Parse(harness.Observations.Texts[StructureAnalysisService.LatchFile]).Single();
 
     static SimTrade Stopped(DateTimeOffset exitAt) =>
-        new("stop-1", Fx.Symbol, "PULLBACK", Fx.At(50), 99.80, 100.40, 99.55, "저항", "구조", "STOP", 99.55, exitAt,
+        new("stop-1", Fx.Symbol, "PULLBACK", Fx.At(40), 99.80, 100.40, 99.55, "저항", "구조", "STOP", 99.55, exitAt,
             -0.25, 99.55, Logic: "v5-structure.1", SessionEnd: Fx.SessionEnd);
 
     [Fact]
@@ -243,9 +253,9 @@ public sealed class StructureStopReentryCooldownWiringTests
     }
 
     [Fact]
-    public async Task TheSameTriggerEntersOnceThreeCompletedBarsHavePassedSinceTheStop()
+    public async Task TheSameTriggerEntersOnceTwentyCompletedBarsHavePassedSinceTheStop()
     {
-        var harness = Build(Stopped(Fx.At(61).AddSeconds(13)));
+        var harness = Build(Stopped(Fx.At(44).AddSeconds(13)));
         await ObserveAt(harness, 64);
         await ObserveAt(harness, 65);
 
@@ -257,7 +267,7 @@ public sealed class StructureStopReentryCooldownWiringTests
     [Fact]
     public async Task TheBarBeforeTheBoundaryIsStillBlocked()
     {
-        var harness = Build(Stopped(Fx.At(62).AddSeconds(13)));
+        var harness = Build(Stopped(Fx.At(45).AddSeconds(13)));
         await ObserveAt(harness, 64);
         await ObserveAt(harness, 65);
 

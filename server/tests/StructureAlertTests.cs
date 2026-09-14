@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using Astra.Server;
 using Astra.Server.Application;
 using Astra.Server.Domain;
@@ -13,7 +13,7 @@ using Xunit;
 /// </summary>
 public sealed class StructureAlertTests
 {
-    static readonly StructurePolicy P = D6.PolicyWithoutTheReboundTrendFloor;
+    static readonly StructurePolicy P = D6.WiringPolicy;
 
     sealed record Harness(MonitorPollingService Poller, RecordingStore Store, MemoryObservationStore Observations,
         MonitorRuntimeState Runtime, StructureAnalysisService Structure, StructureAlertPublisher Alerts,

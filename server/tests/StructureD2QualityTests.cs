@@ -21,12 +21,12 @@ public sealed class StructureD2QualityTests
     public void PullbackAndBreakoutRequireAlignmentWhileReboundRequiresReclaim()
     {
         Assert.Equal(
-            new[] { "invalidationQuality", "targetQuality", "roomQuality", "extensionQuality", "triggerVolumeQuality", "alignmentQuality" },
+            new[] { "invalidationQuality", "targetQuality", "extensionQuality", "triggerVolumeQuality", "alignmentQuality" },
             EntryQualityEvaluator.RequiredComponents(SetupKind.Pullback).ToArray());
         Assert.Equal(EntryQualityEvaluator.RequiredComponents(SetupKind.Pullback).ToArray(),
             EntryQualityEvaluator.RequiredComponents(SetupKind.Breakout).ToArray());
         Assert.Equal(
-            new[] { "invalidationQuality", "targetQuality", "roomQuality", "extensionQuality", "triggerVolumeQuality", "reclaimQuality" },
+            new[] { "invalidationQuality", "targetQuality", "extensionQuality", "triggerVolumeQuality", "reclaimQuality" },
             EntryQualityEvaluator.RequiredComponents(SetupKind.Rebound).ToArray());
     }
 
@@ -39,13 +39,13 @@ public sealed class StructureD2QualityTests
         {
             .6,                                     // invalidationQuality
             .7,                                     // targetQuality
-            1 - Math.Exp(-1.4 / 2),                 // roomQuality
             Math.Exp(-(100 - 99.15) / .2 / 3),      // extensionQuality
             2.0 / 3,                                // triggerVolumeQuality
             (1 + 40.0 / 100) / 2                    // alignmentQuality
         };
         Assert.Equal(100 * StructureMath.GeometricMean(expected), result.Score!.Value, 10);
-        Assert.Equal(6, result.UsedComponents.Length);
+        Assert.Equal(5, result.UsedComponents.Length);
+        Assert.DoesNotContain("roomQuality", result.UsedComponents);
         Assert.Empty(result.MissingRequired);
         Assert.True(result.ReadyAllowed);
     }
@@ -60,7 +60,7 @@ public sealed class StructureD2QualityTests
 
         Assert.Equal(1.4, room.Raw!.Value, 12);
         Assert.Equal(1 - Math.Exp(-1.4 / 2), room.Value!.Value, 12);
-        Assert.True(room.Required);
+        Assert.False(room.Required);
         Assert.Equal((100 - 99.15) / .2, extension.Raw!.Value, 12);
         Assert.True(result.Components.All(x => x.Value is null || (x.Value >= 0 && x.Value <= 1)));
     }
@@ -70,7 +70,6 @@ public sealed class StructureD2QualityTests
     [Theory]
     [InlineData("invalidationQuality")]
     [InlineData("targetQuality")]
-    [InlineData("roomQuality")]
     [InlineData("extensionQuality")]
     [InlineData("triggerVolumeQuality")]
     [InlineData("alignmentQuality")]
@@ -80,7 +79,6 @@ public sealed class StructureD2QualityTests
         {
             "invalidationQuality" => Input(invalidation: null),
             "targetQuality" => Input(target: null),
-            "roomQuality" => Input(netR: null),
             "extensionQuality" => Input(anchor: null),
             "triggerVolumeQuality" => Input(rv: null),
             _ => Input(signedTrend: null)
@@ -118,13 +116,14 @@ public sealed class StructureD2QualityTests
     }
 
     [Fact]
-    public void ZeroNetRoomProducesZeroRoomQualityAndBlocksReady()
+    public void ZeroNetRoomIsStoredAsZeroRoomQualityButNoLongerZeroesTheScore()
     {
         var result = EntryQualityEvaluator.Evaluate(Input(netR: 0m), P);
 
         Assert.Equal(0, result.Components.Single(x => x.Name == "roomQuality").Value);
-        Assert.Equal(0, result.Score);
-        Assert.False(result.ReadyAllowed);
+        Assert.Empty(result.ZeroRequired);
+        Assert.Equal(EntryQualityEvaluator.Evaluate(Input(netR: 3m), P).Score, result.Score);
+        Assert.True(result.ReadyAllowed);
     }
 
     // ── 종류별 규칙 ──
@@ -173,15 +172,17 @@ public sealed class StructureD2QualityTests
 
     // ── 위치 품질의 방향성 ──
 
-    /// <summary>§15: 강한 추세라도 저항이 가까우면(=공간이 좁으면) 진입 품질은 낮다.</summary>
+    /// <summary>#209: netR은 자격 게이트가 소비한다 — 점수는 netR과 함께 움직이지 않는다.</summary>
     [Fact]
-    public void StrongTrendWithNearbyResistanceScoresLowerThanRoomyStructure()
+    public void NetRNoLongerMovesTheScoreAtAll()
     {
         var roomy = EntryQualityEvaluator.Evaluate(Input(netR: 3.0m, signedTrend: 80), P);
         var cramped = EntryQualityEvaluator.Evaluate(Input(netR: .3m, signedTrend: 80), P);
 
-        Assert.True(cramped.Score < roomy.Score, $"cramped={cramped.Score} roomy={roomy.Score}");
+        Assert.Equal(roomy.Score, cramped.Score);
         Assert.True(cramped.Score > 0);
+        Assert.NotEqual(roomy.Components.Single(x => x.Name == "roomQuality").Value,
+            cramped.Components.Single(x => x.Name == "roomQuality").Value);
     }
 
     /// <summary>§9.4 extensionQuality: anchor에서 멀어질수록(추격) 품질이 낮아진다.</summary>
@@ -198,12 +199,42 @@ public sealed class StructureD2QualityTests
     }
 
     [Fact]
+    public void ExtensionQualityDistanceSubtractsTheStopBufferFromTheChaseDistance()
+    {
+        var withoutBuffer = EntryQualityEvaluator.Evaluate(Input(), P);
+        var withBuffer = EntryQualityEvaluator.Evaluate(Input() with { StopBuffer = .15m }, P);
+
+        Assert.Equal((100 - 99.15) / .2, withoutBuffer.Components.Single(x => x.Name == "extensionQuality").Raw!.Value, 12);
+        Assert.Equal((100 - 99.15 - .15) / .2, withBuffer.Components.Single(x => x.Name == "extensionQuality").Raw!.Value, 12);
+        Assert.True(withBuffer.Score > withoutBuffer.Score);
+
+        var overBuffer = EntryQualityEvaluator.Evaluate(Input() with { StopBuffer = 2.00m }, P);
+        Assert.Equal(0, overBuffer.Components.Single(x => x.Name == "extensionQuality").Raw!.Value);
+        Assert.Equal(1, overBuffer.Components.Single(x => x.Name == "extensionQuality").Value);
+    }
+
+    [Fact]
     public void NegativeNetRIsFlooredAtZeroRoomRatherThanThrowing()
     {
         var result = EntryQualityEvaluator.Evaluate(Input(netR: -2.0m), P);
 
         Assert.Equal(0, result.Components.Single(x => x.Name == "roomQuality").Value);
-        Assert.Equal(0, result.Score);
+        Assert.Equal(EntryQualityEvaluator.Evaluate(Input(), P).Score, result.Score);
+    }
+
+    [Fact]
+    public void TheFiveComponentFingerprintKeepsRoomQualityAsAReferenceValue()
+    {
+        var result = EntryQualityEvaluator.Evaluate(Input(), P);
+
+        var room = result.Components.Single(x => x.Name == "roomQuality");
+        Assert.False(room.Required);
+        Assert.Equal(5, result.UsedComponents.Length);
+        Assert.DoesNotContain("roomQuality", result.UsedComponents);
+        Assert.Contains($"roomQuality:{StructureMath.Number(room.Raw)}:{StructureMath.Number(room.Value)}:o",
+            result.Fingerprint());
+        Assert.NotEqual(result.Fingerprint(), EntryQualityEvaluator.Evaluate(Input(netR: 1.5m), P).Fingerprint());
+        Assert.Equal(result.Score, EntryQualityEvaluator.Evaluate(Input(netR: 1.5m), P).Score);
     }
 
     // ── 수치 안전과 결정성 ──

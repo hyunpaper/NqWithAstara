@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using Astra.Server;
 using Astra.Server.Application;
 using Astra.Server.Domain;
@@ -7,7 +7,7 @@ using Xunit;
 
 public sealed class StructureTrendDirectionGateTests
 {
-    static readonly StructurePolicy P = StructurePolicy.Default;
+    static readonly StructurePolicy P = D2.WideNetR;
     const int TriggerMinute = 30;
 
     const double NbisFrozenBreakoutSignedTrend = -65.3416;
