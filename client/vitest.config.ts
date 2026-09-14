@@ -8,6 +8,8 @@ export default defineConfig({
   define: { __ASTRA_VERSION__: JSON.stringify("dev") },
   test: {
     environment: "jsdom",
+    // 이슈 #224: styles.css를 ?raw로 읽어 레이아웃 계약을 단언하려면 CSS 변환이 켜져 있어야 한다.
+    css: true,
     // Testing Library의 렌더 자동 정리(cleanup)는 전역 afterEach 훅을 요구한다.
     globals: true,
     include: ["src/**/*.test.{ts,tsx}"],
