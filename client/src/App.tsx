@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -84,6 +85,26 @@ type Position = {
   pnlPercent: number | null;
   status: string;
 };
+
+export function WatchRowContent({
+  symbol,
+  name,
+  children,
+}: {
+  symbol: string;
+  name: string;
+  children?: ReactNode;
+}) {
+  return (
+    <>
+      <div className="watch-identity">
+        <b>{symbol}</b>
+        <small>{name}</small>
+      </div>
+      {children && <div className="watch-metrics">{children}</div>}
+    </>
+  );
+}
 type Signal = {
   symbol: string;
   name: string;
@@ -851,33 +872,31 @@ export default function App() {
                   className="watch-select"
                   onClick={() => setSelected(w.symbol)}
                 >
-                  <div>
-                    <b>{w.symbol}</b>
-                    <small>{w.name}</small>
-                  </div>
-                  {newsBadge && (
-                    <span
-                      className={newsBadge.className}
-                      title={scoreBadgeTitle(newsScore?.count, newsScore?.latestAt)}
-                    >
-                      {newsBadge.label}
-                    </span>
-                  )}
-                  {confluence != null && (
-                    <span
-                      className={`confluence-mini-badge ${gaugeTone(confluence)}`}
-                      title="컨플루언스 점수(관측 전용)"
-                    >
-                      {scoreText2(confluence)}
-                    </span>
-                  )}
-                  {s && (
-                    <span
-                      className={(s.changePercent ?? 0) >= 0 ? "up" : "down"}
-                    >
-                      {percent(s.changePercent)}
-                    </span>
-                  )}
+                  <WatchRowContent symbol={w.symbol} name={w.name}>
+                    {newsBadge && (
+                      <span
+                        className={newsBadge.className}
+                        title={scoreBadgeTitle(newsScore?.count, newsScore?.latestAt)}
+                      >
+                        {newsBadge.label}
+                      </span>
+                    )}
+                    {confluence != null && (
+                      <span
+                        className={`confluence-mini-badge ${gaugeTone(confluence)}`}
+                        title="컨플루언스 점수(관측 전용)"
+                      >
+                        {scoreText2(confluence)}
+                      </span>
+                    )}
+                    {s && (
+                      <span
+                        className={(s.changePercent ?? 0) >= 0 ? "up" : "down"}
+                      >
+                        {percent(s.changePercent)}
+                      </span>
+                    )}
+                  </WatchRowContent>
                 </button>
                 <button
                   className="delete"
