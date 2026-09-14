@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using Astra.Server;
 using Astra.Server.Application;
 using Astra.Server.Domain;
@@ -26,6 +26,13 @@ public sealed class StructureTrendDirectionGateTests
         bars.Add(Bar(28, 99.50m, 99.70m, 99.50m, 99.60m));
         bars.Add(Bar(29, 99.55m, 99.65m, 99.60m, 99.60m));
         bars.Add(Bar(TriggerMinute, 99.58m, 99.85m, 99.60m, 99.80m, 2000));
+        return bars.ToImmutable();
+    }
+
+    static ImmutableArray<StructureBar> BearishTriggerBars()
+    {
+        var bars = PullbackBarsWhoseEpisodeLowAlsoFormsARebound().ToBuilder();
+        bars[^1] = Bar(TriggerMinute, 99.58m, 99.85m, 99.85m, 99.80m, 2000);
         return bars.ToImmutable();
     }
 
@@ -92,10 +99,8 @@ public sealed class StructureTrendDirectionGateTests
         Assert.Equal(CandidateDisposition.Rejected, candidate.Disposition);
         Assert.Null(candidate.Plan);
 
-        var rebound = Assert.Single(result.Candidates.Where(x => x.Kind == SetupKind.Rebound));
-        Assert.Equal(CandidateDisposition.Ready, rebound.Disposition);
-        Assert.DoesNotContain(SetupDetector.CodeTrendDirectionOpposesLong, rebound.RejectionCodes);
-        Assert.Equal(rebound.EventId, result.PreferredCandidateId);
+        Assert.DoesNotContain(result.Candidates, x => x.Kind == SetupKind.Rebound);
+        Assert.Null(result.PreferredCandidateId);
     }
 
     [Fact]
@@ -149,11 +154,10 @@ public sealed class StructureTrendDirectionGateTests
     }
 
     [Theory]
-    [InlineData(-0.0001)]
-    [InlineData(-31.0703)]
-    [InlineData(NbisFrozenBreakoutSignedTrend)]
-    [InlineData(-99.9)]
-    public void ReboundStaysReadyAtAnyNegativeSignedTrend(double signedTrend)
+    [InlineData(0)]
+    [InlineData(-24)]
+    [InlineData(-25)]
+    public void ReboundStaysReadyDownToTheTrendFloorInclusive(double signedTrend)
     {
         var result = DetectPullback(D2.Trend(TrendState.Range, signedTrend, structureDirection: -.5));
         var rebound = Assert.Single(result.Candidates.Where(x => x.Kind == SetupKind.Rebound));
@@ -163,6 +167,58 @@ public sealed class StructureTrendDirectionGateTests
         Assert.Equal(CandidateDisposition.Ready, rebound.Disposition);
         Assert.NotNull(rebound.Plan);
         Assert.DoesNotContain(EntryQualityEvaluator.AlignmentQuality, rebound.Quality.UsedComponents);
+    }
+
+    [Theory]
+    [InlineData(-30)]
+    [InlineData(-31.0703)]
+    [InlineData(NbisFrozenBreakoutSignedTrend)]
+    [InlineData(-99.9)]
+    public void ReboundBelowTheTrendFloorIsRejectedButStaysObservable(double signedTrend)
+    {
+        var result = DetectPullback(D2.Trend(TrendState.Range, signedTrend, structureDirection: -.5));
+        var rebound = Assert.Single(result.Candidates.Where(x => x.Kind == SetupKind.Rebound));
+
+        Assert.True(rebound.CounterTrend);
+        Assert.Equal([SetupDetector.CodeTrendDeeplyOpposesRebound], rebound.RejectionCodes.ToArray());
+        Assert.Equal(CandidateDisposition.Rejected, rebound.Disposition);
+        Assert.Null(rebound.Plan);
+        Assert.Null(result.PreferredCandidateId);
+        Assert.Equal("TREND_DEEPLY_OPPOSES_REBOUND", SetupDetector.CodeTrendDeeplyOpposesRebound);
+    }
+
+    [Fact]
+    public void TheReboundFloorNeverTouchesTheOtherKinds()
+    {
+        var breakout = Only("BREAKOUT", D2.Trend(TrendState.Up, 40));
+        Assert.DoesNotContain(SetupDetector.CodeTrendDeeplyOpposesRebound, breakout.RejectionCodes);
+
+        var pullback = Only("PULLBACK", D2.Trend(TrendState.Transition, -30, structureDirection: -.5));
+        Assert.Equal([SetupDetector.CodeTrendDirectionOpposesLong], pullback.RejectionCodes.ToArray());
+    }
+
+    [Fact]
+    public void ABearishTriggerBarProducesNoReboundCandidate()
+    {
+        var result = SetupDetector.Detect(SetupDetectionRequest.Create(Fx.Symbol, Fx.SessionStart, Fx.SessionEnd,
+            Fx.At(TriggerMinute + 1), Fx.At(TriggerMinute + 1), BearishTriggerBars(), PullbackZones(),
+            PullbackEpisodes(), D2.Trend(TrendState.Range, -10, structureDirection: -.5), .20, 99.80m,
+            Fx.At(TriggerMinute + 1), D2.Quote(99.79m, 99.81m, TriggerMinute + 1)), P);
+
+        Assert.DoesNotContain(result.Candidates, x => x.Kind == SetupKind.Rebound);
+    }
+
+    [Fact]
+    public void APullbackOnTheSameBarZoneAndAnchorSuppressesTheRebound()
+    {
+        var withPullback = DetectPullback(D2.Trend(TrendState.Transition, -0.0001, structureDirection: 0));
+        Assert.Single(withPullback.Candidates.Where(x => x.Kind == SetupKind.Pullback));
+        Assert.DoesNotContain(withPullback.Candidates, x => x.Kind == SetupKind.Rebound);
+
+        var withoutPullback = DetectPullback(D2.Trend(TrendState.Range, -0.0001, structureDirection: 0));
+        Assert.DoesNotContain(withoutPullback.Candidates, x => x.Kind == SetupKind.Pullback);
+        var rebound = Assert.Single(withoutPullback.Candidates.Where(x => x.Kind == SetupKind.Rebound));
+        Assert.Equal(CandidateDisposition.Ready, rebound.Disposition);
     }
 
     [Theory]
@@ -243,7 +299,7 @@ public sealed class StructureTrendDirectionGateTests
     }
 
     [Fact]
-    public async Task ShadowModeKeepsItsNegativeTrendReboundReadyAndAttachesNoDirectionCode()
+    public async Task ShadowModeRejectsItsDeeplyNegativeTrendReboundWithTheReboundFloorCode()
     {
         var harness = Build(StructureEngineMode.Shadow);
         await PollAt(harness, 64);
@@ -251,8 +307,11 @@ public sealed class StructureTrendDirectionGateTests
 
         Assert.True(harness.Structure.TryGetPublished(Fx.Symbol, out var view));
         Assert.NotNull(view.Trend);
-        Assert.True(view.Trend!.SignedTrend < 0, $"fixture 추세가 음수가 아니다: {view.Trend.SignedTrend}");
-        Assert.Contains(view.Candidates, x => x.Kind == "REBOUND" && x.State == "READY");
+        Assert.True(view.Trend!.SignedTrend < -P.TrendStateThreshold,
+            $"fixture 추세가 하한 아래가 아니다: {view.Trend.SignedTrend}");
+        var rebound = view.Candidates.Single(x => x.Kind == "REBOUND");
+        Assert.Equal("REJECTED", rebound.State);
+        Assert.Contains(SetupDetector.CodeTrendDeeplyOpposesRebound, rebound.RejectionCodes);
         Assert.All(view.Candidates, x =>
             Assert.DoesNotContain(SetupDetector.CodeTrendDirectionOpposesLong, x.RejectionCodes));
         Assert.Empty(harness.Store.Trades);

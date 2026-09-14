@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Text.Json;
 using Astra.Server.Application;
 using Astra.Server.Domain.Structure;
@@ -27,10 +27,11 @@ public sealed class StructureCohortContractTests
         return bars.ToImmutable();
     }
 
-    static SetupDetectionRequest Request(ImmutableArray<PriceZone> zones, decimal? live = 100.00m)
+    static SetupDetectionRequest Request(ImmutableArray<PriceZone> zones, decimal? live = 100.00m,
+        TrendState state = TrendState.Range)
     {
         var analysisAsOf = Fx.At(TriggerMinute + 1);
-        var trend = D2.Trend(TrendState.Up, 40, structureDirection: null,
+        var trend = D2.Trend(state, 40, structureDirection: null,
             readyBlockers: TrendEvaluator.BlockerMissing5mStructure);
         return SetupDetectionRequest.Create(Fx.Symbol, Fx.SessionStart, Fx.SessionEnd, analysisAsOf, analysisAsOf,
             PullbackBars(), zones, [D2.Episode("support-zone", 25, 28)], trend, .20, live, analysisAsOf,
@@ -76,7 +77,7 @@ public sealed class StructureCohortContractTests
     [Fact]
     public void TheStructureWaiverStillKeepsTheBlockerOutOfTheRejectionCodes()
     {
-        var result = SetupDetector.Detect(Request([D2.Support(99.20m, 99.40m)]), P);
+        var result = SetupDetector.Detect(Request([D2.Support(99.20m, 99.40m)], state: TrendState.Up), P);
 
         var pullback = result.Candidates.Single(x => x.Kind == SetupKind.Pullback);
         Assert.Contains(TrendEvaluator.BlockerMissing5mStructure, pullback.RejectionCodes);

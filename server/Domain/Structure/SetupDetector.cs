@@ -111,6 +111,9 @@ public static class SetupDetector
     /// <summary>PULLBACK/BREAKOUT이 signedTrend&lt;0에서 롱으로 승격되는 것을 막는 거절 사유(#42).</summary>
     public const string CodeTrendDirectionOpposesLong = "TREND_DIRECTION_OPPOSES_LONG";
 
+    /// <summary>REBOUND가 극단적 하락 추세에서 롱으로 승격되는 것을 막는 거절 사유(§I-1, #208).</summary>
+    public const string CodeTrendDeeplyOpposesRebound = "TREND_DEEPLY_OPPOSES_REBOUND";
+
     public static SetupDetectionResult Detect(SetupDetectionRequest request, StructurePolicy policy)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -191,6 +194,8 @@ public static class SetupDetector
                     triggerConfirmedAt, expiresAt, entryReference, entryNotes, spread, readyBlockers));
 
                 var rebound = DetectRebound(request, policy, zone, trigger, previous, bars, structureCutoff);
+                // 같은 봉·같은 zone·같은 anchor면 하나의 구조 사건이다 — PULLBACK만 남긴다(§8, §I-1, #208).
+                if (rebound is not null && pullback is not null && pullback.Anchor == rebound.Anchor) rebound = null;
                 if (rebound is not null) candidates.Add(Build(request, policy, rebound, trigger, bars, structureCutoff,
                     triggerConfirmedAt, expiresAt, entryReference, entryNotes, spread, readyBlockers));
             }
@@ -271,7 +276,7 @@ public static class SetupDetector
 
     /// <summary>
     /// REBOUND: 확인된 support에서 실패한 하향 이탈(구간 아래로 내려갔지만 완료 종가는 Lower 아래로 마감하지 않음)
-    /// 이후 완료 봉이 support Upper 및 직전 봉 High 위로 마감한다(§8).
+    /// 이후 완료 봉이 support Upper 및 직전 봉 High 위로 마감한다(§8). 트리거 봉은 양봉이어야 한다(§I-1, #208).
     /// 추세 점수가 낮다는 이유로 거절하지 않고 CounterTrend=true로 분리한다.
     /// </summary>
     static Hypothesis? DetectRebound(SetupDetectionRequest request, StructurePolicy policy, PriceZone zone,
@@ -279,6 +284,7 @@ public static class SetupDetector
     {
         if (!IsUsableSupport(zone)) return null;
         if (trigger.Close <= previous.High || trigger.Close <= zone.Upper) return null;
+        if (trigger.Close <= trigger.Open) return null;          // 양봉 요구
 
         var episode = TriggerEligibleEpisode(request, policy, zone, bars, structureCutoff);
         if (episode is not null && !IsFailedBreakdownEpisode(zone, episode, request.Episodes, bars, structureCutoff))
@@ -403,6 +409,11 @@ public static class SetupDetector
         if (RequiresTrendAlignment(hypothesis.Kind) && request.Trend.SignedTrend is { } signedTrend
             && double.IsFinite(signedTrend) && signedTrend < 0)
             rejections.Add(CodeTrendDirectionOpposesLong);
+
+        // REBOUND는 추세 점수가 낮다고 거절하지 않지만 극단적 하락에서는 승격하지 않는다(§I-1, #208).
+        if (hypothesis.Kind == SetupKind.Rebound && request.Trend.SignedTrend is { } reboundTrend
+            && double.IsFinite(reboundTrend) && reboundTrend < -policy.TrendStateThreshold)
+            rejections.Add(CodeTrendDeeplyOpposesRebound);
 
         // 실시간 유지 조건 붕괴는 INVALIDATED이며 재상승했다고 같은 이벤트를 되살리지 않는다(§10, §16B).
         var invalidated = false;

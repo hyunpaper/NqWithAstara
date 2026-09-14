@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using Astra.Server.Domain.Structure;
 using Xunit;
 
@@ -81,9 +81,8 @@ public sealed class StructureD2CandidateTests
         Assert.Empty(candidate.RejectionCodes);
         Assert.True(candidate.EntryQuality > 0);
         Assert.Equal(CandidateDisposition.Ready, result.Summary);
-        // 예시 A의 눌림 저점(99.15)은 지지 하단(99.20) 아래이므로 실패한 이탈로도 읽힌다.
-        // 두 종류 후보가 같은 구조 계획을 만들고 대표는 정렬 규칙이 하나만 고른다(§8).
-        Assert.Equal(2, result.Candidates.Length);
+        // 예시 A의 눌림 저점(99.15)은 실패한 이탈로도 읽히지만 같은 봉·zone·anchor의 REBOUND는 억제된다(#208 C).
+        Assert.Single(result.Candidates);
         Assert.All(result.Candidates, x => Assert.Equal(99.12m, x.Plan!.Stop));
         Assert.All(result.Candidates, x => Assert.Equal(101.78m, x.Plan!.Target));
         Assert.NotNull(result.Preferred);
@@ -480,7 +479,7 @@ public sealed class StructureD2CandidateTests
         // episode 저점이 지지 하단(99.20) 아래지만 완료 종가는 하단 위에서 마감했다.
         var bars = PullbackBars(episodeLow: 99.10m);
         var result = SetupDetector.Detect(Request(bars, PullbackZones(), PullbackEpisodes(),
-            D2.Trend(TrendState.Range, -30)), P);
+            D2.Trend(TrendState.Range, -20)), P);
         var candidate = result.Candidates.Single(x => x.Kind == SetupKind.Rebound);
 
         Assert.Equal(CandidateDisposition.Ready, candidate.Disposition);
@@ -597,18 +596,20 @@ public sealed class StructureD2CandidateTests
     [Fact]
     public void MissingFiveMinuteStructureBlocksReadyWithAReason()
     {
-        var trend = D2.Trend(TrendState.Up, 40, structureDirection: null,
-            readyBlockers: TrendEvaluator.BlockerMissing5mStructure);
-        var result = SetupDetector.Detect(Request(PullbackBars(), PullbackZones(), PullbackEpisodes(), trend), P);
-        var candidate = result.Candidates.Single(x => x.Kind == SetupKind.Pullback);
+        SetupDetectionResult Detect(TrendState state) => SetupDetector.Detect(
+            Request(PullbackBars(), PullbackZones(), PullbackEpisodes(),
+                D2.Trend(state, 40, structureDirection: null,
+                    readyBlockers: TrendEvaluator.BlockerMissing5mStructure)), P);
 
+        var candidate = Detect(TrendState.Up).Candidates.Single(x => x.Kind == SetupKind.Pullback);
         Assert.Equal(CandidateDisposition.Rejected, candidate.Disposition);
         Assert.Contains(TrendEvaluator.BlockerMissing5mStructure, candidate.RejectionCodes);
 
-        var rebound = result.Candidates.Single(x => x.Kind == SetupKind.Rebound);
+        var reboundResult = Detect(TrendState.Range);
+        var rebound = reboundResult.Candidates.Single(x => x.Kind == SetupKind.Rebound);
         Assert.Equal(CandidateDisposition.Ready, rebound.Disposition);
         Assert.Contains(SetupDetector.NoteReadyWithout5mStructure, rebound.Notes);
-        Assert.Equal(rebound.EventId, result.PreferredCandidateId);
+        Assert.Equal(rebound.EventId, reboundResult.PreferredCandidateId);
     }
 
     [Fact]

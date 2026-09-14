@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Astra.Server;
 using Astra.Server.Application;
 using Astra.Server.Domain;
@@ -11,7 +11,7 @@ using Xunit;
 /// </summary>
 public sealed class StructureD6StructuralSimulationTests
 {
-    static readonly StructurePolicy P = StructurePolicy.Default;
+    static readonly StructurePolicy P = D6.PolicyWithoutTheReboundTrendFloor;
 
     static StructuralTradePlan PlanA()
     {
@@ -204,7 +204,7 @@ public sealed class StructureD6StructuralSimulationTests
 /// </summary>
 public sealed class StructureD6ActiveWiringTests
 {
-    static readonly StructurePolicy P = StructurePolicy.Default;
+    static readonly StructurePolicy P = D6.PolicyWithoutTheReboundTrendFloor;
 
     sealed record Harness(MonitorPollingService Poller, RecordingStore Store, MemoryObservationStore Observations,
         MonitorRuntimeState Runtime, StructureAnalysisService Structure, MovableClock Clock,
@@ -500,6 +500,10 @@ public sealed class StructureD6ActiveWiringTests
 /// </summary>
 static class D6
 {
+    /// <summary>이 fixture는 signedTrend -57의 하락 국면이라 #208 REBOUND 추세 하한에 걸린다. 배선 검증이 목적이므로 하한만 비활성화한다.</summary>
+    public static StructurePolicy PolicyWithoutTheReboundTrendFloor { get; } =
+        StructurePolicy.Default with { TrendStateThreshold = 1000 };
+
     public static MarketSession Session => new(true, "정규장", null, Fx.SessionStart, Fx.SessionEnd);
 
     // (High, Low, Close) — Open은 직전 종가(첫 봉은 100.30). 검증은 Bars()가 수행한다.

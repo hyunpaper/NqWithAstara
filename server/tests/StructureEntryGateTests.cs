@@ -1,4 +1,4 @@
-using Astra.Server;
+﻿using Astra.Server;
 using Astra.Server.Application;
 using Astra.Server.Domain;
 using Astra.Server.Domain.Structure;
@@ -11,7 +11,7 @@ using Xunit;
 /// </summary>
 public sealed class StructureEntryGateTests
 {
-    static readonly StructurePolicy P = StructurePolicy.Default;
+    static readonly StructurePolicy P = D6.PolicyWithoutTheReboundTrendFloor;
 
     sealed record Harness(StructureAnalysisService Structure, RecordingStore Store, MemoryObservationStore Observations,
         MonitorRuntimeState Runtime, GateClock Clock, CountingEntryPort Entries, long Generation, MarketSession Session);
