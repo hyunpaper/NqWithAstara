@@ -17,7 +17,6 @@ import {
   Plus,
   Search,
   Square,
-  Trash2,
   Wifi,
   WifiOff,
   X,
@@ -67,7 +66,9 @@ import type { Badge } from "./newsFormat";
 import ConfluencePanel from "./ConfluencePanel";
 import { gaugeTone, scoreText2 } from "./confluenceFormat";
 import HistoricalReplayPanel from "./HistoricalReplayPanel";
-import { WatchRowContent } from "./WatchRowContent";
+import { WatchList } from "./WatchRowContent";
+import type { WatchListItem } from "./WatchRowContent";
+import { WATCH_ORDER_URL, watchOrderRequest } from "./watchReorder";
 
 type Bar = { time: string; close: number; ema?: number; vwap?: number };
 type Indicators = {
@@ -806,6 +807,25 @@ export default function App() {
           return compareByV5State(rowOf(a.symbol), rowOf(b.symbol));
       }
     });
+  const watchItems: WatchListItem[] = (state?.watchlist ?? []).map((w) => {
+    const s = state?.signals.find((v) => v.symbol === w.symbol);
+    const newsScore = newsUiEnabled
+      ? findSymbolScore(newsSentiment?.symbols ?? [], w.symbol)
+      : null;
+    // 이슈 #181: K3 폴링 최신값(선택 종목)이 없으면 structureSummary 캐시로 전 종목 배지를 채운다.
+    const confluence = sidebarConfluenceScore(confluenceScore, w.symbol, rowOf(w.symbol));
+    return {
+      symbol: w.symbol,
+      name: w.name,
+      change: s
+        ? {
+            label: percent(s.changePercent),
+            tone: ((s.changePercent ?? 0) >= 0 ? "up" : "down") as "up" | "down",
+          }
+        : null,
+      badges: watchBadges(scoreBadge(newsScore?.score), newsScore, confluence),
+    };
+  });
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!selected) return;
@@ -866,61 +886,28 @@ export default function App() {
             )}
           </div>
         )}
-        <div className="watch-list">
-          {state?.watchlist.map((w) => {
-            const s = state.signals.find((v) => v.symbol === w.symbol);
-            const newsScore = newsUiEnabled
-              ? findSymbolScore(newsSentiment?.symbols ?? [], w.symbol)
-              : null;
-            const newsBadge = scoreBadge(newsScore?.score);
-            // 이슈 #181: K3 폴링 최신값(선택 종목)이 없으면 structureSummary 캐시로 전 종목 배지를 채운다.
-            const confluence = sidebarConfluenceScore(confluenceScore, w.symbol, rowOf(w.symbol));
-            return (
-              <div
-                className={`watch-row ${selected === w.symbol ? "active" : ""}`}
-                key={w.symbol}
-              >
-                <button
-                  className="watch-select"
-                  aria-label={`${w.symbol} ${w.name}`}
-                  onClick={() => setSelected(w.symbol)}
-                >
-                  <WatchRowContent
-                    symbol={w.symbol}
-                    name={w.name}
-                    change={
-                      s
-                        ? {
-                            label: percent(s.changePercent),
-                            tone: (s.changePercent ?? 0) >= 0 ? "up" : "down",
-                          }
-                        : null
-                    }
-                    badges={watchBadges(newsBadge, newsScore, confluence)}
-                  />
-                </button>
-                <button
-                  className="delete"
-                  aria-label={`${w.symbol} 관심종목 삭제`}
-                  onClick={() =>
-                    mutate(() =>
-                      api(`/api/watchlist/${w.symbol}`, { method: "DELETE" }),
-                    )
-                  }
-                >
-                  <Trash2 size={14} />
-                </button>
+        <WatchList
+          items={watchItems}
+          selected={selected}
+          onSelect={setSelected}
+          onDelete={(symbol) =>
+            mutate(() => api(`/api/watchlist/${symbol}`, { method: "DELETE" }))
+          }
+          saveOrder={async (symbols) => {
+            await api(WATCH_ORDER_URL, watchOrderRequest(symbols));
+            await load();
+          }}
+          onError={setError}
+          empty={
+            state && !state.watchlist.length ? (
+              <div className="empty-side">
+                검색으로 관심종목을
+                <br />
+                추가해 주세요.
               </div>
-            );
-          })}
-          {state && !state.watchlist.length && (
-            <div className="empty-side">
-              검색으로 관심종목을
-              <br />
-              추가해 주세요.
-            </div>
-          )}
-        </div>
+            ) : null
+          }
+        />
         <div className="side-footer">
           <div>
             <span
