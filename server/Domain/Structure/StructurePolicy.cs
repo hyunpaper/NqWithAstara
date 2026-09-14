@@ -51,10 +51,11 @@ public sealed record StructurePolicy
 
     /// <summary>
     /// §10 손절 후 재진입 제한. 같은 심볼의 최신 STOP 청산이 일어난 완료 봉을 0번째로 세어, 이후 완료 봉이
-    /// 이 개수만큼 쌓이기 전에는 다시 진입하지 않는다. 보수적 운영 정책 상수이며 구조에서 도출하거나
-    /// 성과로 검증한 값이 아니다.
+    /// 이 개수만큼 쌓이기 전에는 다시 진입하지 않는다. 보수적 운영 정책 상수이며 구조에서 도출한 값이 아니다.
+    /// 3봉은 실측 122건에서 1건도 차단하지 못했다(관측 최소 재진입 간격 5분). 26거래일 단일 국면 표본으로
+    /// 고른 잠정값 20이며 배포 후 차단 건의 사후 결과로 재검증한다(#210, §16A).
     /// </summary>
-    public int StopReentryCooldownBars { get; init; } = 3;
+    public int StopReentryCooldownBars { get; init; } = 20;
     public long ObservationDailyByteLimit { get; init; } = 20L * 1024 * 1024;
 
     /// <summary>

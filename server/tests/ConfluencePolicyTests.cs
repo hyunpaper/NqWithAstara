@@ -125,7 +125,7 @@ public sealed class ConfluencePolicyTests
     [Fact]
     public void StructurePolicyHashIsUntouchedByTheConfluenceLayer()
     {
-        Assert.Equal("a08350232f3705ba2a151bc7213f618f5687b31659a7b76306262bec0209a1b8",
+        Assert.Equal("5870cbe4b8fb10a7a73c06fd803c202bd39ae0fc9f0e0d4120131aa9675ebe82",
             StructurePolicy.Default.PolicyHash);
         Assert.NotEqual(StructurePolicy.Default.PolicyHash, ConfluencePolicy.Default.PolicyHash);
     }
