@@ -60,6 +60,40 @@ public sealed class TossClientTests : IDisposable
     }
 
     [Fact]
+    public async Task HistoricalCandlesRecordsPaginationReachingRequestedStart()
+    {
+        var handler = new FixtureHandler((request, count) => request.RequestUri!.AbsolutePath == "/oauth2/token"
+            ? Json("{\"access_token\":\"fixture\",\"expires_in\":3600}")
+            : request.RequestUri.Query.Contains("before=")
+                ? CandlePage("2026-09-07T13:30:00Z", null)
+                : CandlePage("2026-09-08T13:30:00Z", "older"));
+
+        var result = await Client(handler).HistoricalCandles("TSLA", DateTimeOffset.Parse("2026-09-08T00:00:00Z"),
+            DateTimeOffset.Parse("2026-09-09T00:00:00Z"), CancellationToken.None);
+
+        Assert.True(result.ReachedRequestedStart);
+        Assert.Equal(2, result.RawBarCount);
+        Assert.Equal(DateTimeOffset.Parse("2026-09-07T13:30:00Z"), result.OldestBar);
+        Assert.Single(result.Bars);
+        Assert.Null(result.StopReason);
+    }
+
+    [Fact]
+    public async Task HistoricalCandlesRecordsMissingCursorBeforeRequestedStart()
+    {
+        var handler = new FixtureHandler((request, count) => request.RequestUri!.AbsolutePath == "/oauth2/token"
+            ? Json("{\"access_token\":\"fixture\",\"expires_in\":3600}")
+            : CandlePage("2026-09-08T13:30:00Z", null));
+
+        var result = await Client(handler).HistoricalCandles("TSLA", DateTimeOffset.Parse("2026-09-01T00:00:00Z"),
+            DateTimeOffset.Parse("2026-09-09T00:00:00Z"), CancellationToken.None);
+
+        Assert.False(result.ReachedRequestedStart);
+        Assert.Equal(1, result.RawBarCount);
+        Assert.Contains("커서", result.StopReason);
+    }
+
+    [Fact]
     public async Task StockInfosParsesNullableLeverageAndSharesOutstanding()
     {
         var handler = new FixtureHandler((request, count) => request.RequestUri!.AbsolutePath == "/oauth2/token"
@@ -162,6 +196,8 @@ public sealed class TossClientTests : IDisposable
 
     static TossClient Client(HttpMessageHandler handler) => new(new HttpClient(handler) { BaseAddress = new Uri("https://openapi.tossinvest.com/") });
     static HttpResponseMessage Json(string value) => new(HttpStatusCode.OK) { Content = new StringContent(value, Encoding.UTF8, "application/json") };
+    static HttpResponseMessage CandlePage(string timestamp, string? nextBefore) => Json(
+        $"{{\"result\":{{\"candles\":[{{\"timestamp\":\"{timestamp}\",\"openPrice\":\"100\",\"highPrice\":\"101\",\"lowPrice\":\"99\",\"closePrice\":\"100\",\"volume\":\"10\"}}],\"nextBefore\":{(nextBefore is null ? "null" : $"\"{nextBefore}\"")}}}}}");
     sealed class FixtureHandler(Func<HttpRequestMessage, int, HttpResponseMessage> reply) : HttpMessageHandler
     {
         int _count; public ConcurrentBag<string> Paths { get; } = [];

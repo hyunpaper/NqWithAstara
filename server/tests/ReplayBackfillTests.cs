@@ -12,6 +12,51 @@ namespace Astra.Server.Tests;
 public sealed class ReplayBackfillTests
 {
     [Fact]
+    public async Task EmptySourceWritesNoDataReportWithOneSourceRowPerRequestedSymbol()
+    {
+        var root = Directory.CreateTempSubdirectory("astra-replay-empty-").FullName;
+        try
+        {
+            var report = await new ReplayBackfill(new FakeSource(), TimeProvider.System).RunAsync(root,
+                ["TSLA"], "QQQ", new DateOnly(2026, 1, 1), new DateOnly(2026, 3, 31), CancellationToken.None);
+
+            Assert.Equal("no-data", report.DataStatus);
+            Assert.Empty(report.Rows);
+            Assert.Equal(2, report.Sources.Length);
+            Assert.All(report.Sources, row =>
+            {
+                Assert.Equal(0, row.RawBars);
+                Assert.Equal(0, row.ActualTradingDays);
+                Assert.False(row.ReachedRequestedStart);
+                Assert.Equal("no-data", row.DataStatus);
+            });
+            using var saved = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "import-report.json")));
+            Assert.Equal("no-data", saved.RootElement.GetProperty("DataStatus").GetString());
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task PaginationThatDoesNotReachRequestedStartIsReportedAsPartial()
+    {
+        var root = Directory.CreateTempSubdirectory("astra-replay-partial-").FullName;
+        try
+        {
+            var source = new FakeSource { ReachedRequestedStart = false, StopReason = "페이지 상한" };
+            source.Add("TSLA", Bar("2026-09-08T13:30:00Z", 100));
+            source.Add("QQQ", Bar("2026-09-08T13:30:00Z", 500));
+
+            var report = await new ReplayBackfill(source, TimeProvider.System).RunAsync(root, ["TSLA"], "QQQ",
+                new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 8), CancellationToken.None);
+
+            Assert.Equal("partial", report.DataStatus);
+            Assert.All(report.Sources, row => Assert.False(row.ReachedRequestedStart));
+            Assert.All(report.Sources, row => Assert.Equal("페이지 상한", row.Reason));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public async Task BackfillWritesNormalizedBarsAndQualityReportUnderReplayRoot()
     {
         var root = Directory.CreateTempSubdirectory("astra-replay-").FullName;
@@ -130,8 +175,16 @@ public sealed class ReplayBackfillTests
         readonly Dictionary<string, IReadOnlyList<Candle>> _bars = new(StringComparer.OrdinalIgnoreCase);
         public string Name => "Toss";
         public bool Adjusted => true;
+        public bool ReachedRequestedStart { get; init; } = true;
+        public string? StopReason { get; init; }
         public void Add(string symbol, params Candle[] bars) => _bars[symbol] = bars;
-        public Task<IReadOnlyList<Candle>> ReadAsync(string symbol, DateTimeOffset from, DateTimeOffset to,
-            CancellationToken ct) => Task.FromResult(_bars.GetValueOrDefault(symbol) ?? []);
+        public Task<HistoricalBarReadResult> ReadAsync(string symbol, DateTimeOffset from, DateTimeOffset to,
+            CancellationToken ct)
+        {
+            var bars = _bars.GetValueOrDefault(symbol) ?? [];
+            return Task.FromResult(new HistoricalBarReadResult(bars, bars.Count,
+                bars.Count > 0 && ReachedRequestedStart, bars.Count == 0 ? null : bars.Min(x => x.Timestamp),
+                bars.Count == 0 ? "빈 응답" : StopReason));
+        }
     }
 }

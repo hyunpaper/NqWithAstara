@@ -67,14 +67,17 @@ export default function HistoricalReplayPanel() {
         <div className="replay-meta"><span>{run.from} ~ {run.to}</span><span>대상 {run.watchlist.length}종목</span><span>벤치마크 {run.benchmark}</span><span>출처 {run.source}</span></div>
         {run.completedAt && <p>완료: {new Date(run.completedAt).toLocaleString()}</p>}
         {run.failureReason && <p className="replay-error">{run.failureReason}</p>}
+        {run.dataStatus === "partial" && <p className="replay-error">부분 데이터: {run.dataReason}</p>}
+        {run.sourceQuality?.length > 0 && <div className="replay-meta">{run.sourceQuality.map((quality) =>
+          <span key={quality.symbol} title={quality.reason ?? ""}>{quality.symbol} · 원시 봉 {quality.rawBars.toLocaleString()} · 거래일 {quality.actualTradingDays} · {quality.reachedRequestedStart ? "시작일 도달" : quality.dataStatus === "no-data" ? "데이터 없음" : "시작일 미도달"}</span>)}</div>}
       </div>
       {run.aggregate && <div className="panel">
         <div className="panel-head"><h3>전체 합계</h3><span>{run.notice}</span></div>
-        <div className="replay-totals"><b>신호 {run.aggregate.signals.toLocaleString()}</b><span>가상 진입 {replayValue(run.aggregate.virtualEntries)}</span><span>승/패 {replayValue(run.aggregate.wins)} / {replayValue(run.aggregate.losses)}</span><span>손익 {replayValue(run.aggregate.pnlPercent, "%")}</span></div>
+        <div className="replay-totals"><b>신호 {replayValue(run.aggregate.signals)}</b><span>가상 진입 {replayValue(run.aggregate.virtualEntries)}</span><span>승/패 {replayValue(run.aggregate.wins)} / {replayValue(run.aggregate.losses)}</span><span>손익 {replayValue(run.aggregate.pnlPercent, "%")}</span></div>
       </div>}
       {run.symbols.length > 0 && <div className="panel table-wrap">
         <table className="sim-table"><thead><tr><th>종목</th><th>신호</th><th>가상 진입</th><th>승/패</th><th>손익</th><th>평균 보유</th><th>STOP/TARGET/EOD</th></tr></thead>
-          <tbody>{run.symbols.map((row) => <tr key={row.symbol}><td><b>{row.symbol}</b><small title={row.unavailableReason ?? ""}>{row.tradeReplayStatus === "partial" ? "봉 기반" : row.tradeReplayStatus}</small></td><td>{row.signals}</td><td title={row.unavailableReason ?? ""}>{replayValue(row.virtualEntries)}</td><td>{replayValue(row.wins)} / {replayValue(row.losses)}</td><td>{replayValue(row.pnlPercent, "%")}</td><td>{replayValue(row.averageHoldingMinutes, "분")}</td><td>{row.exits ? `${row.exits.stop}/${row.exits.target}/${row.exits.eod}` : "unavailable"}</td></tr>)}</tbody>
+          <tbody>{run.symbols.map((row) => <tr key={row.symbol}><td><b>{row.symbol}</b><small title={row.unavailableReason ?? ""}>{row.tradeReplayStatus === "partial" ? "봉 기반" : row.tradeReplayStatus}</small></td><td>{replayValue(row.signals)}</td><td title={row.unavailableReason ?? ""}>{replayValue(row.virtualEntries)}</td><td>{replayValue(row.wins)} / {replayValue(row.losses)}</td><td>{replayValue(row.pnlPercent, "%")}</td><td>{replayValue(row.averageHoldingMinutes, "분")}</td><td>{row.exits ? `${row.exits.stop}/${row.exits.target}/${row.exits.eod}` : "unavailable"}</td></tr>)}</tbody>
         </table>
       </div>}
     </>}
