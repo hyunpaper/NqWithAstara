@@ -1,6 +1,7 @@
 using Astra.Server.Application.Backtest;
 using Astra.Server.Domain;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Xunit;
 
 namespace Astra.Server.Tests;
@@ -88,6 +89,29 @@ public sealed class HistoricalReplayDiagnosticsTests
     }
 
     [Fact]
+    public void ItPreservesMissingAndNullFeeFieldsFromRawJsonAsUnverifiable()
+    {
+        var missing = JsonNode.Parse(JsonSerializer.Serialize(new HistoricalReplayTradeResult(
+            Trade("MISSING"), -.2, .2, null, -.4)))!.AsObject();
+        missing.Remove("FeePercent");
+        var nullValue = JsonNode.Parse(JsonSerializer.Serialize(new HistoricalReplayTradeResult(
+            Trade("NULL"), -.2, .2, null, -.4)))!.AsObject();
+        nullValue["FeePercent"] = null;
+        var malformed = JsonNode.Parse(JsonSerializer.Serialize(new HistoricalReplayTradeResult(
+            Trade("MALFORMED"), -.2, .2, null, -.4)))!.AsObject();
+        malformed["FeePercent"] = "unknown";
+
+        Assert.True(HistoricalReplayDiagnosticTrade.TryRead(missing.ToJsonString(), out var missingRow));
+        Assert.True(HistoricalReplayDiagnosticTrade.TryRead(nullValue.ToJsonString(), out var nullRow));
+        Assert.True(HistoricalReplayDiagnosticTrade.TryRead(malformed.ToJsonString(), out var malformedRow));
+        var diagnostics = HistoricalReplayDiagnosticsBuilder.Build([missingRow!, nullRow!, malformedRow!]);
+
+        Assert.Equal(0, diagnostics.Summary.CostCollectedTrades);
+        Assert.Equal(3, diagnostics.Summary.CostUncollectedTrades);
+        Assert.Equal(3, diagnostics.Summary.UnverifiableTrades);
+    }
+
+    [Fact]
     public void ItDoesNotMutateTheStoredTradeRowsItReceives()
     {
         var rows = new[]
@@ -102,10 +126,16 @@ public sealed class HistoricalReplayDiagnosticsTests
         Assert.Equal(before, JsonSerializer.Serialize(rows));
     }
 
-    static HistoricalReplayTradeResult Row(string kind, string status, double? net, double? gross, double? fee,
-        FrozenStructureContext? context, double? slippage = null) => new(new SimTrade(kind + status, "TSLA", kind, At, 100, 110, 95,
-            null, null, status, gross.HasValue ? 100 + gross.Value : null, At.AddMinutes(5), net, 100, Structure: context),
-            gross, fee ?? 0, slippage, net);
+    static HistoricalReplayDiagnosticTrade Row(string kind, string status, double? net, double? gross, double? fee,
+        FrozenStructureContext? context, double? slippage = null) => new(Trade(kind + status, kind, status, gross, net, context),
+            Metric(gross), Metric(fee), Metric(slippage), Metric(net));
+
+    static SimTrade Trade(string id, string kind = "BREAKOUT", string status = "EOD", double? gross = -.2,
+        double? net = -.4, FrozenStructureContext? context = null) => new(id, "TSLA", kind, At, 100, 110, 95,
+            null, null, status, gross.HasValue ? 100 + gross.Value : null, At.AddMinutes(5), net, 100, Structure: context);
+
+    static HistoricalReplayDiagnosticMetric Metric(double? value) => new(true, value is null,
+        value is { } number && double.IsFinite(number), value);
 
     static FrozenStructureContext Context(string trend, double quality, decimal netR) => new("event-" + trend,
         new FrozenPlanSnapshot("plan", "REBOUND", 100, 95, 95, 110, "invalid", 94, 96, "target", 109, 111,

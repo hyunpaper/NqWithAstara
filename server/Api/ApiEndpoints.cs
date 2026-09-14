@@ -52,7 +52,7 @@ public static class ApiEndpoints
         app.MapGet("/api/replays/{id}/diagnostics", async (string id, HistoricalReplayService service,
             CancellationToken ct) =>
         {
-            var trades = await service.TradesAsync(id, ct);
+            var trades = await service.DiagnosticTradesAsync(id, ct);
             return trades is null ? Results.NotFound(new { message = "과거 replay 작업을 찾을 수 없습니다." })
                 : Results.Ok(HistoricalReplayDiagnosticsBuilder.Build(trades));
         });
