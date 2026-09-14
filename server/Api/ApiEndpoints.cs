@@ -49,6 +49,13 @@ public static class ApiEndpoints
             var trades = await service.TradesAsync(id, ct);
             return trades is null ? Results.NotFound(new { message = "과거 replay 작업을 찾을 수 없습니다." }) : Results.Ok(trades);
         });
+        app.MapGet("/api/replays/{id}/diagnostics", async (string id, HistoricalReplayService service,
+            CancellationToken ct) =>
+        {
+            var trades = await service.DiagnosticTradesAsync(id, ct);
+            return trades is null ? Results.NotFound(new { message = "과거 replay 작업을 찾을 수 없습니다." })
+                : Results.Ok(HistoricalReplayDiagnosticsBuilder.Build(trades));
+        });
         app.MapPut("/api/positions/{symbol}", PutPositionAsync);
         app.MapDelete("/api/positions/{symbol}", async (string symbol, PositionService service, CancellationToken ct) => { await service.RemoveAsync(symbol, ct); return Results.NoContent(); });
         app.Map("/api/{**path}", () => Results.NotFound(new { message = "API endpoint not found." })); return app;

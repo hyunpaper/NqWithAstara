@@ -143,6 +143,17 @@ public sealed class HistoricalReplayService
         return rows;
     }
 
+    public async Task<IReadOnlyList<HistoricalReplayDiagnosticTrade>?> DiagnosticTradesAsync(string id, CancellationToken ct)
+    {
+        if (await GetAsync(id) is null) return null;
+        var path = Path.Combine(ReplayDirectory(id), "trades.jsonl");
+        if (!File.Exists(path)) return Array.Empty<HistoricalReplayDiagnosticTrade>();
+        var rows = new List<HistoricalReplayDiagnosticTrade>();
+        await foreach (var line in File.ReadLinesAsync(path, ct))
+            if (HistoricalReplayDiagnosticTrade.TryRead(line, out var row) && row is not null) rows.Add(row);
+        return rows;
+    }
+
     async Task ExecuteAsync(HistoricalReplayRun queued, ReplayWork work)
     {
         try

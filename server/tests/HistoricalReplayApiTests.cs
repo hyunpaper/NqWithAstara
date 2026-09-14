@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Astra.Server.Application;
 using Astra.Server.Application.Backtest;
 using Astra.Server.Domain;
@@ -123,6 +124,14 @@ public sealed class HistoricalReplayApiTests : IDisposable
         Assert.Equal(1, source.GetProperty("availableDailySeed").GetInt32());
         Assert.Equal("session-reset", source.GetProperty("carryPolicy").GetString());
         Assert.Equal(JsonValueKind.String, source.GetProperty("newestBar").ValueKind);
+        using var diagnosticsResponse = await client.GetAsync($"/api/replays/{id}/diagnostics");
+        Assert.Equal(HttpStatusCode.OK, diagnosticsResponse.StatusCode);
+        using var diagnosticsDocument = JsonDocument.Parse(await diagnosticsResponse.Content.ReadAsStringAsync());
+        var diagnostics = diagnosticsDocument.RootElement;
+        Assert.Equal("replay-diagnostics.1", diagnostics.GetProperty("version").GetString());
+        Assert.Equal(JsonValueKind.String, diagnostics.GetProperty("resultFingerprint").ValueKind);
+        Assert.Equal(JsonValueKind.Object, diagnostics.GetProperty("summary").ValueKind);
+        Assert.Contains("slippage", diagnostics.GetProperty("notice").GetString(), StringComparison.Ordinal);
         using var trades = JsonDocument.Parse(await client.GetStringAsync($"/api/replays/{id}/trades"));
         Assert.Equal(JsonValueKind.Array, trades.RootElement.ValueKind);
         Assert.True(File.Exists(Path.Combine(_root, "App_Data", "replays", id, "trades.jsonl")));
@@ -221,6 +230,31 @@ public sealed class HistoricalReplayApiTests : IDisposable
     }
 
     [Fact]
+    public async Task DiagnosticsTreatsMissingAndNullStoredFeeAsUncollected()
+    {
+        const string id = "raw-costs";
+        var store = _factory.Services.GetRequiredService<ILocalStore>();
+        await store.Write("replay-runs.json", new List<HistoricalReplayRun> { Run(id) });
+        var directory = Path.Combine(_root, "App_Data", "replays", id);
+        Directory.CreateDirectory(directory);
+        var missing = RawTrade("missing");
+        missing.Remove("FeePercent");
+        var nullValue = RawTrade("null");
+        nullValue["FeePercent"] = null;
+        await File.WriteAllLinesAsync(Path.Combine(directory, "trades.jsonl"), [missing.ToJsonString(), nullValue.ToJsonString()]);
+        using var client = _factory.CreateClient();
+
+        using var response = await client.GetAsync($"/api/replays/{id}/diagnostics");
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var summary = body.RootElement.GetProperty("summary");
+        Assert.Equal(0, summary.GetProperty("costCollectedTrades").GetInt32());
+        Assert.Equal(2, summary.GetProperty("costUncollectedTrades").GetInt32());
+        Assert.Equal(2, summary.GetProperty("unverifiableTrades").GetInt32());
+    }
+
+    [Fact]
     public async Task CancelMarksPersistedQueuedReplayAsCanceled()
     {
         var store = _factory.Services.GetRequiredService<ILocalStore>();
@@ -279,4 +313,14 @@ public sealed class HistoricalReplayApiTests : IDisposable
     }
 
     sealed record WeightMarker(string Marker);
+
+    HistoricalReplayRun Run(string id) => new(id, new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 8),
+        ImmutableArray.Create("TSLA"), "QQQ", "mock", "policy", "weights", "completed",
+        DateTimeOffset.Parse("2026-09-13T00:00:00Z"), DateTimeOffset.Parse("2026-09-13T00:01:00Z"), null,
+        [], null, [], "historical-virtual", "가상 결과");
+
+    static JsonObject RawTrade(string id) => JsonNode.Parse(JsonSerializer.Serialize(new HistoricalReplayTradeResult(
+        new SimTrade(id, "TSLA", "BREAKOUT", DateTimeOffset.Parse("2026-09-08T13:30:00Z"), 100, 110, 95,
+            null, null, "EOD", 99.8, DateTimeOffset.Parse("2026-09-08T13:35:00Z"), -.4, 100),
+        -.2, .2, null, -.4)))!.AsObject();
 }
