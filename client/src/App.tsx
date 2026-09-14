@@ -54,6 +54,7 @@ import { tradeEntryTooltip } from "./dashboardTypes";
 import { blockTradeLabel, flowSourceLabel } from "./tradeTape";
 import { turnoverText } from "./metricsFormat";
 import NewsPanel from "./NewsPanel";
+import type { NewsSymbolScore } from "./newsTypes";
 import {
   findSymbolScore,
   normalizeNewsHealth,
@@ -62,9 +63,11 @@ import {
   type NewsSentimentResponse,
 } from "./newsTypes";
 import { scoreBadge, scoreBadgeTitle } from "./newsFormat";
+import type { Badge } from "./newsFormat";
 import ConfluencePanel from "./ConfluencePanel";
 import { gaugeTone, scoreText2 } from "./confluenceFormat";
 import HistoricalReplayPanel from "./HistoricalReplayPanel";
+import { WatchRowContent } from "./WatchRowContent";
 
 type Bar = { time: string; close: number; ema?: number; vwap?: number };
 type Indicators = {
@@ -86,25 +89,6 @@ type Position = {
   status: string;
 };
 
-export function WatchRowContent({
-  symbol,
-  name,
-  children,
-}: {
-  symbol: string;
-  name: string;
-  children?: ReactNode;
-}) {
-  return (
-    <>
-      <div className="watch-identity">
-        <b>{symbol}</b>
-        <small>{name}</small>
-      </div>
-      {children && <div className="watch-metrics">{children}</div>}
-    </>
-  );
-}
 type Signal = {
   symbol: string;
   name: string;
@@ -285,6 +269,34 @@ const money = (v: number | null | undefined) =>
         currency: "USD",
         minimumFractionDigits: 2,
       }).format(v);
+const watchBadges = (
+  newsBadge: Badge | null,
+  newsScore: NewsSymbolScore | null,
+  confluence: number | null,
+): ReactNode[] => {
+  const badges: ReactNode[] = [];
+  if (newsBadge)
+    badges.push(
+      <span
+        key="news"
+        className={newsBadge.className}
+        title={scoreBadgeTitle(newsScore?.count, newsScore?.latestAt)}
+      >
+        {newsBadge.label}
+      </span>,
+    );
+  if (confluence != null)
+    badges.push(
+      <span
+        key="confluence"
+        className={`confluence-mini-badge ${gaugeTone(confluence)}`}
+        title="컨플루언스 점수(관측 전용)"
+      >
+        {scoreText2(confluence)}
+      </span>,
+    );
+  return badges;
+};
 const percent = (v: number | null | undefined) =>
   v == null ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
 const beep = () => {
@@ -870,33 +882,22 @@ export default function App() {
               >
                 <button
                   className="watch-select"
+                  aria-label={`${w.symbol} ${w.name}`}
                   onClick={() => setSelected(w.symbol)}
                 >
-                  <WatchRowContent symbol={w.symbol} name={w.name}>
-                    {newsBadge && (
-                      <span
-                        className={newsBadge.className}
-                        title={scoreBadgeTitle(newsScore?.count, newsScore?.latestAt)}
-                      >
-                        {newsBadge.label}
-                      </span>
-                    )}
-                    {confluence != null && (
-                      <span
-                        className={`confluence-mini-badge ${gaugeTone(confluence)}`}
-                        title="컨플루언스 점수(관측 전용)"
-                      >
-                        {scoreText2(confluence)}
-                      </span>
-                    )}
-                    {s && (
-                      <span
-                        className={(s.changePercent ?? 0) >= 0 ? "up" : "down"}
-                      >
-                        {percent(s.changePercent)}
-                      </span>
-                    )}
-                  </WatchRowContent>
+                  <WatchRowContent
+                    symbol={w.symbol}
+                    name={w.name}
+                    change={
+                      s
+                        ? {
+                            label: percent(s.changePercent),
+                            tone: (s.changePercent ?? 0) >= 0 ? "up" : "down",
+                          }
+                        : null
+                    }
+                    badges={watchBadges(newsBadge, newsScore, confluence)}
+                  />
                 </button>
                 <button
                   className="delete"

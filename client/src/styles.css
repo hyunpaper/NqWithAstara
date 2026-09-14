@@ -162,8 +162,7 @@ aside {
   flex-direction: column;
   gap: 2px;
 }
-.results small,
-.watch-list small {
+.results small {
   font-size: 10px;
   color: var(--muted);
   overflow: hidden;
@@ -180,7 +179,7 @@ aside {
 }
 .watch-row {
   width: 100%;
-  height: 50px;
+  height: 54px;
   border-left: 2px solid transparent;
   display: flex;
   align-items: center;
@@ -200,38 +199,51 @@ aside {
   border: 0;
   background: transparent;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
   text-align: left;
-  padding: 0 4px 0 10px;
-  gap: 7px;
+  padding: 0 6px 0 10px;
+  gap: 3px;
+  user-select: none;
 }
 .watch-identity {
-  flex: 1;
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
 }
 .watch-identity b {
   min-width: 0;
+  font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .watch-metrics {
+  min-width: 0;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  flex-shrink: 0;
+  flex-wrap: nowrap;
+  overflow: hidden;
   gap: 5px;
-  max-width: 58%;
 }
 .watch-metrics > * {
   flex: 0 0 auto;
 }
+.watch-metrics > :last-child {
+  flex-shrink: 1;
+  overflow: hidden;
+}
+.watch-list .news-badge,
+.watch-list .confluence-mini-badge {
+  font-size: 11px;
+}
 .watch-list .up,
 .watch-list .down {
-  font-size: 11px;
+  flex: 0 0 auto;
+  font-size: 12px;
 }
 .delete {
   opacity: 0;
