@@ -48,16 +48,19 @@ public static class EntryQualityEvaluator
     public const string AlignmentQuality = "alignmentQuality";
     public const string ReclaimQuality = "reclaimQuality";
 
-    /// <summary>§16B 종류별 필수 요소 목록. 이 외의 참고 지표는 기하평균에 들어가지 않는다.</summary>
+    /// <summary>
+    /// §16B 종류별 필수 요소 목록(5요소, #209). 이 외의 참고 지표는 기하평균에 들어가지 않는다.
+    /// netR은 MinimumNetR·MaxNetR 자격 게이트가 소비하므로 roomQuality로 다시 계상하지 않는다(§9.3/§9.4).
+    /// </summary>
     public static ImmutableArray<string> RequiredComponents(SetupKind kind) => kind switch
     {
         SetupKind.Rebound =>
         [
-            InvalidationQuality, TargetQuality, RoomQuality, ExtensionQuality, TriggerVolumeQuality, ReclaimQuality
+            InvalidationQuality, TargetQuality, ExtensionQuality, TriggerVolumeQuality, ReclaimQuality
         ],
         _ =>
         [
-            InvalidationQuality, TargetQuality, RoomQuality, ExtensionQuality, TriggerVolumeQuality, AlignmentQuality
+            InvalidationQuality, TargetQuality, ExtensionQuality, TriggerVolumeQuality, AlignmentQuality
         ]
     };
 
@@ -73,7 +76,7 @@ public static class EntryQualityEvaluator
         components.Add(Component(InvalidationQuality, input.InvalidationStrength, input.InvalidationStrength, required));
         components.Add(Component(TargetQuality, input.TargetStrength, input.TargetStrength, required));
 
-        // roomQuality=1-exp(-max(netR,0)/2)
+        // roomQuality=1-exp(-max(netR,0)/2). 참고값이며 점수에 들어가지 않는다(#209).
         double? roomRaw = input.NetR is { } netR ? (double)netR : null;
         double? room = roomRaw is null ? null : Normalized(1 - Math.Exp(-Math.Max(roomRaw.Value, 0) / policy.RoomQualityScale));
         components.Add(Component(RoomQuality, roomRaw, room, required));
