@@ -123,6 +123,11 @@ public sealed class HistoricalReplayApiTests : IDisposable
         Assert.Equal(1, source.GetProperty("availableDailySeed").GetInt32());
         Assert.Equal("session-reset", source.GetProperty("carryPolicy").GetString());
         Assert.Equal(JsonValueKind.String, source.GetProperty("newestBar").ValueKind);
+        var diagnostics = result.GetProperty("diagnostics");
+        Assert.Equal("replay-diagnostics.1", diagnostics.GetProperty("version").GetString());
+        Assert.Equal(JsonValueKind.String, diagnostics.GetProperty("resultFingerprint").ValueKind);
+        Assert.Equal(JsonValueKind.Object, diagnostics.GetProperty("summary").ValueKind);
+        Assert.Contains("slippage", diagnostics.GetProperty("notice").GetString(), StringComparison.Ordinal);
         using var trades = JsonDocument.Parse(await client.GetStringAsync($"/api/replays/{id}/trades"));
         Assert.Equal(JsonValueKind.Array, trades.RootElement.ValueKind);
         Assert.True(File.Exists(Path.Combine(_root, "App_Data", "replays", id, "trades.jsonl")));

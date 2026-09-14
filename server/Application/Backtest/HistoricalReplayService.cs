@@ -36,7 +36,8 @@ public sealed record HistoricalReplayRun(string Id, DateOnly From, DateOnly To, 
     ImmutableArray<HistoricalReplayQuality> DataQuality, HistoricalReplayAggregate? Aggregate,
     ImmutableArray<HistoricalReplaySymbolResult> Symbols, string ResultKind, string Notice,
     string DataStatus = "unknown", string? DataReason = null,
-    ImmutableArray<HistoricalReplaySourceQuality>? SourceQuality = null);
+    ImmutableArray<HistoricalReplaySourceQuality>? SourceQuality = null,
+    HistoricalReplayDiagnostics? Diagnostics = null);
 
 public sealed record HistoricalReplayStartResult(int HttpStatus, HistoricalReplayRun? Run, string? Message);
 
@@ -177,7 +178,8 @@ public sealed class HistoricalReplayService
             var replayStore = _barStores.Create(Path.Combine(replayRoot, "bars"));
             var replayed = await new HistoricalStructureTradeReplay(replayStore, _structurePolicy).RunAsync(
                 queued.From, queued.To, queued.Watchlist, work.Cancellation.Token);
-            await WriteTradesAsync(replayRoot, replayed.Values.SelectMany(x => x), work.Cancellation.Token);
+            var tradeRows = TradeRows(replayed.Values.SelectMany(x => x)).ToArray();
+            await WriteTradesAsync(replayRoot, tradeRows, work.Cancellation.Token);
             var symbols = queued.Watchlist.Select(symbol =>
                 import.Sources.First(x => string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase)).DataStatus == "no-data"
                 ? Unavailable(symbol, import.Sources.First(x => string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase)).Reason)
@@ -197,7 +199,8 @@ public sealed class HistoricalReplayService
                 SourceQuality = sourceQuality,
                 DataQuality = quality,
                 Symbols = symbols,
-                Aggregate = Aggregate(symbols)
+                Aggregate = Aggregate(symbols),
+                Diagnostics = HistoricalReplayDiagnosticsBuilder.Build(tradeRows)
             } : current);
         }
         catch (Exception) when (work.Cancellation.IsCancellationRequested)
@@ -256,18 +259,20 @@ public sealed class HistoricalReplayService
             Math.Round(symbols.Sum(x => x.FeePercent ?? 0), 2), null);
     }
 
-    static async Task WriteTradesAsync(string replayRoot, IEnumerable<SimTrade> trades, CancellationToken ct)
+    static IEnumerable<HistoricalReplayTradeResult> TradeRows(IEnumerable<SimTrade> trades) => trades
+        .OrderBy(x => x.EnteredAt).ThenBy(x => x.Symbol, StringComparer.Ordinal).ThenBy(x => x.Id, StringComparer.Ordinal)
+        .Select(x =>
+        {
+            var gross = x.ExitPrice.HasValue ? Math.Round((x.ExitPrice.Value / x.EntryPrice - 1) * 100, 6) : (double?)null;
+            var fee = gross.HasValue && x.PnlPercent.HasValue ? Math.Round(gross.Value - x.PnlPercent.Value, 6) : 0;
+            return new HistoricalReplayTradeResult(x, gross, fee, null, x.PnlPercent);
+        });
+
+    static async Task WriteTradesAsync(string replayRoot, IEnumerable<HistoricalReplayTradeResult> rows, CancellationToken ct)
     {
         Directory.CreateDirectory(replayRoot);
-        var rows = trades.OrderBy(x => x.EnteredAt).ThenBy(x => x.Symbol, StringComparer.Ordinal)
-            .ThenBy(x => x.Id, StringComparer.Ordinal).Select(x =>
-            {
-                var gross = x.ExitPrice.HasValue ? Math.Round((x.ExitPrice.Value / x.EntryPrice - 1) * 100, 6) : (double?)null;
-                var fee = gross.HasValue && x.PnlPercent.HasValue ? Math.Round(gross.Value - x.PnlPercent.Value, 6) : 0;
-                return System.Text.Json.JsonSerializer.Serialize(new HistoricalReplayTradeResult(
-                    x, gross, fee, null, x.PnlPercent));
-            });
-        await File.WriteAllLinesAsync(Path.Combine(replayRoot, "trades.jsonl"), rows, ct);
+        await File.WriteAllLinesAsync(Path.Combine(replayRoot, "trades.jsonl"),
+            rows.Select(x => System.Text.Json.JsonSerializer.Serialize(x)), ct);
     }
 
     async Task SaveAsync(HistoricalReplayRun run)
