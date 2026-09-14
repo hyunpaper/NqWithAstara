@@ -191,8 +191,9 @@ public sealed class HistoricalReplayService
             {
                 Status = "completed", CompletedAt = _clock.GetUtcNow(),
                 Source = import.Source,
-                DataStatus = import.DataStatus,
-                DataReason = import.DataReason,
+                DataStatus = "partial",
+                DataReason = "과거 호가·체결과 slippage 입력이 없어 운영 성능 결론에 사용할 수 없습니다.",
+                Notice = "과거 replay 가상 결과이며 입력이 부분적이므로 운영 성능 결론에 사용할 수 없습니다.",
                 SourceQuality = sourceQuality,
                 DataQuality = quality,
                 Symbols = symbols,

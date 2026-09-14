@@ -103,6 +103,8 @@ public sealed class HistoricalReplayApiTests : IDisposable
         }
 
         Assert.Equal("completed", result.GetProperty("status").GetString());
+        Assert.Equal("partial", result.GetProperty("dataStatus").GetString());
+        Assert.Contains("운영 성능 결론", result.GetProperty("notice").GetString());
         Assert.Equal("TSLA", Assert.Single(result.GetProperty("watchlist").EnumerateArray()).GetString());
         Assert.Equal("QQQ", result.GetProperty("benchmark").GetString());
         var symbol = Assert.Single(result.GetProperty("symbols").EnumerateArray());
