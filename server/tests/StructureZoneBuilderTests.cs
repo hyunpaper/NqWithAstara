@@ -92,6 +92,46 @@ public sealed class StructureZoneBuilderTests
     }
 
     [Fact]
+    public void WideCandidateDoesNotPreventSeparatedNarrowCandidatesFromMerging()
+    {
+        var candidates = new[]
+        {
+            ZoneCandidate.FromBounds(100.00m, 100.12m, Fx.Pivot("a", 100.06m, 10, 12)),
+            ZoneCandidate.FromBounds(100.05m, 100.45m, Fx.ProfileSource("b", 100.25m), "EstimatedVolumeProfile"),
+            ZoneCandidate.FromBounds(100.08m, 100.20m, Fx.Pivot("c", 100.14m, 20, 22))
+        };
+
+        var zones = ZoneBuilder.Assemble(candidates, Request(30), .40, P).Zones;
+
+        Assert.Equal(2, zones.Length);
+        var merged = zones.Single(x => x.Sources.Length == 2);
+        Assert.Contains(Fx.Pivot("a", 100.06m, 10, 12).Id, merged.SourceIds);
+        Assert.Contains(Fx.Pivot("c", 100.14m, 20, 22).Id, merged.SourceIds);
+        Assert.Equal(100.00m, merged.Lower);
+        Assert.Equal(100.20m, merged.Upper);
+        Assert.Single(zones.Single(x => x.Sources.Length == 1).Sources.Where(x => x.Family == ZoneSourceFamily.Profile));
+    }
+
+    [Fact]
+    public void ProfileNodeCandidateIsReducedToTheZoneHalfWidth()
+    {
+        var bars = Enumerable.Range(0, 30)
+            .Select(i => Fx.Bar(i, 100.00m, 100.10m, 99.90m, 100.00m))
+            .ToImmutableArray();
+        var profile = ZoneBuilder.BuildVolumeProfile(bars, .20, P);
+        var node = Assert.Single(profile.Nodes);
+        var source = Fx.ProfileSource("node", node.Lower + (node.Upper - node.Lower) / 2m);
+
+        var zone = Assert.Single(ZoneBuilder.Assemble(
+            [ZoneCandidate.FromLevel(source.Price, ZoneBuilder.HalfWidth(.20, P), source, "EstimatedVolumeProfile")],
+            Request(30), .20, P).Zones);
+
+        Assert.True(node.Upper - node.Lower > zone.Width);
+        Assert.Equal(.06m, zone.Width);
+        Assert.Equal(source.Price, zone.Sources.Single().Price);
+    }
+
+    [Fact]
     public void SameMovementFromOneAndFiveMinutePivotsCountsAsASingleFamily()
     {
         var oneMinute = Fx.Pivot("1m", 100.00m, 10, 12);

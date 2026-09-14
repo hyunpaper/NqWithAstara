@@ -104,9 +104,10 @@ public static class ZoneBuilder
                 StructureMath.Price(profile.BinWidth), node.StartIndex.ToString(CultureInfo.InvariantCulture));
             var source = new ZoneSource(id, ZoneSourceFamily.Profile, node.IsPoc ? "profile-poc" : "profile-node",
                 node.Lower + (node.Upper - node.Lower) / 2m, request.SessionStart, request.SessionStart, true);
+            var halfWidth = HalfWidth(atrAtCutoff, policy);
             candidates.Add(profile.Coarsened
-                ? ZoneCandidate.FromBounds(node.Lower, node.Upper, source, "EstimatedVolumeProfile", "CoarsenedProfile")
-                : ZoneCandidate.FromBounds(node.Lower, node.Upper, source, "EstimatedVolumeProfile"));
+                ? ZoneCandidate.FromLevel(source.Price, halfWidth, source, "EstimatedVolumeProfile", "CoarsenedProfile")
+                : ZoneCandidate.FromLevel(source.Price, halfWidth, source, "EstimatedVolumeProfile"));
         }
 
         var assembly = Assemble(candidates, request, atrAtCutoff, policy);
@@ -228,23 +229,30 @@ public static class ZoneBuilder
         var maxWidth = StructureMath.ScaledFloor(policy.ZoneMergeMaxWidthFloor, policy.ZoneMergeMaxWidthAtrFactor, atrAtCutoff);
         var ordered = raw.OrderBy(x => x.Lower).ThenBy(x => x.Upper).ThenBy(x => x.MinSourceId, StringComparer.Ordinal).ToList();
         var groups = new List<RawZone>();
+        var wide = new List<RawZone>();
 
         foreach (var candidate in ordered)
         {
-            if (groups.Count == 0) { groups.Add(Clone(candidate)); continue; }
-            var current = groups[^1];
-            // 원래 폭이 큰 프로파일 구간을 강제로 줄이거나 다른 구간을 흡수하게 만들지 않는다(§6.3).
-            if (current.Width > maxWidth || candidate.Width > maxWidth) { groups.Add(Clone(candidate)); continue; }
-            if (candidate.Lower - current.Upper > gap) { groups.Add(Clone(candidate)); continue; }
-            var lower = Math.Min(current.Lower, candidate.Lower);
-            var upper = Math.Max(current.Upper, candidate.Upper);
-            if (upper - lower > maxWidth) { groups.Add(Clone(candidate)); continue; }   // 연결식 과병합 차단
-            current.Lower = lower;
-            current.Upper = upper;
+            // 광폭 후보는 병합 대상으로 쓰지 않아 앞뒤의 좁은 후보 연결을 막지 않는다(§6.3, #211).
+            if (candidate.Width > maxWidth) { wide.Add(Clone(candidate)); continue; }
+
+            RawZone? current = null;
+            foreach (var group in groups)
+            {
+                if (candidate.Lower - group.Upper > gap) continue;
+                var lower = Math.Min(group.Lower, candidate.Lower);
+                var upper = Math.Max(group.Upper, candidate.Upper);
+                if (upper - lower <= maxWidth) { current = group; break; }
+            }
+            if (current is null) { groups.Add(Clone(candidate)); continue; }
+
+            current.Lower = Math.Min(current.Lower, candidate.Lower);
+            current.Upper = Math.Max(current.Upper, candidate.Upper);
             foreach (var source in candidate.Sources)
                 if (!current.Sources.Any(x => x.Id == source.Id)) current.Sources.Add(source);
             foreach (var flag in candidate.Flags) current.Flags.Add(flag);
         }
+        groups.AddRange(wide);
         return groups;
     }
 
