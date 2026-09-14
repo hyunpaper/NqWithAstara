@@ -39,6 +39,29 @@ public sealed class MonitorControlService(
         return new(WatchlistChangeStatus.Ok);
     }
 
+    /// <summary>관심종목 표시 순서만 교체한다. 집합이 정확히 일치해야 저장한다 (#224).</summary>
+    public async Task<WatchlistChangeResult> ReorderAsync(IReadOnlyList<string>? symbols, CancellationToken requestCt)
+    {
+        if (symbols is null || symbols.Count == 0) return new(WatchlistChangeStatus.Invalid, "관심종목 순서 목록이 비었습니다.");
+        var ordered = symbols.Select(x => x?.Trim().ToUpperInvariant() ?? string.Empty).ToList();
+        if (ordered.Any(x => !SymbolPattern.IsMatch(x))) return new(WatchlistChangeStatus.Invalid, "심볼 형식이 올바르지 않습니다.");
+        if (ordered.Distinct(StringComparer.OrdinalIgnoreCase).Count() != ordered.Count) return new(WatchlistChangeStatus.Invalid, "중복된 심볼이 있습니다.");
+
+        using (await runtime.EnterControlAsync(requestCt))
+        {
+            var applied = await store.Update("watchlist.json", new List<WatchItem>(), items =>
+            {
+                if (items.Count != ordered.Count) return (items, false);
+                var bySymbol = new Dictionary<string, WatchItem>(StringComparer.OrdinalIgnoreCase);
+                foreach (var item in items) bySymbol[item.Symbol] = item;
+                if (bySymbol.Count != ordered.Count || !ordered.All(bySymbol.ContainsKey)) return (items, false);
+                return (ordered.Select(x => bySymbol[x]).ToList(), true);
+            });
+            if (!applied) return new(WatchlistChangeStatus.Invalid, "관심종목 목록과 순서가 일치하지 않습니다.");
+        }
+        return new(WatchlistChangeStatus.Ok);
+    }
+
     public async Task RemoveAsync(string symbol, CancellationToken requestCt)
     {
         symbol = symbol.Trim().ToUpperInvariant();
