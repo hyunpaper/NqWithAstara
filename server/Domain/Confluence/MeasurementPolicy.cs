@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Astra.Server;
 
 namespace Astra.Server.Domain.Confluence;
 
@@ -17,7 +18,7 @@ public sealed record MeasurementPolicy
     public double FalseDiscoveryRate { get; init; } = .05;
 
     /// <summary>왕복 수수료(%)</summary>
-    public double RoundTripFeePercent { get; init; } = .2;
+    public double RoundTripFeePercent { get; init; } = TradingCostDefaults.RoundTripFeePercent;
 
     /// <summary>저장 호가가 없어 기대값에서 빼는 스프레드 기본값(%). 관측된 스프레드가 아니다(C5).</summary>
     public double DefaultSpreadPercent { get; init; } = .01;

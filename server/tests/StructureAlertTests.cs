@@ -13,7 +13,7 @@ using Xunit;
 /// </summary>
 public sealed class StructureAlertTests
 {
-    static readonly StructurePolicy P = StructurePolicy.Default;
+    static readonly StructurePolicy P = D6.WiringPolicy;
 
     sealed record Harness(MonitorPollingService Poller, RecordingStore Store, MemoryObservationStore Observations,
         MonitorRuntimeState Runtime, StructureAnalysisService Structure, StructureAlertPublisher Alerts,

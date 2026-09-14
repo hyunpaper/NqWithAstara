@@ -32,6 +32,7 @@ public static class ApiEndpoints
         app.MapGet("/api/confluence/weights", ConfluenceWeights);
         app.MapGet("/api/confluence/{symbol}", ConfluenceAsync);
         app.MapPost("/api/replays", StartReplayAsync);
+        app.MapPost("/api/replays/{id}/cancel", CancelReplayAsync);
         app.MapGet("/api/replays/latest", async (HistoricalReplayService service) =>
         {
             var run = await service.LatestAsync();
@@ -41,6 +42,19 @@ public static class ApiEndpoints
         {
             var run = await service.GetAsync(id);
             return run is null ? Results.NotFound(new { message = "과거 replay 작업을 찾을 수 없습니다." }) : Results.Ok(run);
+        });
+        app.MapGet("/api/replays/{id}/trades", async (string id, HistoricalReplayService service,
+            CancellationToken ct) =>
+        {
+            var trades = await service.TradesAsync(id, ct);
+            return trades is null ? Results.NotFound(new { message = "과거 replay 작업을 찾을 수 없습니다." }) : Results.Ok(trades);
+        });
+        app.MapGet("/api/replays/{id}/diagnostics", async (string id, HistoricalReplayService service,
+            CancellationToken ct) =>
+        {
+            var trades = await service.DiagnosticTradesAsync(id, ct);
+            return trades is null ? Results.NotFound(new { message = "과거 replay 작업을 찾을 수 없습니다." })
+                : Results.Ok(HistoricalReplayDiagnosticsBuilder.Build(trades));
         });
         app.MapPut("/api/positions/{symbol}", PutPositionAsync);
         app.MapDelete("/api/positions/{symbol}", async (string symbol, PositionService service, CancellationToken ct) => { await service.RemoveAsync(symbol, ct); return Results.NoContent(); });
@@ -83,6 +97,13 @@ public static class ApiEndpoints
             409 => Results.Conflict(new { message = result.Message }),
             _ => Results.BadRequest(new { message = result.Message })
         };
+    }
+    static async Task<IResult> CancelReplayAsync(string id, HistoricalReplayService service)
+    {
+        var result = await service.CancelAsync(id);
+        return result.HttpStatus == 404
+            ? Results.NotFound(new { message = result.Message })
+            : Results.Ok(result.Run);
     }
     /// <summary>이슈 #28: additive 검증 보고서 조회. 읽기 전용이며 운영 진입/청산·점수·비용 정책을 바꾸지 않는다.</summary>
     static async Task<IResult> ValidationAsync(int? days, ValidationQueryService query, CancellationToken ct) { var result = await query.GetAsync(days, ct); return result.HttpStatus == 400 ? Results.BadRequest(new { message = $"days는 1~{ValidationQueryService.MaxWindowDays} 범위여야 합니다." }) : Results.Ok(result.Report); }

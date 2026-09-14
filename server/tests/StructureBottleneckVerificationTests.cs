@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using Astra.Server;
 using Astra.Server.Domain.Structure;
 using Xunit;
@@ -114,7 +114,7 @@ public sealed class StructureBottleneckVerificationTests
         Assert.True(trend.State is TrendState.Up or TrendState.Transition, $"state={trend.State}");
 
         var atr = SessionAtr.At(all, SessionAtr.Series(all, P), Fx.At(59));   // structureCutoff 기준
-        var zones = ImmutableArray.Create(D2.Support(102.90m, 103.10m), D2.Resistance(105.20m, 105.50m));
+        var zones = ImmutableArray.Create(D2.Support(102.90m, 103.10m), D2.Resistance(104.60m, 104.90m));
         var episodes = ImmutableArray.Create(D2.Episode("support-zone", 55, 58));
         var result = SetupDetector.Detect(SetupDetectionRequest.Create(Fx.Symbol, Fx.SessionStart, Fx.SessionEnd,
             analysisAsOf, analysisAsOf, all, zones, episodes, trend, atr, 103.35m, analysisAsOf,
@@ -194,9 +194,11 @@ public sealed class StructureBottleneckVerificationTests
     public void AReboundReachesReadyDespiteMissingFiveMinuteStructureAndCarriesTheCohortNote()
     {
         var (bars, zones, episodes, analysisAsOf) = ReboundScenario();
-        var trend = Trend(bars, analysisAsOf);
-        Assert.Null(trend.StructureDirection);                                // 31분 세션 — 5m 피벗이 아직 없다
-        Assert.Equal(new[] { TrendEvaluator.BlockerMissing5mStructure }, trend.BlockersForReady.ToArray());
+        var computed = Trend(bars, analysisAsOf);
+        Assert.Null(computed.StructureDirection);                             // 31분 세션 — 5m 피벗이 아직 없다
+        Assert.Equal(new[] { TrendEvaluator.BlockerMissing5mStructure }, computed.BlockersForReady.ToArray());
+        Assert.True(computed.SignedTrend < -P.TrendStateThreshold);           // #208 하한 아래인 fixture다
+        var trend = computed with { SignedTrend = -P.TrendStateThreshold };
 
         var atr = SessionAtr.At(bars, SessionAtr.Series(bars, P), bars[^1].Start);
         var result = SetupDetector.Detect(SetupDetectionRequest.Create(Fx.Symbol, Fx.SessionStart, Fx.SessionEnd,
@@ -227,23 +229,23 @@ public sealed class StructureBottleneckVerificationTests
         var (bars, zones, episodes, analysisAsOf) = ReboundScenario();
         var atr = SessionAtr.At(bars, SessionAtr.Series(bars, P), bars[^1].Start);
 
-        // 눌림 저점(99.10)이 지지 하단 아래라 이 fixture는 UP에서 PULLBACK과 REBOUND를 동시에 만든다.
-        var trend = D2.Trend(TrendState.Up, 40, structureDirection: null,
-            readyBlockers: TrendEvaluator.BlockerMissing5mStructure);
-        var result = SetupDetector.Detect(SetupDetectionRequest.Create(Fx.Symbol, Fx.SessionStart, Fx.SessionEnd,
-            analysisAsOf, analysisAsOf, bars, zones, episodes, trend, atr, 100.00m, analysisAsOf,
-            D2.Quote(99.99m, 100.01m, 31)), P);
+        // 눌림 저점(99.10)이 지지 하단 아래라 이 fixture는 UP에서 PULLBACK을, RANGE에서 REBOUND를 만든다(#208 C).
+        SetupDetectionResult Detect(TrendState state) => SetupDetector.Detect(SetupDetectionRequest.Create(
+            Fx.Symbol, Fx.SessionStart, Fx.SessionEnd, analysisAsOf, analysisAsOf, bars, zones, episodes,
+            D2.Trend(state, 40, structureDirection: null, readyBlockers: TrendEvaluator.BlockerMissing5mStructure),
+            atr, 100.00m, analysisAsOf, D2.Quote(99.99m, 100.01m, 31)), P);
 
-        var pullback = result.Candidates.Single(x => x.Kind == SetupKind.Pullback);
+        var pullback = Detect(TrendState.Up).Candidates.Single(x => x.Kind == SetupKind.Pullback);
         Assert.Equal(CandidateDisposition.Rejected, pullback.Disposition);
         Assert.Contains(TrendEvaluator.BlockerMissing5mStructure, pullback.RejectionCodes);
         Assert.DoesNotContain(SetupDetector.NoteReadyWithout5mStructure, pullback.Notes);
 
-        var rebound = result.Candidates.Single(x => x.Kind == SetupKind.Rebound);
+        var reboundResult = Detect(TrendState.Range);
+        var rebound = reboundResult.Candidates.Single(x => x.Kind == SetupKind.Rebound);
         Assert.Equal(CandidateDisposition.Ready, rebound.Disposition);
         Assert.DoesNotContain(TrendEvaluator.BlockerMissing5mStructure, rebound.RejectionCodes);
         Assert.Contains(SetupDetector.NoteReadyWithout5mStructure, rebound.Notes);
-        Assert.Equal(rebound.EventId, result.PreferredCandidateId);
+        Assert.Equal(rebound.EventId, reboundResult.PreferredCandidateId);
     }
 
     /// <summary>

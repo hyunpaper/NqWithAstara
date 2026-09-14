@@ -1,5 +1,8 @@
 using Astra.Server.Application.Backtest;
+using Astra.Server.Application;
 using Astra.Server.Domain;
+using Astra.Server.Domain.Structure;
+using System.Text.Json;
 using Xunit;
 
 namespace Astra.Server.Tests;
@@ -30,5 +33,54 @@ public sealed class HistoricalStructureTradeReplayTests
 
         Assert.Equal("TARGET", Assert.Single(result).Status);
         Assert.Equal(afterEntry.Timestamp, result[0].LastEvaluatedBarAt);
+    }
+
+    [Fact]
+    public async Task SameBarsAndPolicyProduceTheSameTradeSequence()
+    {
+        var bars = new MemoryBars();
+        bars.Seed("2026-09-08", "TSLA", 120);
+        var replay = new HistoricalStructureTradeReplay(bars, StructurePolicy.Default);
+
+        var first = await replay.RunAsync(new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 8), ["TSLA"], default);
+        var second = await replay.RunAsync(new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 8), ["TSLA"], default);
+
+        Assert.Equal(JsonSerializer.Serialize(first["TSLA"]), JsonSerializer.Serialize(second["TSLA"]));
+    }
+
+    sealed class MemoryBars : IBarStore
+    {
+        readonly List<string> _lines = [];
+
+        public void Seed(string day, string symbol, int count)
+        {
+            for (var i = 0; i < count; i++)
+            {
+                var open = 100 + Math.Sin(i / 6d);
+                var close = 100 + Math.Sin((i + 1) / 6d);
+                _lines.Add(JsonSerializer.Serialize(new
+                {
+                    t = Start.AddMinutes(i).UtcDateTime,
+                    o = open,
+                    h = Math.Max(open, close) + .3,
+                    l = Math.Min(open, close) - .3,
+                    c = close,
+                    v = 1000d + i
+                }));
+            }
+        }
+
+        public Task<string?> LastLineAsync(string day, string symbol, CancellationToken ct) =>
+            Task.FromResult(_lines.LastOrDefault());
+        public Task AppendAsync(string day, string symbol, string line, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<string>> ListDaysAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(["2026-09-08"]);
+        public Task<IReadOnlyList<string>> ListSymbolsAsync(string day, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(["TSLA"]);
+        public Task<int> CountLinesAsync(string day, string symbol, CancellationToken ct) =>
+            Task.FromResult(_lines.Count);
+        public Task<IReadOnlyList<string>> ReadLinesAsync(string day, string symbol, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(_lines);
+        public Task DeleteDayAsync(string day, CancellationToken ct) => Task.CompletedTask;
     }
 }

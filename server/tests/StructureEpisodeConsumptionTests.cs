@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using Astra.Server.Application;
 using Astra.Server.Domain.Structure;
 using Xunit;
@@ -24,21 +24,20 @@ public sealed class StructureEpisodeConsumptionTests
         return bars.ToImmutable();
     }
 
-    static SetupDetectionResult Detect()
+    static SetupDetectionResult Detect(TrendState state)
     {
         var analysisAsOf = Fx.At(TriggerMinute + 1);
         return SetupDetector.Detect(SetupDetectionRequest.Create(Fx.Symbol, Fx.SessionStart, Fx.SessionEnd,
             analysisAsOf, analysisAsOf, Bars(), [D2.Support(99.20m, 99.40m), D2.Resistance(101.80m, 102.10m)],
-            [D2.Episode("support-zone", 25, 28)], D2.Trend(), .20, 100.00m, analysisAsOf,
+            [D2.Episode("support-zone", 25, 28)], D2.Trend(state), .20, 100.00m, analysisAsOf,
             D2.Quote(99.99m, 100.01m, TriggerMinute + 1)), P);
     }
 
     [Fact]
     public void PullbackAndReboundOfTheSameEpisodeShareZoneAnchorInvalidationAndStop()
     {
-        var candidates = Detect().Candidates;
-        var pullback = Assert.Single(candidates.Where(x => x.Kind == SetupKind.Pullback));
-        var rebound = Assert.Single(candidates.Where(x => x.Kind == SetupKind.Rebound));
+        var pullback = Assert.Single(Detect(TrendState.Up).Candidates.Where(x => x.Kind == SetupKind.Pullback));
+        var rebound = Assert.Single(Detect(TrendState.Range).Candidates.Where(x => x.Kind == SetupKind.Rebound));
 
         Assert.Equal(pullback.ZoneId, rebound.ZoneId);
         Assert.Equal(pullback.EpisodeStartAt, rebound.EpisodeStartAt);
@@ -55,7 +54,8 @@ public sealed class StructureEpisodeConsumptionTests
     static StructuralLatch Fresh() => StructuralLatch.Empty(Fx.Symbol, Fx.SessionStart, P.PolicyHash);
 
     static EntryCandidate Ready(SetupKind kind) =>
-        Detect().Candidates.Single(x => x.Kind == kind && x.Disposition == CandidateDisposition.Ready);
+        Detect(kind == SetupKind.Rebound ? TrendState.Range : TrendState.Up).Candidates
+            .Single(x => x.Kind == kind && x.Disposition == CandidateDisposition.Ready);
 
     static StructuralLatch Commit(StructuralLatch latch, EntryCandidate candidate, bool consumeOnReady,
         IEnumerable<string>? entryBlocked = null) =>

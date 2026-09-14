@@ -10,7 +10,10 @@ describe("과거 replay 표시", () => {
   it("작업 상태를 한국어로 표시한다", () => {
     expect(replayStatusLabel("queued")).toBe("대기");
     expect(replayStatusLabel("running")).toBe("실행 중");
+    expect(replayStatusLabel("canceling")).toBe("중지 중");
+    expect(replayStatusLabel("canceled")).toBe("중지됨");
     expect(replayStatusLabel("completed")).toBe("완료");
+    expect(replayStatusLabel("no-data")).toBe("데이터 없음");
     expect(replayStatusLabel("failed")).toBe("실패");
   });
 

@@ -81,13 +81,14 @@ public sealed class StructureD2CandidateTests
         Assert.Empty(candidate.RejectionCodes);
         Assert.True(candidate.EntryQuality > 0);
         Assert.Equal(CandidateDisposition.Ready, result.Summary);
-        // 예시 A의 눌림 저점(99.15)은 지지 하단(99.20) 아래이므로 실패한 이탈로도 읽힌다.
-        // 두 종류 후보가 같은 구조 계획을 만들고 대표는 정렬 규칙이 하나만 고른다(§8).
-        Assert.Equal(2, result.Candidates.Length);
+        // 예시 A의 눌림 저점(99.15)은 실패한 이탈로도 읽히지만 같은 봉·zone·anchor의 REBOUND는 억제된다(#208 C).
+        // 남은 대표는 결정론 정렬 규칙이 고른다(§8, #209).
+        Assert.Single(result.Candidates);
         Assert.All(result.Candidates, x => Assert.Equal(99.12m, x.Plan!.Stop));
         Assert.All(result.Candidates, x => Assert.Equal(101.78m, x.Plan!.Target));
         Assert.NotNull(result.Preferred);
-        Assert.Equal(result.Candidates.Max(x => x.EntryQuality), result.Preferred!.EntryQuality);
+        Assert.Equal(result.Candidates.OrderBy(x => x.KindName, StringComparer.Ordinal)
+            .ThenBy(x => x.EventId, StringComparer.Ordinal).First().EventId, result.Preferred!.EventId);
         Assert.Equal(Fx.At(TriggerMinute), candidate.StructureCutoff);
         Assert.Equal(Fx.At(TriggerMinute + 1), candidate.TriggerConfirmedAt);
         Assert.Equal(Fx.At(TriggerMinute + 1) + P.CandidateTtl(), candidate.ExpiresAt);
@@ -434,7 +435,7 @@ public sealed class StructureD2CandidateTests
     public void AnInvalidatedEventIsNeverRevivedByARecoveringQuote()
     {
         var resistance = D2.Resistance(100.80m, 101.00m, id: "breakout-zone");
-        var zones = ImmutableArray.Create(resistance, D2.Resistance(102.80m, 103.10m, id: "target-zone"));
+        var zones = ImmutableArray.Create(resistance, D2.Resistance(102.40m, 102.70m, id: "target-zone"));
         var bars = BreakoutBars(101.00m, 101.10m);
 
         var invalidated = SetupDetector.Detect(Request(bars, zones, ImmutableArray<TouchEpisode>.Empty,
@@ -480,7 +481,7 @@ public sealed class StructureD2CandidateTests
         // episode 저점이 지지 하단(99.20) 아래지만 완료 종가는 하단 위에서 마감했다.
         var bars = PullbackBars(episodeLow: 99.10m);
         var result = SetupDetector.Detect(Request(bars, PullbackZones(), PullbackEpisodes(),
-            D2.Trend(TrendState.Range, -30)), P);
+            D2.Trend(TrendState.Range, -20)), P);
         var candidate = result.Candidates.Single(x => x.Kind == SetupKind.Rebound);
 
         Assert.Equal(CandidateDisposition.Ready, candidate.Disposition);
@@ -597,18 +598,20 @@ public sealed class StructureD2CandidateTests
     [Fact]
     public void MissingFiveMinuteStructureBlocksReadyWithAReason()
     {
-        var trend = D2.Trend(TrendState.Up, 40, structureDirection: null,
-            readyBlockers: TrendEvaluator.BlockerMissing5mStructure);
-        var result = SetupDetector.Detect(Request(PullbackBars(), PullbackZones(), PullbackEpisodes(), trend), P);
-        var candidate = result.Candidates.Single(x => x.Kind == SetupKind.Pullback);
+        SetupDetectionResult Detect(TrendState state) => SetupDetector.Detect(
+            Request(PullbackBars(), PullbackZones(), PullbackEpisodes(),
+                D2.Trend(state, 40, structureDirection: null,
+                    readyBlockers: TrendEvaluator.BlockerMissing5mStructure)), P);
 
+        var candidate = Detect(TrendState.Up).Candidates.Single(x => x.Kind == SetupKind.Pullback);
         Assert.Equal(CandidateDisposition.Rejected, candidate.Disposition);
         Assert.Contains(TrendEvaluator.BlockerMissing5mStructure, candidate.RejectionCodes);
 
-        var rebound = result.Candidates.Single(x => x.Kind == SetupKind.Rebound);
+        var reboundResult = Detect(TrendState.Range);
+        var rebound = reboundResult.Candidates.Single(x => x.Kind == SetupKind.Rebound);
         Assert.Equal(CandidateDisposition.Ready, rebound.Disposition);
         Assert.Contains(SetupDetector.NoteReadyWithout5mStructure, rebound.Notes);
-        Assert.Equal(rebound.EventId, result.PreferredCandidateId);
+        Assert.Equal(rebound.EventId, reboundResult.PreferredCandidateId);
     }
 
     [Fact]
@@ -690,28 +693,22 @@ public sealed class StructureD2CandidateTests
     }
 
     [Fact]
-    public void PreferredSelectionUsesQualityThenNetRThenZoneIdWithinAKind()
+    public void PreferredSelectionWithinAKindIgnoresQualityAndNetRAndUsesEventIdOnly()
     {
-        var high = Candidate("PULLBACK", "zone-a", 70, 2.0m);
-        var low = Candidate("PULLBACK", "zone-b", 60, 9.0m);
-        Assert.Equal(high.EventId, CandidateSelection.SelectPreferred([low, high])!.EventId);
-
-        var tieQualityHighR = Candidate("PULLBACK", "zone-c", 70, 3.0m, "trigger-2");
-        var tieQualityLowR = Candidate("PULLBACK", "zone-a", 70, 1.0m, "trigger-2");
-        Assert.Equal(tieQualityHighR.EventId,
-            CandidateSelection.SelectPreferred([tieQualityLowR, tieQualityHighR])!.EventId);
+        var first = Candidate("PULLBACK", "zone-a", 20, 1.3m, "trigger-2");
+        var second = Candidate("PULLBACK", "zone-c", 95, 1.9m, "trigger-2");
+        Assert.Equal(first.EventId, CandidateSelection.SelectPreferred([second, first])!.EventId);
+        Assert.Equal(first.EventId, CandidateSelection.SelectPreferred([first, second])!.EventId);
     }
 
     [Fact]
-    public void PreferredSelectionAcrossKindsUsesQualityThenKindOrdinal()
+    public void PreferredSelectionAcrossKindsUsesKindOrdinalEvenWhenTheOtherKindScoresHigher()
     {
-        var breakout = Candidate("BREAKOUT", "zone-b", 70, 1.5m, "trigger-b");
-        var pullback = Candidate("PULLBACK", "zone-p", 70, 9.0m, "trigger-p");
-        // 같은 품질이면 종류 문자열 ordinal: BREAKOUT < PULLBACK
-        Assert.Equal(breakout.EventId, CandidateSelection.SelectPreferred([pullback, breakout])!.EventId);
+        var breakout = Candidate("BREAKOUT", "zone-b", 20, 1.5m, "trigger-b");
+        var pullback = Candidate("PULLBACK", "zone-p", 95, 1.9m, "trigger-p");
 
-        var betterPullback = Candidate("PULLBACK", "zone-p", 80, 1.1m, "trigger-p");
-        Assert.Equal(betterPullback.EventId, CandidateSelection.SelectPreferred([betterPullback, breakout])!.EventId);
+        Assert.Equal(breakout.EventId, CandidateSelection.SelectPreferred([pullback, breakout])!.EventId);
+        Assert.Equal(breakout.EventId, CandidateSelection.SelectPreferred([breakout, pullback])!.EventId);
     }
 
     [Fact]

@@ -11,7 +11,7 @@ using Xunit;
 /// </summary>
 public sealed class StructureLiquidityWiringTests
 {
-    static readonly StructurePolicy P = StructurePolicy.Default;
+    static readonly StructurePolicy P = D6.WiringPolicy;
 
     sealed record Harness(MonitorPollingService Poller, RecordingStore Store, MonitorRuntimeState Runtime,
         StructureAnalysisService Structure, MovableClock Clock, CountingOrderBookGateway Books,

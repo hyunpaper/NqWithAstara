@@ -106,7 +106,7 @@ public static class MarketRules
 {
     static readonly TimeZoneInfo NewYork = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
     /// <summary>토스증권 미국주식 왕복 수수료(매수 0.1% + 매도 0.1%). 평가 손익에서 차감해 실질 손익을 보여준다.</summary>
-    public const double RoundTripFeePercent = .2;
+    public const double RoundTripFeePercent = TradingCostDefaults.RoundTripFeePercent;
     public static DateOnly TradingDate(DateTimeOffset timestamp) => DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(timestamp, NewYork).DateTime);
     public static bool IsOpen(DateTimeOffset now, DateTimeOffset start, DateTimeOffset end) => now >= start && now < end;
     public static Candle[] CompletedRegularBars(IEnumerable<Candle> bars, MarketSession session, DateTimeOffset quoteAt)

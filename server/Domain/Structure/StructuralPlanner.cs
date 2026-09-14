@@ -104,14 +104,17 @@ public static class StructuralPlanner
     public const string EntryInsideResistance = "ENTRY_INSIDE_RESISTANCE";
     public const string CostExceedsRoom = "COST_EXCEEDS_ROOM";
     public const string InsufficientRewardToRisk = "INSUFFICIENT_REWARD_TO_RISK";
+
+    /// <summary>#209 §9.3: netR이 <see cref="StructurePolicy.MaxNetR"/>를 넘었다. 진입가가 무효화 지점에 붙어 있다는 신호다.</summary>
+    public const string ExcessiveRewardToRisk = "EXCESSIVE_REWARD_TO_RISK";
     public const string RiskTooWide = "RISK_TOO_WIDE";
     public const string StopNotBelowEntry = "STOP_NOT_BELOW_ENTRY";
     public const string StopNotPositive = "STOP_NOT_POSITIVE";
 
-    /// <summary>#43 §9.1: 손절폭이 왕복 수수료보다 작다. netR은 사실상 비용/비용 비율이라 위험을 재지 못한다.</summary>
+    /// <summary>#43/#209 §9.1: 손절폭이 max(왕복 수수료, MinStopAtrFactor*ATR1m) 안쪽이다. 위험이 아니라 체결 잡음이다.</summary>
     public const string StopInsideCost = "STOP_INSIDE_COST";
 
-    /// <summary>#43 §9.1: 손절폭이 1분 ATR의 MinStopAtrFactor배 안쪽이다. 구조 무효화가 아니라 체결 잡음에 걸리는 선이다.</summary>
+    /// <summary>#43 §9.1 구 노이즈 하한 사유. #209에서 <see cref="StopInsideCost"/>로 통합됐고 과거 관측 해석용으로만 남는다.</summary>
     public const string StopInsideNoise = "STOP_INSIDE_NOISE";
 
     public const string InvalidEntryReference = "INVALID_ENTRY_REFERENCE";
@@ -192,15 +195,15 @@ public static class StructuralPlanner
             // netR(§9.3)은 비율만 보므로 손절폭이 0에 가까우면 netRisk가 비용에 수렴해 오히려 커진다.
             // 비용·노이즈보다 작은 손절폭은 구조 무효화 지점이 아니라 체결 잡음에 걸리는 선이므로 계획을 거절한다.
             // 손절을 넓히거나 옮기지 않는다 — ATR로 손절 위치를 만들어내는 폴백은 v5 금지 사항이다(§19-5).
+            // #209: 비용 하한과 노이즈 하한은 척도만 다른 같은 규칙이다 — max()로 합쳐 사유 코드도 하나만 낸다.
+            // §16A: ATR 결측·비양수를 0으로 대체하지 않는다. 이 경우 노이즈 하한은 빠지고 비용 하한만 남는다.
             var stopDistance = entry - stopValue;
-            if (stopDistance < fee) reasons.Add(StopInsideCost);
-
-            // §16A: ATR 결측·비양수를 0으로 대체하지 않는다. 이 경우 노이즈 하한은 적용하지 않고 비용 하한만 남는다.
             var noiseFloor = StructureMath.ToPriceDelta(
                 request.Atr1mAtPlan is { } atrForFloor && double.IsFinite(atrForFloor) && atrForFloor > 0
                     ? atrForFloor * policy.MinStopAtrFactor
                     : null);
-            if (noiseFloor is { } floor && stopDistance < floor) reasons.Add(StopInsideNoise);
+            var minimumStop = noiseFloor is { } floor && floor > fee ? floor : fee;
+            if (stopDistance < minimumStop) reasons.Add(StopInsideCost);
         }
 
         // ── §9.2 목표: 가장 가까운 자격 있는 저항 앞 ──
@@ -229,6 +232,7 @@ public static class StructuralPlanner
             {
                 netR = netReward.Value / netRisk.Value;
                 if (netReward > 0 && netR < (decimal)policy.MinimumNetR) reasons.Add(InsufficientRewardToRisk);
+                if (netReward > 0 && netR > (decimal)policy.MaxNetR) reasons.Add(ExcessiveRewardToRisk);
             }
         }
 

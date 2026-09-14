@@ -312,8 +312,8 @@ public static class ZoneEvaluator
         Track("recency", recency);
         Track("confluence", confluence);
 
-        var mean = StructureMath.GeometricMeanOfAvailable([touch, reaction, recency, confluence]);
-        double? value = mean is null ? null : mean.Value * breachPenalty;
+        var mean = StructureMath.GeometricMeanOfAvailable([touch, reaction, recency, confluence, breachPenalty]);
+        double? value = mean;
 
         return new ZoneStrength(touch, reaction, recency, confluence, breachPenalty, value, completed, success,
             failed, pending, families, nonProfileFamilies, used.ToImmutable(), missing.ToImmutable());

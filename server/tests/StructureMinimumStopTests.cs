@@ -13,7 +13,7 @@ using Xunit;
 /// </summary>
 public sealed class StructureMinimumStopTests
 {
-    static readonly StructurePolicy P = StructurePolicy.Default;
+    static readonly StructurePolicy P = D2.WideNetR;
 
     // ── #43 관측 재현: TSLA 12f42a9e ──
 
@@ -52,8 +52,9 @@ public sealed class StructureMinimumStopTests
         Assert.Equal(.72884m, fee);
         Assert.True(stopDistance < fee);
 
-        // 손절폭 0.208 ATR < 0.5 ATR이므로 노이즈 하한에도 걸린다. 두 사유는 독립적으로 남는다.
-        Assert.Contains(StructuralPlanner.StopInsideNoise, result.ReasonCodes);
+        // 손절폭 0.208 ATR < 0.5 ATR이라 노이즈 하한에도 걸리지만 사유 코드는 통합돼 하나다(#209).
+        Assert.DoesNotContain(StructuralPlanner.StopInsideNoise, result.ReasonCodes);
+        Assert.Equal(new[] { StructuralPlanner.StopInsideCost }, result.ReasonCodes.ToArray());
     }
 
     /// <summary>거절은 손절을 옮기지 않는다. 보고되는 Stop은 구조에서 나온 364.34 그대로다(§9.1).</summary>
@@ -74,7 +75,7 @@ public sealed class StructureMinimumStopTests
 
     /// <summary>
     /// 비용 하한은 만족하지만 손절폭이 1분 ATR의 0.5배 안쪽이면 노이즈 하한으로 거절한다.
-    /// ATR=1.00, 손절폭 $0.30 → 하한 $0.50 미달. 비용($0.20)은 넘으므로 STOP_INSIDE_COST는 남지 않는다.
+    /// ATR=1.00, 손절폭 $0.30 → 하한 max($0.20, $0.50)=$0.50 미달. #209 통합 후 사유는 STOP_INSIDE_COST 하나다.
     /// </summary>
     [Fact]
     public void AStopInsideHalfOfTheOneMinuteAtrIsRejectedAsNoise()
@@ -83,7 +84,8 @@ public sealed class StructureMinimumStopTests
 
         Assert.False(result.Viable);
         Assert.Null(result.Plan);
-        Assert.Equal(new[] { StructuralPlanner.StopInsideNoise }, result.ReasonCodes.ToArray());
+        Assert.Equal(new[] { StructuralPlanner.StopInsideCost }, result.ReasonCodes.ToArray());
+        Assert.DoesNotContain(StructuralPlanner.StopInsideNoise, result.ReasonCodes);
         Assert.Equal(99.70m, result.Stop);
         Assert.Equal(.30m, 100.00m - result.Stop!.Value);
         Assert.True(result.NetR > (decimal)P.MinimumNetR);          // netR은 통과했지만 위험이 실재하지 않는다
@@ -144,7 +146,7 @@ public sealed class StructureMinimumStopTests
 
         // 대조군: 같은 구조에 사용 가능한 ATR이 있으면 노이즈 하한이 적용돼 거절된다.
         var withAtr = StructuralPlanner.Evaluate(request with { Atr1mAtPlan = 1.00 }, P);
-        Assert.Contains(StructuralPlanner.StopInsideNoise, withAtr.ReasonCodes);
+        Assert.Contains(StructuralPlanner.StopInsideCost, withAtr.ReasonCodes);
         Assert.Equal(99.65m, withAtr.Stop);
     }
 
@@ -207,6 +209,26 @@ public sealed class StructureMinimumStopTests
         Assert.True(result.Viable);
         Assert.DoesNotContain(StructuralPlanner.StopInsideCost, result.ReasonCodes);
         Assert.DoesNotContain(StructuralPlanner.StopInsideNoise, result.ReasonCodes);
+    }
+
+    /// <summary>#209: 두 하한은 max()로 합쳐진 하나의 규칙이고 사유 코드도 하나다. 값·거래 집합은 불변이다.</summary>
+    [Fact]
+    public void TheCostAndNoiseFloorsAreOneRuleWithOneReasonCode()
+    {
+        var support = D2.Support(99.70m, 99.90m, id: "merged-support");
+        var request = D2.ExampleA(support, D2.Resistance(101.80m, 102.10m)) with
+        {
+            InvalidationAnchor = 99.85m,
+            InvalidationZone = support
+        };
+
+        var noiseBinds = StructuralPlanner.Evaluate(request with { Atr1mAtPlan = 1.00 }, P);
+        var costBinds = StructuralPlanner.Evaluate(request with { Atr1mAtPlan = .10, InvalidationAnchor = 99.92m }, P);
+
+        Assert.Equal(new[] { StructuralPlanner.StopInsideCost }, noiseBinds.ReasonCodes.ToArray());
+        Assert.Equal(new[] { StructuralPlanner.StopInsideCost }, costBinds.ReasonCodes.ToArray());
+        Assert.DoesNotContain(StructuralPlanner.StopInsideNoise, noiseBinds.ReasonCodes);
+        Assert.DoesNotContain(StructuralPlanner.StopInsideNoise, costBinds.ReasonCodes);
     }
 
     // ── 사유 코드가 관측·거절 목록에 실린다(#27/#28 분리 집계) ──

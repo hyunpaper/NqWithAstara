@@ -157,8 +157,7 @@ aside {
 .results button:hover {
   background: var(--soft);
 }
-.results div div,
-.watch-list button div {
+.results div div {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -206,12 +205,29 @@ aside {
   padding: 0 4px 0 10px;
   gap: 7px;
 }
-.watch-select div {
+.watch-identity {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+.watch-identity b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.watch-metrics {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-shrink: 0;
+  gap: 5px;
+  max-width: 58%;
+}
+.watch-metrics > * {
+  flex: 0 0 auto;
 }
 .watch-list .up,
 .watch-list .down {

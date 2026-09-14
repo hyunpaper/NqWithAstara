@@ -33,6 +33,13 @@ public sealed record StructurePolicy
     public double ZoneEligibilityStrength { get; init; } = .35;
     public double MaxRiskPercent { get; init; } = 2.0;
     public double MinimumNetR { get; init; } = 1.2;
+
+    /// <summary>
+    /// §9.3 비용 반영 손익비 상한(#209). netR이 이 값을 넘으면 계획을 거절한다. 목표·손절을 조작하지 않는다(§19-5).
+    /// 손익비가 지나치게 좋은 계획은 구조가 좋은 것이 아니라 진입가가 무효화 지점에 붙어 있다는 뜻이다.
+    /// 단일 국면 표본(122건)에서 고른 잠정값이며 검증된 최적값이 아니다(§16A).
+    /// </summary>
+    public double MaxNetR { get; init; } = 2.0;
     public int EntryCutoffBeforeCloseMinutes { get; init; } = 40;
     public int CandidateTtlMinutes { get; init; } = 5;
     public int BreakoutCooldownMinutes { get; init; } = 30;
@@ -44,10 +51,11 @@ public sealed record StructurePolicy
 
     /// <summary>
     /// §10 손절 후 재진입 제한. 같은 심볼의 최신 STOP 청산이 일어난 완료 봉을 0번째로 세어, 이후 완료 봉이
-    /// 이 개수만큼 쌓이기 전에는 다시 진입하지 않는다. 보수적 운영 정책 상수이며 구조에서 도출하거나
-    /// 성과로 검증한 값이 아니다.
+    /// 이 개수만큼 쌓이기 전에는 다시 진입하지 않는다. 보수적 운영 정책 상수이며 구조에서 도출한 값이 아니다.
+    /// 3봉은 실측 122건에서 1건도 차단하지 못했다(관측 최소 재진입 간격 5분). 26거래일 단일 국면 표본으로
+    /// 고른 잠정값 20이며 배포 후 차단 건의 사후 결과로 재검증한다(#210, §16A).
     /// </summary>
-    public int StopReentryCooldownBars { get; init; } = 3;
+    public int StopReentryCooldownBars { get; init; } = 20;
     public long ObservationDailyByteLimit { get; init; } = 20L * 1024 * 1024;
 
     /// <summary>
@@ -61,7 +69,7 @@ public sealed record StructurePolicy
     public decimal PriceTick { get; init; } = .01m;
     public decimal MinimumSupportedPrice { get; init; } = 1.00m;
     public int PriceTickUnknownWarningPolls { get; init; } = 3;
-    public double RoundTripFeePercent { get; init; } = .2;
+    public double RoundTripFeePercent { get; init; } = TradingCostDefaults.RoundTripFeePercent;
 
     /// <summary>
     /// §16A 종목 유형: v5 신규 진입을 허용하는 securityType 집합(#132). 레버리지 ETF·비보통주의 tick·변동성
@@ -98,7 +106,7 @@ public sealed record StructurePolicy
 
     // ── 정규화 척도 (§6.5) ──
     public double TouchEvidenceScale { get; init; } = 2;
-    public double ReactionAtrScale { get; init; } = 2;
+    public double ReactionAtrScale { get; init; } = .5;
     public double ConfluenceScale { get; init; } = 2;
     public double RecencyTradingMinutes { get; init; } = 390;
     public double RecencySessions { get; init; } = 20;
