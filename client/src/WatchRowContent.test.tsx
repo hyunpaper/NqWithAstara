@@ -33,4 +33,25 @@ describe("WatchRowContent", () => {
     expect(container.querySelector(".watch-metrics")).toBeNull();
     expect(screen.getByText("NVDA").textContent).toBe("NVDA");
   });
+
+  it("좁은 폭 행에서도 긴 티커와 배지 묶음의 레이아웃 계약을 유지한다", () => {
+    const { container } = render(
+      <div className="watch-row" style={{ width: 180 }}>
+        <button className="watch-select">
+          <WatchRowContent symbol="SUPERLONGTICKER" name="Responsive Width Regression">
+            <span className="news-badge negative">악재 -2.5</span>
+          </WatchRowContent>
+        </button>
+      </div>,
+    );
+
+    const select = container.querySelector(".watch-select");
+    const identity = container.querySelector(".watch-identity");
+    const metrics = container.querySelector(".watch-metrics");
+
+    expect(select?.contains(identity)).toBe(true);
+    expect(select?.contains(metrics)).toBe(true);
+    expect(identity?.contains(screen.getByText("SUPERLONGTICKER"))).toBe(true);
+    expect(metrics?.contains(screen.getByText("악재 -2.5"))).toBe(true);
+  });
 });
