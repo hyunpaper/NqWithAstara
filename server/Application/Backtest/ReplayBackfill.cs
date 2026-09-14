@@ -27,7 +27,8 @@ public sealed record ReplayImportReport(string Source, DateTimeOffset FetchedAt,
     ImmutableArray<ReplayImportSourceRow> Sources, ImmutableArray<ReplayImportRow> Rows);
 
 public sealed record ReplayImportSourceRow(string Symbol, int RawBars, int ActualTradingDays,
-    bool ReachedRequestedStart, DateTimeOffset? OldestBar, string DataStatus, string? Reason);
+    bool ReachedRequestedStart, DateTimeOffset? OldestBar, string DataStatus, string? Reason,
+    DateTimeOffset? NewestBar = null);
 
 public sealed class ReplayBackfill(IHistoricalBarSource source, TimeProvider clock)
 {
@@ -102,8 +103,9 @@ public sealed class ReplayBackfill(IHistoricalBarSource source, TimeProvider clo
             "partial" => read.StopReason ?? "페이지네이션이 요청 시작일에 도달하지 못했습니다.",
             _ => null
         };
+        var actual = normalized.Values.SelectMany(x => x.Bars).Select(x => (DateTimeOffset?)x.Timestamp);
         return new ReplayImportSourceRow(symbol, read.RawBarCount, normalized.Count,
-            read.ReachedRequestedStart, read.OldestBar, status, reason);
+            read.ReachedRequestedStart, actual.Min(), status, reason, actual.Max());
     }
 
     static Dictionary<DateOnly, Normalized> Normalize(IEnumerable<Candle> source, DateOnly from, DateOnly to)

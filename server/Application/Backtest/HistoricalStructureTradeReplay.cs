@@ -28,12 +28,15 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                 var market = new MarketSession(true, "과거 replay", null, sessionStart, sessionEnd);
                 var previousZones = ImmutableArray<PriceZone>.Empty;
                 var retired = ImmutableArray<string>.Empty;
+                var latch = StructuralLatch.Empty(symbol, sessionStart, policy.PolicyHash);
                 var processedBars = 0;
 
                 for (var index = 0; index < bars.Length && bars[index].Timestamp.AddMinutes(1) < sessionEnd; index++)
                 {
                     var current = bars[index];
+                    var openBeforeBar = result[symbol].Count(x => x.Status == "OPEN");
                     result[symbol] = SimulationEngine.ReplayBars(result[symbol], symbol, [current]);
+                    var exitedThisPoll = result[symbol].Count(x => x.Status == "OPEN") < openBeforeBar;
                     processedBars = index + 1;
                     var now = current.Timestamp.AddMinutes(1);
                     var prefix = bars.Take(index + 1).ToArray();
@@ -54,24 +57,36 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                     retired = evaluated.RetiredZoneIds;
                     var trend = TrendEvaluator.Evaluate(TrendRequest.Create(symbol, snapshot.SessionStart,
                         snapshot.AnalysisAsOf, build.Bars.Bars, build.FiveMinuteBars), policy);
+                    var gate = StructuralLifecycle.Gate(latch, cutoff, cutoff.AddMinutes(1), TimeSpan.FromMinutes(1),
+                        now, policy);
                     var detected = SetupDetector.Detect(SetupDetectionRequest.Create(symbol, snapshot.SessionStart,
                         snapshot.SessionEnd, snapshot.AnalysisAsOf, now, build.Bars.Bars, evaluated.Zones,
                         evaluated.Episodes, trend, built.Atr1mAtCutoff, snapshot.QuotePrice, snapshot.QuoteAt,
-                        null, build.Quality.BlockersForCandidate), policy);
+                        null, build.Quality.BlockersForCandidate.Concat(gate.Blockers).ToImmutableArray()), policy);
+                    var candidates = StructuralLifecycle.ApplyLive(
+                        StructuralLifecycle.ApplyLatch(latch, detected.Candidates, gate.AllowNewTrigger, policy,
+                            evaluated.Zones), snapshot.QuotePrice, now);
+                    var preferred = CandidateSelection.SelectPreferred(candidates);
 
-                    foreach (var candidate in detected.Candidates.Where(x =>
-                                 x.Disposition == CandidateDisposition.Ready && x.Plan is not null))
+                    if (!exitedThisPoll && preferred is { Disposition: CandidateDisposition.Ready, Plan: not null })
                     {
-                        var context = StructuralSimulation.Freeze(candidate.Plan!, candidate.EventId,
-                            trend.State.ToString(), trend.SignedTrend, candidate.EntryQuality,
+                        var context = StructuralSimulation.Freeze(preferred.Plan, preferred.EventId,
+                            trend.State.ToString(), trend.SignedTrend, preferred.EntryQuality,
                             snapshot.AnalysisAsOf, snapshot.QuoteAt);
                         var entered = StructuralSimulation.Enter(result[symbol], new StructuralEntryRequest(symbol,
-                            candidate.TriggerBarStart, EntryTime(candidate.TriggerConfirmedAt, snapshot.AnalysisAsOf),
+                            preferred.TriggerBarStart, EntryTime(preferred.TriggerConfirmedAt, snapshot.AnalysisAsOf),
                             snapshot.SessionEnd, context,
                             build.Bars.Bars.Select(x => x.Start).ToArray(), snapshot.SessionStart,
-                            candidate.Plan!.TargetZoneSnapshot.Aliases), policy);
+                            preferred.Plan.TargetZoneSnapshot.Aliases), policy);
                         result[symbol] = entered.Trades;
+                        if (entered.Outcome is StructuralEntryOutcome.Entered or StructuralEntryOutcome.AlreadyEntered)
+                            candidates = candidates.Select(x => x.EventId == preferred.EventId
+                                ? x with { Disposition = CandidateDisposition.Entered }
+                                : x).ToImmutableArray();
                     }
+                    latch = StructuralLifecycle.Commit(latch, cutoff, candidates, evaluated.RetiredZoneIds,
+                        StructuralLifecycle.EventSignature(candidates,
+                            CandidateSelection.SelectPreferred(candidates)?.EventId), null, consumeOnReady: false);
                 }
 
                 result[symbol] = ReplayPendingBars(result[symbol], symbol, bars, processedBars);
