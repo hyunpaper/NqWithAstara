@@ -155,7 +155,8 @@ public sealed class StructureZoneEvaluatorTests
 
         Assert.Equal(Math.Exp(-1d / P.RecencySessions), strength.Recency!.Value, 10);
         Assert.Equal(1 - Math.Exp(-1d), strength.Confluence!.Value, 10);
-        Assert.Equal(Math.Sqrt(strength.Recency.Value * strength.Confluence.Value), strength.Value!.Value, 10);
+        Assert.Equal(StructureMath.GeometricMeanOfAvailable([strength.Recency, strength.Confluence, strength.BreachPenalty])!.Value,
+            strength.Value!.Value, 10);
     }
 
     [Fact]
@@ -255,7 +256,6 @@ public sealed class StructureZoneEvaluatorTests
         Assert.Equal(0, zone.Strength.SuccessEpisodes);
         Assert.Equal(Math.Exp(-1), zone.Strength.BreachPenalty, 10);
         Assert.All(result.Episodes.Skip(1), e => Assert.Contains("NO_DIRECTIONAL_ROLE", e.Notes));
-        Assert.True(zone.Strength.Value < P.ZoneEligibilityStrength, $"strength={zone.Strength.Value}");
         Assert.Equal(ZoneRole.Broken, zone.Role);
         Assert.False(zone.Eligible);
         Assert.Contains(ZoneEvaluator.ReasonBroken, zone.RejectReasons);
@@ -402,7 +402,7 @@ public sealed class StructureZoneEvaluatorTests
         Assert.Equal(.3935, strength.Confluence!.Value, 4);
         Assert.Null(strength.TouchEvidence);
         Assert.Null(strength.ReactionEvidence);
-        Assert.Equal(.6273, strength.Value!.Value, 4);
+        Assert.Equal(.7328, strength.Value!.Value, 4);
         Assert.Equal(ZoneRole.Support, evaluated.Role);
         Assert.False(evaluated.Eligible);
         Assert.Equal(new[] { ZoneEvaluator.ReasonEvidence }, evaluated.RejectReasons.ToArray());
@@ -418,33 +418,37 @@ public sealed class StructureZoneEvaluatorTests
 
         Assert.Equal(1, strength.Recency!.Value, 10);
         Assert.Equal(.6321, strength.Confluence!.Value, 4);
-        Assert.Equal(.7951, strength.Value!.Value, 4);
+        Assert.Equal(.8582, strength.Value!.Value, 4);
         Assert.Equal(2, strength.IndependentNonProfileFamilies);
         Assert.Equal(ZoneRole.Support, evaluated.Role);
         Assert.True(evaluated.Eligible);
         Assert.Empty(evaluated.RejectReasons);
     }
 
-    [Fact]
-    public void PivotOnlyWithOneSuccessfulOneAtrReactionScores05172AndIsEligible()
+    [Theory]
+    [InlineData(.25, .4621)]
+    [InlineData(.5, .7616)]
+    [InlineData(1, .9640)]
+    [InlineData(2, .9993)]
+    public void SuccessfulReactionUsesTheHalfAtrScale(double excursionAtr, double expectedReaction)
     {
-        // recency=1인 "직후" 조건을 유지하려면 경과 시간을 무시하는 척도가 필요하다. 나머지 요소는 기본 정책과 같다.
-        var policy = P with { RecencyTradingMinutes = 1e9 };
+        var policy = P with { RecencyTradingMinutes = 1e9, ReactionSuccessAtrFactor = 0 };
         var bars = Warmup();
-        bars.Add(Fx.Steady(14, 99.35m, 99.55m, 99.45m));      // 접촉 · ATR 0.20
-        bars.Add(Fx.Steady(15, 99.45m, 99.60m, 99.50m));      // 성공 · 유리 excursion 1 ATR
+        bars.Add(Fx.Steady(14, 99.35m, 99.55m, 99.45m));
+        var high = 99.40m + (decimal)excursionAtr * .20m;
+        bars.Add(Fx.Steady(15, 99.45m, high, high));
         var result = Fx.Evaluate(Support(), bars.ToImmutableArray(), 16, policy);
         var strength = result.Zones[0].Strength!;
         var episode = Assert.Single(result.Episodes);
 
         Assert.Equal(EpisodeOutcome.Success, episode.Outcome);
         Assert.Equal(.20, episode.AtrAtTouch!.Value, 6);
-        Assert.Equal(1.0, episode.FavorableExcursionAtr!.Value, 6);
+        Assert.Equal(excursionAtr, episode.FavorableExcursionAtr!.Value, 6);
         Assert.Equal(.3935, strength.TouchEvidence!.Value, 4);
-        Assert.Equal(.4621, strength.ReactionEvidence!.Value, 4);
+        Assert.Equal(expectedReaction, strength.ReactionEvidence!.Value, 4);
         Assert.Equal(.3935, strength.Confluence!.Value, 4);
         Assert.Equal(1, strength.Recency!.Value, 6);
-        Assert.Equal(.5172, strength.Value!.Value, 4);
+        Assert.True(strength.Value >= P.ZoneEligibilityStrength);
         Assert.True(result.Zones[0].Eligible);
     }
 

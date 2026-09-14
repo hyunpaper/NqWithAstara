@@ -106,7 +106,7 @@ public sealed record StructurePolicy
 
     // ── 정규화 척도 (§6.5) ──
     public double TouchEvidenceScale { get; init; } = 2;
-    public double ReactionAtrScale { get; init; } = 2;
+    public double ReactionAtrScale { get; init; } = .5;
     public double ConfluenceScale { get; init; } = 2;
     public double RecencyTradingMinutes { get; init; } = 390;
     public double RecencySessions { get; init; } = 20;

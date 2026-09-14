@@ -73,6 +73,7 @@ public sealed class StructurePolicyTests
         Assert.Equal(3, p.PriceTickUnknownWarningPolls);
         Assert.Equal(400, p.ProfileMaxBins);
         Assert.Equal(.15, p.ZoneHalfWidthAtrFactor);
+        Assert.Equal(.5, p.ReactionAtrScale);
         Assert.Equal(390, p.RecencyTradingMinutes);
     }
 
@@ -93,6 +94,23 @@ public sealed class StructurePolicyTests
         Assert.Null(StructureMath.GeometricMeanOfAvailable([null, null]));
         // 결측을 0으로 대체하면 아래가 0이 된다. 그렇게 하지 않는다(§16A).
         Assert.NotEqual(0, StructureMath.GeometricMeanOfAvailable([4, null])!.Value);
+    }
+
+    [Theory]
+    [InlineData(0, .9508, true)]
+    [InlineData(1, .7784, true)]
+    [InlineData(2, .6373, true)]
+    [InlineData(3, .5218, true)]
+    [InlineData(5, .3498, false)]
+    public void BreachPenaltyIsAWeakeningStrengthComponent(int failedEpisodes, double expectedStrength, bool expectedEligible)
+    {
+        var confluence = 1 - Math.Exp(-3d / StructurePolicy.Default.ConfluenceScale);
+        var breachPenalty = Math.Exp(-failedEpisodes);
+
+        var strength = StructureMath.GeometricMeanOfAvailable([1, 1, 1, confluence, breachPenalty])!.Value;
+
+        Assert.Equal(expectedStrength, strength, 4);
+        Assert.Equal(expectedEligible, strength >= StructurePolicy.Default.ZoneEligibilityStrength);
     }
 
     [Fact]
