@@ -292,7 +292,7 @@ public sealed class StructureBreakoutCooldownTests
     }
 
     [Fact]
-    public void CommitRecordsTheBreakoutCooldownEvenWhenAnotherKindIsTheGlobalPreferred()
+    public void CommitRecordsTheBreakoutCooldownForItsOwnGuardKeyWhenAnotherKindIsAlsoReady()
     {
         var detected = Breakout(Detect(30));
         var breakout = detected with { EntryQuality = detected.EntryQuality!.Value - 1 };
@@ -306,7 +306,7 @@ public sealed class StructureBreakoutCooldownTests
             ZoneId = "pullback-zone"
         };
 
-        Assert.Equal(pullback.EventId, CandidateSelection.SelectPreferred([breakout, pullback])!.EventId);
+        Assert.Equal(breakout.EventId, CandidateSelection.SelectPreferred([breakout, pullback])!.EventId);
 
         var latch = StructuralLifecycle.Commit(Seeded(), Fx.At(30), [breakout, pullback], [], null, null);
         Assert.Contains(CooldownKey(breakout), latch.ConsumedGuardKeys);
