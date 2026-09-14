@@ -69,7 +69,7 @@ public sealed record StructurePolicy
     public decimal PriceTick { get; init; } = .01m;
     public decimal MinimumSupportedPrice { get; init; } = 1.00m;
     public int PriceTickUnknownWarningPolls { get; init; } = 3;
-    public double RoundTripFeePercent { get; init; } = .2;
+    public double RoundTripFeePercent { get; init; } = TradingCostDefaults.RoundTripFeePercent;
 
     /// <summary>
     /// §16A 종목 유형: v5 신규 진입을 허용하는 securityType 집합(#132). 레버리지 ETF·비보통주의 tick·변동성
