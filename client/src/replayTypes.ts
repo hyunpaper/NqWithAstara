@@ -1,4 +1,4 @@
-export type ReplayStatus = "queued" | "running" | "completed" | "failed";
+export type ReplayStatus = "queued" | "running" | "canceling" | "canceled" | "completed" | "failed";
 
 export type ReplaySymbolResult = {
   symbol: string;
@@ -37,5 +37,5 @@ export function replayValue(value: number | null | undefined, suffix = ""): stri
 }
 
 export function replayStatusLabel(status: ReplayStatus): string {
-  return { queued: "대기", running: "실행 중", completed: "완료", failed: "실패" }[status];
+  return { queued: "대기", running: "실행 중", canceling: "중지 중", canceled: "중지됨", completed: "완료", failed: "실패" }[status];
 }
