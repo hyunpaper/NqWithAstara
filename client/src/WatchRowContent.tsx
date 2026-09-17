@@ -1,11 +1,16 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import type {
+  KeyboardEvent as ReactKeyboardEvent,
+  PointerEvent as ReactPointerEvent,
+  ReactNode,
+} from "react";
 import { ChevronDown, ChevronUp, GripVertical, Trash2 } from "lucide-react";
 import {
   LONG_PRESS_MS,
   applyDrop,
   canStep,
   exceedsPressSlop,
+  grabKeyAction,
   insertionIndex,
   keyboardTargetIndex,
   moveItem,
@@ -79,6 +84,7 @@ export function WatchList({
 }) {
   const [pending, setPending] = useState<string[] | null>(null);
   const [drag, setDrag] = useState<{ symbol: string; insertion: number } | null>(null);
+  const [grab, setGrab] = useState<{ symbol: string; origin: string[] } | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const press = useRef<PressState | null>(null);
   const suppressClick = useRef(false);
@@ -107,8 +113,7 @@ export function WatchList({
     press.current = null;
   };
 
-  const commit = async (next: string[]) => {
-    if (sameOrder(next, symbols)) return;
+  const save = async (next: string[]) => {
     setPending(next);
     try {
       await saveOrder(next);
@@ -116,6 +121,34 @@ export function WatchList({
       setPending(null);
       onError(e instanceof Error ? e.message : "관심종목 순서를 저장하지 못했습니다");
     }
+  };
+
+  const commit = async (next: string[]) => {
+    if (sameOrder(next, symbols)) return;
+    await save(next);
+  };
+
+  const grabKey = (e: ReactKeyboardEvent<HTMLElement>, symbol: string) => {
+    const action = grabKeyAction(e.key, grab?.symbol === symbol);
+    if (!action) return;
+    e.preventDefault();
+    if (action.type === "grab") {
+      setGrab({ symbol, origin: symbols });
+      return;
+    }
+    if (action.type === "move") {
+      const index = symbols.indexOf(symbol);
+      const target = stepTargetIndex(index, symbols.length, action.delta);
+      if (target != null) setPending(moveItem(symbols, index, target));
+      return;
+    }
+    const origin = grab!.origin;
+    setGrab(null);
+    if (action.type === "cancel") {
+      setPending(origin);
+      return;
+    }
+    if (!sameOrder(symbols, origin)) void save(symbols);
   };
 
   const step = (index: number, delta: number) => {
@@ -199,7 +232,7 @@ export function WatchList({
             <div className="watch-drop-marker" aria-hidden="true" />
           )}
           <div
-            className={`watch-row ${selected === item.symbol ? "active" : ""} ${drag?.symbol === item.symbol ? "dragging" : ""}`}
+            className={`watch-row ${selected === item.symbol ? "active" : ""} ${drag?.symbol === item.symbol ? "dragging" : ""} ${grab?.symbol === item.symbol ? "grabbed" : ""}`}
             data-symbol={item.symbol}
             onPointerDown={(e) => beginPress(e, item.symbol, index)}
             onPointerMove={movePress}
@@ -217,6 +250,8 @@ export function WatchList({
               onPointerUp={endPress}
               onPointerCancel={cancelPress}
               onClick={(e) => e.preventDefault()}
+              onKeyDown={(e) => grabKey(e, item.symbol)}
+              aria-pressed={grab?.symbol === item.symbol}
             >
               <GripVertical size={14} />
             </button>

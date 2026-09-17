@@ -198,6 +198,14 @@ aside {
   transform: scale(1.02);
   opacity: 0.92;
 }
+.watch-row.grabbed {
+  background: var(--soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.watch-row.grabbed .watch-grip {
+  opacity: 1;
+  color: var(--accent);
+}
 .watch-drop-marker {
   height: 0;
   position: relative;

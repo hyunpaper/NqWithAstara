@@ -70,6 +70,23 @@ export function keyboardTargetIndex(
   return target < 0 || target >= length ? null : target;
 }
 
+export type GrabAction =
+  | { type: "grab" }
+  | { type: "move"; delta: -1 | 1 }
+  | { type: "drop" }
+  | { type: "cancel" };
+
+/** 핸들 키보드 조작: Space로 잡기 → ↑/↓ 이동 → Space/Enter 놓기, Esc 취소. */
+export function grabKeyAction(key: string, grabbed: boolean): GrabAction | null {
+  const space = key === " " || key === "Spacebar";
+  if (!grabbed) return space ? { type: "grab" } : null;
+  if (space || key === "Enter") return { type: "drop" };
+  if (key === "ArrowUp") return { type: "move", delta: -1 };
+  if (key === "ArrowDown") return { type: "move", delta: 1 };
+  if (key === "Escape") return { type: "cancel" };
+  return null;
+}
+
 export const WATCH_ORDER_URL = "/api/watchlist/order";
 
 /** 순서 저장 요청 본문 계약 — 서버는 { symbols: [...] }만 받는다. */
