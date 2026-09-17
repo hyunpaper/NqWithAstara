@@ -97,6 +97,33 @@ public sealed class HttpContractTests(AstraHostFixture host) : IClassFixture<Ast
             .Write("watchlist.json", new List<WatchItem> { new("TSLA", "Tesla") });
 
     [Fact]
+    public async Task WatchlistOrderEndpointStoresRequestedOrder()
+    {
+        await host.Factory.Services.GetRequiredService<ILocalStore>()
+            .Write("watchlist.json", new List<WatchItem> { new("TSLA", "Tesla"), new("AAPL", "Apple") });
+        using var client = host.Factory.CreateClient();
+        var response = await client.PutAsync("/api/watchlist/order",
+            new StringContent("{\"symbols\":[\"AAPL\",\"TSLA\"]}", System.Text.Encoding.UTF8, "application/json"));
+
+        Assert.Equal(System.Net.HttpStatusCode.NoContent, response.StatusCode);
+        var durable = await host.Factory.Services.GetRequiredService<ILocalStore>().Read("watchlist.json", new List<WatchItem>());
+        Assert.Equal(["AAPL", "TSLA"], durable.Select(x => x.Symbol));
+    }
+
+    [Fact]
+    public async Task WatchlistOrderEndpointRejectsSetMismatchWithMessage()
+    {
+        await SeedWatchlistAsync();
+        using var client = host.Factory.CreateClient();
+        var response = await client.PutAsync("/api/watchlist/order",
+            new StringContent("{\"symbols\":[\"TSLA\",\"NVDA\"]}", System.Text.Encoding.UTF8, "application/json"));
+
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+        using var json = await ReadJson(response);
+        Assert.False(string.IsNullOrWhiteSpace(json.RootElement.GetProperty("message").GetString()));
+    }
+
+    [Fact]
     public async Task HealthEndpointReturnsOkWithCamelCaseBody()
     {
         using var client = host.Factory.CreateClient();

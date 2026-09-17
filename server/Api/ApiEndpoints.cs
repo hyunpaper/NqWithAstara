@@ -20,6 +20,7 @@ public static class ApiEndpoints
         app.MapGet("/api/state", async (StateQueryService q) => Results.Ok(await q.GetAsync())); app.MapGet("/api/search", SearchAsync);
         app.MapPost("/api/watchlist", AddWatchAsync);
         app.MapDelete("/api/watchlist/{symbol}", async (string symbol, MonitorControlService c, CancellationToken ct) => { await c.RemoveAsync(symbol, ct); return Results.NoContent(); });
+        app.MapPut("/api/watchlist/order", ReorderWatchAsync);
         app.MapPost("/api/start", async (MonitorControlService c, CancellationToken ct) => { await c.StartAsync(ct); return Results.Ok(); });
         app.MapPost("/api/stop", async (MonitorControlService c, CancellationToken ct) => { await c.StopAsync(ct); return Results.Ok(); });
         app.MapGet("/api/sim", async (SimulationReportQueryService q) => Results.Ok(await q.GetAsync()));
@@ -59,6 +60,12 @@ public static class ApiEndpoints
         app.MapPut("/api/positions/{symbol}", PutPositionAsync);
         app.MapDelete("/api/positions/{symbol}", async (string symbol, PositionService service, CancellationToken ct) => { await service.RemoveAsync(symbol, ct); return Results.NoContent(); });
         app.Map("/api/{**path}", () => Results.NotFound(new { message = "API endpoint not found." })); return app;
+    }
+    /// <summary>관심종목 표시 순서 저장. 집합 불일치는 400으로 알려 클라가 최신 state로 재동기화한다 (#224).</summary>
+    static async Task<IResult> ReorderWatchAsync(WatchlistOrderRequest? body, MonitorControlService c, CancellationToken ct)
+    {
+        var result = await c.ReorderAsync(body?.Symbols, ct);
+        return result.Status == WatchlistChangeStatus.Ok ? Results.NoContent() : Results.BadRequest(new { message = result.Message });
     }
     static async Task<IResult> AddWatchAsync(WatchItem? item, MonitorControlService c, CancellationToken ct) { try { var r = await c.AddAsync(item, ct); return r.Status switch { WatchlistChangeStatus.Ok => Results.Ok(), WatchlistChangeStatus.Invalid => Results.BadRequest(), WatchlistChangeStatus.NotFound => Results.NotFound(), _ => Results.BadRequest(new { message = r.Message }) }; } catch (HttpRequestException) { return Results.Problem("Toss 종목 조회에 실패했습니다.", statusCode: 502); } }
     static async Task<IResult> SearchAsync(string q, CatalogQueryService query, CancellationToken ct) { try { return Results.Ok(await query.SearchAsync(q, ct)); } catch (HttpRequestException) { return Results.Problem("Toss 종목 조회에 실패했습니다.", statusCode: 502); } }
@@ -113,3 +120,5 @@ public static class ApiEndpoints
     static async Task<IResult> RealFillsRefreshAsync(string? date, RealFillsService service, CancellationToken ct) { DateOnly? day = null; if (!string.IsNullOrWhiteSpace(date)) { if (!DateOnly.TryParse(date, System.Globalization.CultureInfo.InvariantCulture, out var parsed)) return Results.BadRequest(new { message = "date는 yyyy-MM-dd 형식이어야 합니다." }); day = parsed; } var result = await service.RefreshAsync(day, ct); return Results.Ok(result); }
     static async Task<IResult> PutPositionAsync(string symbol, PositionInput input, PositionService service, CancellationToken ct) { var r = await service.PutAsync(symbol, input, ct); return r.Status switch { PositionChangeStatus.Invalid => Results.BadRequest(), PositionChangeStatus.NotFound => Results.NotFound(), _ => Results.Ok(r.Position) }; }
 }
+
+public sealed record WatchlistOrderRequest(string[]? Symbols);
