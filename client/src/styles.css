@@ -215,6 +215,34 @@ aside {
 .watch-row.active {
   border-left-color: var(--accent);
 }
+.watch-grip {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  cursor: grab;
+  touch-action: none;
+}
+.watch-row:hover .watch-grip,
+.watch-row.dragging .watch-grip,
+.watch-grip:focus-visible {
+  opacity: 0.7;
+}
+.watch-row.dragging,
+.watch-row.dragging .watch-grip {
+  cursor: grabbing;
+}
+@media (hover: none) {
+  .watch-grip {
+    opacity: 0.7;
+  }
+}
 .watch-select {
   height: 100%;
   flex: 1;

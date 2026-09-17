@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
-import { Trash2 } from "lucide-react";
+import { GripVertical, Trash2 } from "lucide-react";
 import {
   LONG_PRESS_MS,
   applyDrop,
@@ -57,7 +57,7 @@ type PressState = {
   rects: WatchRowRect[];
 };
 
-/// <summary>꾹 눌러 드래그·Alt+화살표로 순서를 바꾸는 관심종목 목록 (§UI, #224)</summary>
+/// <summary>그립 핸들 즉시 드래그·꾹 눌러 드래그·키보드로 순서를 바꾸는 관심종목 목록 (§UI, #229)</summary>
 export function WatchList({
   items,
   selected,
@@ -116,7 +116,12 @@ export function WatchList({
     }
   };
 
-  const beginPress = (e: ReactPointerEvent<HTMLDivElement>, symbol: string, index: number) => {
+  const beginPress = (
+    e: ReactPointerEvent<HTMLElement>,
+    symbol: string,
+    index: number,
+    immediate = false,
+  ) => {
     if (e.pointerType === "mouse" && e.button !== 0) return;
     suppressClick.current = false;
     clearPress();
@@ -133,7 +138,7 @@ export function WatchList({
       insertion: index,
       rects: [],
     };
-    state.timer = window.setTimeout(() => {
+    const activate = () => {
       state.rects = measure();
       state.active = true;
       try {
@@ -142,11 +147,13 @@ export function WatchList({
         /* 포인터 캡처를 지원하지 않는 환경 */
       }
       setDrag({ symbol, insertion: index });
-    }, LONG_PRESS_MS);
+    };
+    if (immediate) activate();
+    else state.timer = window.setTimeout(activate, LONG_PRESS_MS);
     press.current = state;
   };
 
-  const movePress = (e: ReactPointerEvent<HTMLDivElement>) => {
+  const movePress = (e: ReactPointerEvent<HTMLElement>) => {
     const state = press.current;
     if (!state || state.pointerId !== e.pointerId) return;
     if (!state.active) {
@@ -158,7 +165,7 @@ export function WatchList({
     setDrag({ symbol: state.symbol, insertion: state.insertion });
   };
 
-  const endPress = (e: ReactPointerEvent<HTMLDivElement>) => {
+  const endPress = (e: ReactPointerEvent<HTMLElement>) => {
     const state = press.current;
     if (!state || state.pointerId !== e.pointerId) return;
     clearPress();
@@ -191,6 +198,20 @@ export function WatchList({
             onPointerUp={endPress}
             onPointerCancel={cancelPress}
           >
+            <button
+              className="watch-grip"
+              aria-label={`${item.symbol} 순서 변경 핸들`}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                beginPress(e, item.symbol, index, true);
+              }}
+              onPointerMove={movePress}
+              onPointerUp={endPress}
+              onPointerCancel={cancelPress}
+              onClick={(e) => e.preventDefault()}
+            >
+              <GripVertical size={14} />
+            </button>
             <button
               className="watch-select"
               aria-label={`${item.symbol} ${item.name}`}
