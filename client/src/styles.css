@@ -296,6 +296,26 @@ aside {
   flex: 0 0 auto;
   font-size: 12px;
 }
+.watch-move {
+  flex: 0 0 auto;
+  width: 0;
+  opacity: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  display: grid;
+  place-items: center;
+}
+.watch-row:hover .watch-move,
+.watch-move:focus-visible {
+  width: 28px;
+  opacity: 0.7;
+}
+.watch-row:hover .watch-move:disabled {
+  opacity: 0.22;
+}
 .delete {
   opacity: 0;
   width: 28px;

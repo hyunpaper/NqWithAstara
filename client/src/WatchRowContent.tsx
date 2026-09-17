@@ -1,14 +1,16 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
-import { GripVertical, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, GripVertical, Trash2 } from "lucide-react";
 import {
   LONG_PRESS_MS,
   applyDrop,
+  canStep,
   exceedsPressSlop,
   insertionIndex,
   keyboardTargetIndex,
   moveItem,
   sameOrder,
+  stepTargetIndex,
   sameSet,
   type WatchRowRect,
 } from "./watchReorder";
@@ -114,6 +116,12 @@ export function WatchList({
       setPending(null);
       onError(e instanceof Error ? e.message : "관심종목 순서를 저장하지 못했습니다");
     }
+  };
+
+  const step = (index: number, delta: number) => {
+    const target = stepTargetIndex(index, symbols.length, delta);
+    if (target == null) return;
+    void commit(moveItem(symbols, index, target));
   };
 
   const beginPress = (
@@ -238,6 +246,22 @@ export function WatchList({
                 change={item.change}
                 badges={item.badges}
               />
+            </button>
+            <button
+              className="watch-move"
+              aria-label={`${item.symbol} 위로 이동`}
+              disabled={!canStep(index, symbols.length, -1)}
+              onClick={() => step(index, -1)}
+            >
+              <ChevronUp size={14} />
+            </button>
+            <button
+              className="watch-move"
+              aria-label={`${item.symbol} 아래로 이동`}
+              disabled={!canStep(index, symbols.length, 1)}
+              onClick={() => step(index, 1)}
+            >
+              <ChevronDown size={14} />
             </button>
             <button
               className="delete"

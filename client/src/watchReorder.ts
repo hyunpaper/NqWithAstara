@@ -47,6 +47,16 @@ export function applyDrop<T>(
   return { items: next, changed: !sameOrder(next, items) };
 }
 
+/** 한 칸 이동 목표 인덱스 — 경계를 벗어나면 null(버튼 비활성). */
+export function stepTargetIndex(index: number, length: number, delta: number): number | null {
+  const target = index + delta;
+  return target < 0 || target >= length ? null : target;
+}
+
+export function canStep(index: number, length: number, delta: number): boolean {
+  return stepTargetIndex(index, length, delta) !== null;
+}
+
 /** 접근성 대안: Alt+↑/↓만 한 칸 이동으로 해석하고 그 외에는 null. */
 export function keyboardTargetIndex(
   index: number,
