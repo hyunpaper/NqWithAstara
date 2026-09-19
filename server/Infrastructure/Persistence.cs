@@ -37,7 +37,7 @@ public sealed class LocalStore(IWebHostEnvironment env) : Application.ILocalStor
             var raw = File.Exists(p) ? await File.ReadAllTextAsync(p) : null;
             var value = raw is null ? fallback : JsonSerializer.Deserialize<T>(raw, Json) ?? fallback;
             var backupPath = Path.Combine(_root, backupFile); var backupTmp = backupPath + ".tmp";
-            await File.WriteAllTextAsync(backupTmp, raw ?? JsonSerializer.Serialize(value, Json)); File.Move(backupTmp, backupPath, true);
+            await File.WriteAllTextAsync(backupTmp, raw ?? JsonSerializer.Serialize(value, Json)); File.Move(backupTmp, backupPath, false);
             var changed = change(value); var t = p + ".tmp";
             await File.WriteAllTextAsync(t, JsonSerializer.Serialize(changed.Data, Json)); File.Move(t, p, true); return changed.Result;
         }

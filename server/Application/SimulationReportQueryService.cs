@@ -23,7 +23,7 @@ public sealed class SimulationResetService(ILocalStore store, TimeProvider clock
         var removable = current.Count(x => includeOpen || !IsOpen(x));
         if (removable == 0) return new(0, current.Count, null);
 
-        var backup = $"simtrades.backup-{clock.GetLocalNow():yyyyMMdd-HHmmss}.json";
+        var backup = $"simtrades.backup-{clock.GetLocalNow():yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..8]}.json";
         return await store.UpdateWithBackup(TradesFile, backup, new List<SimTrade>(), trades =>
         {
             List<SimTrade> kept = includeOpen ? new() : trades.Where(IsOpen).ToList();

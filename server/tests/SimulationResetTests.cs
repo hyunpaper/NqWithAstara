@@ -68,9 +68,22 @@ public sealed class SimulationResetTests : IDisposable
 
         var result = await NewService(new DateTimeOffset(2026, 9, 17, 21, 34, 56, TimeSpan.Zero)).ResetAsync(includeOpen: false);
 
-        Assert.Equal("simtrades.backup-20260917-213456.json", result.Backup);
+        Assert.Matches("^simtrades\\.backup-20260917-213456-[0-9a-f]{8}\\.json$", result.Backup!);
         Assert.True(File.Exists(Path.Combine(AppData, result.Backup!)));
         Assert.Equal(["a", "b"], ReadTrades(result.Backup!).Select(x => x.Id));
+    }
+
+    [Fact]
+    public async Task ResetUsesAnotherBackupNameWhenTimestampCollides()
+    {
+        await WriteTrades(Trade("a", "TARGET"));
+        Directory.CreateDirectory(AppData);
+        await File.WriteAllTextAsync(Path.Combine(AppData, "simtrades.backup-20260917-213456-deadbeef.json"), "기존 백업");
+
+        var result = await NewService(new DateTimeOffset(2026, 9, 17, 21, 34, 56, TimeSpan.Zero)).ResetAsync(includeOpen: false);
+
+        Assert.NotEqual("simtrades.backup-20260917-213456-deadbeef.json", result.Backup);
+        Assert.Equal("기존 백업", await File.ReadAllTextAsync(Path.Combine(AppData, "simtrades.backup-20260917-213456-deadbeef.json")));
     }
 
     [Fact]
