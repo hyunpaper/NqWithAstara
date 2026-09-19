@@ -208,6 +208,15 @@ public sealed class StructureAnalysisService(
     public bool TryGetPublished(string symbol, out StructureAnalysisView view) =>
         _published.TryGetValue(symbol, out view!);
 
+    // 테스트 전용 seam: 실제 공개 Summary 경로를 후보 상태별로 검증하기 위한 주입점이다.
+    internal void PublishForContractTest(StructureAnalysisView view, bool failed = false)
+    {
+        _published[view.Symbol] = view;
+        if (failed) _failed[view.Symbol] = 0;
+        else _failed.TryRemove(view.Symbol, out _);
+    }
+    internal void MarkFailedForContractTest(string symbol) => _failed[symbol] = 0;
+
     // ── 관측 경로 ────────────────────────────────────────────────────────────
 
     public async Task ObserveAsync(StructureObservationRequest request, CancellationToken ct)
@@ -822,19 +831,36 @@ public sealed class StructureAnalysisService(
     public object Summary(IEnumerable<string> symbols)
     {
         ArgumentNullException.ThrowIfNull(symbols);
+        var runtimeState = runtime.Snapshot();
+        var now = clock.GetLocalNow();
+        var marketOpen = runtimeState.Market.Start is { } marketStart && runtimeState.Market.End is { } marketEnd
+            && MarketRules.IsOpen(now, marketStart, marketEnd);
         var rows = symbols
             .Select(symbol =>
             {
                 _published.TryGetValue(symbol, out var view);
                 var failed = _options.Mode != StructureEngineMode.Off && _failed.ContainsKey(symbol);
+                var status = _options.Mode == StructureEngineMode.Off
+                    ? StructureAnalysisStatus.Disabled
+                    : !runtimeState.Running
+                        ? StructureAnalysisStatus.Stopped
+                        : !marketOpen
+                            ? StructureAnalysisStatus.MarketClosed
+                            : failed
+                    ? StructureAnalysisStatus.Unavailable
+                    : view?.Status ?? (_options.Mode == StructureEngineMode.Off
+                        ? StructureAnalysisStatus.Disabled
+                        : StructureAnalysisStatus.Warmup);
                 return (object)new
                 {
                     symbol,
-                    status = failed
-                        ? StructureAnalysisStatus.Unavailable
-                        : view?.Status ?? (_options.Mode == StructureEngineMode.Off
-                            ? StructureAnalysisStatus.Disabled
-                            : StructureAnalysisStatus.Warmup),
+                    readinessReason = ReadinessReason(view, failed, status),
+                    lastEvaluatedAt = view?.AnalysisAsOf,
+                    candidateCount = view?.Candidates.Length ?? 0,
+                    readyCount = view?.Candidates.Count(x => x.State == "READY") ?? 0,
+                    enteredCount = view?.Candidates.Count(x => x.State == "ENTERED") ?? 0,
+                    rejectionCodes = view?.Candidates.SelectMany(x => x.RejectionCodes).Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToArray() ?? [],
+                    status,
                     trendState = view?.Trend?.State,
                     signedTrend = view?.Trend?.SignedTrend,
                     candidateState = view?.CandidateSummary,
@@ -868,6 +894,30 @@ public sealed class StructureAnalysisService(
             symbols = rows
         };
     }
+
+    internal static string ReadinessReasonForContract(string status, bool failed, string? candidateSummary = null) => status switch
+        {
+            StructureAnalysisStatus.Disabled => "disabled",
+            StructureAnalysisStatus.Stopped => "stopped",
+            StructureAnalysisStatus.MarketClosed => "market_closed",
+            StructureAnalysisStatus.Unavailable when failed => "evaluation_failed",
+            StructureAnalysisStatus.Unavailable => "input_unavailable",
+            StructureAnalysisStatus.Warmup when candidateSummary is null => "warmup",
+            _ => candidateSummary switch
+            {
+                null => "warmup",
+                "ENTERED" => "entered",
+                "READY" => "ready",
+                "REJECTED" => "candidate_rejected",
+                "INVALIDATED" => "candidate_invalidated",
+                "EXPIRED" => "candidate_expired",
+                "WAIT" => "candidate_inactive",
+                _ => "evaluated_waiting"
+            }
+        };
+
+    static string ReadinessReason(StructureAnalysisView? view, bool failed, string status) =>
+        ReadinessReasonForContract(status, failed, view?.CandidateSummary);
 
     sealed record StructureLayer(DateTimeOffset Cutoff, ImmutableArray<PriceZone> Zones,
         ImmutableArray<TouchEpisode> Episodes, VolumeProfile Profile, ImmutableArray<string> RetiredZoneIds,
