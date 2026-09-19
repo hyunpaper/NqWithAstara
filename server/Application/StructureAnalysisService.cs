@@ -827,19 +827,20 @@ public sealed class StructureAnalysisService(
             {
                 _published.TryGetValue(symbol, out var view);
                 var failed = _options.Mode != StructureEngineMode.Off && _failed.ContainsKey(symbol);
+                var status = failed
+                    ? StructureAnalysisStatus.Unavailable
+                    : view?.Status ?? (_options.Mode == StructureEngineMode.Off
+                        ? StructureAnalysisStatus.Disabled
+                        : StructureAnalysisStatus.Warmup);
                 return (object)new
                 {
                     symbol,
-                    readinessReason = ReadinessReason(view, failed),
+                    readinessReason = ReadinessReason(view, failed, status),
                     lastEvaluatedAt = view?.AnalysisAsOf,
                     candidateCount = view?.Candidates.Length ?? 0,
                     readyCount = view?.Candidates.Count(x => x.State == "READY") ?? 0,
                     enteredCount = view?.Candidates.Count(x => x.State == "ENTERED") ?? 0,
-                    status = failed
-                        ? StructureAnalysisStatus.Unavailable
-                        : view?.Status ?? (_options.Mode == StructureEngineMode.Off
-                            ? StructureAnalysisStatus.Disabled
-                            : StructureAnalysisStatus.Warmup),
+                    status,
                     trendState = view?.Trend?.State,
                     signedTrend = view?.Trend?.SignedTrend,
                     candidateState = view?.CandidateSummary,
@@ -874,12 +875,25 @@ public sealed class StructureAnalysisService(
         };
     }
 
-    static string ReadinessReason(StructureAnalysisView? view, bool failed) =>
-        failed ? "evaluation_failed" : view is null ? "warmup" : view.CandidateSummary switch
+    static string ReadinessReason(StructureAnalysisView? view, bool failed, string status) =>
+        failed || status == StructureAnalysisStatus.Unavailable ? "evaluation_failed" : status switch
         {
+            StructureAnalysisStatus.Disabled => "disabled",
+            StructureAnalysisStatus.Stopped => "stopped",
+            StructureAnalysisStatus.MarketClosed => "market_closed",
+            StructureAnalysisStatus.Warmup when view is null => "warmup",
+            _ => CandidateReadiness(view)
+        };
+
+    static string CandidateReadiness(StructureAnalysisView? view) => view?.CandidateSummary switch
+        {
+            null => "warmup",
             "ENTERED" => "entered",
             "READY" => "ready",
-            "REJECTED" => view.Candidates.Any(x => x.Plan is null) ? "no_eligible_plan" : "policy_rejected",
+            "REJECTED" => "candidate_rejected",
+            "INVALIDATED" => "candidate_invalidated",
+            "EXPIRED" => "candidate_expired",
+            "WAIT" => "candidate_inactive",
             _ => "evaluated_waiting"
         };
 
