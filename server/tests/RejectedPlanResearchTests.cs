@@ -3,6 +3,15 @@ using Xunit;
 
 public sealed class RejectedPlanResearchTests
 {
+    sealed class MemoryLocalStore : ILocalStore
+    {
+        readonly Dictionary<string, object> values = new();
+        public IReadOnlyDictionary<string, object> Files => values;
+        public Task<T> Read<T>(string file, T fallback) => Task.FromResult(values.TryGetValue(file, out var value) ? (T)value : fallback);
+        public Task Write<T>(string file, T data) { values[file] = data!; return Task.CompletedTask; }
+        public Task<TResult> Update<T, TResult>(string file, T fallback, Func<T, (T Data, TResult Result)> change)
+        { var current = values.TryGetValue(file, out var value) ? (T)value : fallback; var result = change(current); values[file] = result.Data!; return Task.FromResult(result.Result); }
+    }
     sealed class ThrowingStore(bool read) : ILocalStore
     {
         public Task<T> Read<T>(string file, T fallback) => read ? throw new IOException("read") : Task.FromResult(fallback);
@@ -17,17 +26,17 @@ public sealed class RejectedPlanResearchTests
     [Fact]
     public async Task FeatureOffAndPlanlessRejectionDoNotWrite()
     {
-        var store = new MemoryObservationStore();
+        var store = new MemoryLocalStore();
         var service = new RejectedPlanResearchService(store, new RejectedPlanResearchOptions(false));
         var candidate = new StructureCandidateDto("e", "REBOUND", "z", D3.At(1), D3.At(2), D3.At(3), D3.At(4), "REJECTED", null, 1, null, null, null, null, null, [], ["NO_TARGET"], [], false, false);
         Assert.False(await service.RecordAsync(candidate, D3.Symbol, "p", D3.At(4)));
-        Assert.Empty(store.Files);
+        Assert.Empty(await store.Read(RejectedPlanResearchService.FileName, new List<RejectedPlanResearchRow>()));
     }
 
     [Fact]
     public async Task EnabledPlanlessRejectionStillDoesNotWrite()
     {
-        var store = new MemoryObservationStore();
+        var store = new MemoryLocalStore();
         var service = new RejectedPlanResearchService(store, new RejectedPlanResearchOptions(true));
         var c = new StructureCandidateDto("no-plan", "REBOUND", "z", D3.At(1), D3.At(2), D3.At(3), D3.At(4), "REJECTED", null, 99, null, null, null, null, null, [], ["NO_TARGET"], [], false, false);
         Assert.False(await service.RecordAsync(c, D3.Symbol, "hash", D3.At(10)));
@@ -37,7 +46,7 @@ public sealed class RejectedPlanResearchTests
     [Fact]
     public async Task FutureCandidateIsIgnoredAndReadIsLimited()
     {
-        var store = new MemoryObservationStore();
+        var store = new MemoryLocalStore();
         var service = new RejectedPlanResearchService(store, new RejectedPlanResearchOptions(true, 2));
         var candidate = new StructureCandidateDto("e", "REBOUND", "z", D3.At(10), D3.At(2), D3.At(3), D3.At(4), "REJECTED", null, 1, null, null, null, null, null, [], [], [], false, false);
         Assert.False(await service.RecordAsync(candidate, D3.Symbol, "p", D3.At(4)));
@@ -47,7 +56,7 @@ public sealed class RejectedPlanResearchTests
     [Fact]
     public async Task EnabledPlanIsIdempotentAcrossAsOfAndParallelCalls()
     {
-        var store = new MemoryObservationStore();
+        var store = new MemoryLocalStore();
         var service = new RejectedPlanResearchService(store, new RejectedPlanResearchOptions(true, 1));
         var c = new StructureCandidateDto("e", "REBOUND", "z", D3.At(1), D3.At(2), D3.At(3), D3.At(4), "REJECTED", null, 99, null, 98.5m, 101, 1.5m, Plan(), [], ["COST"], [], false, false);
         var results = await Task.WhenAll(Enumerable.Range(0, 4).Select(i => service.RecordAsync(c, D3.Symbol, "hash", D3.At(10 + i))));
@@ -58,7 +67,7 @@ public sealed class RejectedPlanResearchTests
     [Fact]
     public async Task EnabledRejectedPlanUsesOnlyResearchFileAndLeavesMainTradeFilesUntouched()
     {
-        var store = new MemoryObservationStore();
+        var store = new MemoryLocalStore();
         var service = new RejectedPlanResearchService(store, new RejectedPlanResearchOptions(true));
         var c = new StructureCandidateDto("integration-event", "REBOUND", "z", D3.At(1), D3.At(2), D3.At(3), D3.At(4), "REJECTED", null, 99, null, 98.5m, 101, 1.5m, Plan(), [], ["COST"], [], false, false);
         Assert.True(await service.RecordAsync(c, D3.Symbol, "hash", D3.At(10)));
@@ -73,7 +82,7 @@ public sealed class RejectedPlanResearchTests
     [Fact]
     public async Task TwoEventsAreOrderedAndEvictOldestAtLimit()
     {
-        var store = new MemoryObservationStore();
+        var store = new MemoryLocalStore();
         var service = new RejectedPlanResearchService(store, new RejectedPlanResearchOptions(true, 1));
         foreach (var id in new[] { "old", "new" })
         {
@@ -89,7 +98,7 @@ public sealed class RejectedPlanResearchTests
     {
         foreach (var future in new[] { "trigger", "confirmed", "structure" })
         {
-            var store = new MemoryObservationStore();
+            var store = new MemoryLocalStore();
             var service = new RejectedPlanResearchService(store, new RejectedPlanResearchOptions(true));
             var trigger = future == "trigger" ? D3.At(20) : D3.At(1);
             var confirmed = future == "confirmed" ? D3.At(20) : D3.At(2);
@@ -110,7 +119,7 @@ public sealed class RejectedPlanResearchTests
     [Fact]
     public async Task DisabledReadIsEmptyAndAsOfFilterExcludesFutureRows()
     {
-        var store = new MemoryObservationStore();
+        var store = new MemoryLocalStore();
         var disabled = new RejectedPlanResearchService(store, new RejectedPlanResearchOptions(false));
         Assert.Empty(await disabled.ReadAsync(1, D3.At(10)));
         var enabled = new RejectedPlanResearchService(store, new RejectedPlanResearchOptions(true));
