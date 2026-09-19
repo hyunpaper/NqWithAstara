@@ -31,14 +31,27 @@ public sealed class FeeRateCheckServiceTests
     }
 
     [Fact]
-    public async Task RateExpiringWithinThreeDaysRaisesWarning()
+    public async Task ExpiringRateDoesNotRaiseWarning()
     {
         var gateway = new FakeGateway([new(1, "BROKERAGE")], [new("US", .001m, null, DateOnly.FromDateTime(Today.UtcDateTime).AddDays(2))]);
         var service = new FeeRateCheckService(gateway, StructurePolicy.Default, new FixedTimeProvider(Today), new FakeDiagnostics());
 
         await service.RunAsync(CancellationToken.None);
 
-        Assert.Contains(service.Warnings, x => x.StartsWith("V5_FEE_RATE_EXPIRING:"));
+        Assert.Empty(service.Warnings);
+    }
+
+    [Fact]
+    public async Task MissingActiveRateDoesNotRaiseExpiryWarningAndLogsDiagnostic()
+    {
+        var gateway = new FakeGateway([new(1, "BROKERAGE")], [new("US", .001m, new(2026, 1, 1), new(2026, 9, 11))]);
+        var diagnostics = new FakeDiagnostics();
+        var service = new FeeRateCheckService(gateway, StructurePolicy.Default, new FixedTimeProvider(Today), diagnostics);
+
+        await service.RunAsync(CancellationToken.None);
+
+        Assert.Empty(service.Warnings);
+        Assert.Equal(1, diagnostics.MarketDataFailedCalls);
     }
 
     [Fact]
