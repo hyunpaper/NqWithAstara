@@ -24,7 +24,7 @@ export default function NewsTicker() {
     } catch { setFetchError(true); }
   }, 60000);
   const { recent, counts } = aggregateTickerArticles(articles);
-  const status = !health ? "대기" : health.enabled === false ? "비활성" : fetchError || health.lastError ? "피드 장애" : !health.lastSuccessAt ? "대기" : recent.length === 0 ? "데이터 없음" : "정상";
-  const summary = `AI 감성 · ${status} · 최근 24시간 ${recent.length}건 · 호재 ${counts.positive ?? 0} · 악재 ${counts.negative ?? 0} · 중립 ${counts.neutral ?? 0} · 미분류 ${counts.unclassified ?? 0}`;
-  return <section className={`news-ticker ${status === "정상" ? "ok" : "notice"}`} aria-label="전체 뉴스 감성 티커"><div className="news-ticker-summary">{summary}</div>{recent.length > 0 && <div className="news-ticker-viewport" tabIndex={0}><div className="news-ticker-track" aria-live="polite">{[...recent, ...recent].map((a, i) => <span key={`${a.id}-${i}`} className={`news-ticker-item ${a.sentiment}`}><b>{a.sentiment}</b> {a.title}</span>)}</div></div>}</section>;
+  const status = fetchError ? "피드 장애" : !health ? "대기" : health.enabled === false ? "비활성" : health.lastError ? "피드 장애" : !health.lastSuccessAt ? "대기" : recent.length === 0 ? "데이터 없음" : "정상";
+  const summary = `AI 감성 · ${status} · 최근 24시간 최대 200건 중 ${recent.length}건 · 호재 ${counts.positive ?? 0} · 악재 ${counts.negative ?? 0} · 중립 ${counts.neutral ?? 0} · 미분류 ${counts.unclassified ?? 0}`;
+  return <section className={`news-ticker ${status === "정상" ? "ok" : "notice"}`} aria-label="전체 뉴스 감성 티커"><div className="news-ticker-summary">{summary}</div>{recent.length > 0 && <div className="news-ticker-viewport" tabIndex={0}><div className="news-ticker-track" aria-live="polite">{recent.map((a, i) => <span key={`${a.id}-${i}`} className={`news-ticker-item ${a.sentiment}`}><b>{a.sentiment}</b> {a.title}</span>)}{recent.map((a, i) => <span key={`repeat-${a.id}-${i}`} className={`news-ticker-item ${a.sentiment}`} aria-hidden="true"><b>{a.sentiment}</b> {a.title}</span>)}</div></div>}</section>;
 }

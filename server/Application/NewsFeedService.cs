@@ -60,7 +60,7 @@ public sealed class NewsFeedService(
             state.PollCompleted(clock.GetUtcNow());
         }
         catch (OperationCanceledException) { throw; }
-        catch (Exception exception) { diagnostics.PollFailed("news", exception); state.PollFailed(clock.GetUtcNow(), exception.Message); }
+        catch (Exception exception) { diagnostics.PollFailed("news-feed", exception); state.PollFailed(clock.GetUtcNow(), exception.Message); }
         finally { _gate.Release(); }
     }
 
@@ -98,8 +98,6 @@ public sealed class NewsFeedService(
         {
             IReadOnlyList<NewsFeedItem> items;
             try { items = await feed.ListAsync(page, ct); }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested) { break; }
-            catch (Exception exception) { diagnostics.PollFailed("news-feed", exception); break; }
             finally { budget--; }
 
             if (items.Count == 0) break;
