@@ -830,6 +830,11 @@ public sealed class StructureAnalysisService(
                 return (object)new
                 {
                     symbol,
+                    readinessReason = ReadinessReason(view, failed),
+                    lastEvaluatedAt = view?.AnalysisAsOf,
+                    candidateCount = view?.Candidates.Length ?? 0,
+                    readyCount = view?.Candidates.Count(x => x.State == "READY") ?? 0,
+                    enteredCount = view?.Candidates.Count(x => x.State == "ENTERED") ?? 0,
                     status = failed
                         ? StructureAnalysisStatus.Unavailable
                         : view?.Status ?? (_options.Mode == StructureEngineMode.Off
@@ -868,6 +873,15 @@ public sealed class StructureAnalysisService(
             symbols = rows
         };
     }
+
+    static string ReadinessReason(StructureAnalysisView? view, bool failed) =>
+        failed ? "evaluation_failed" : view is null ? "warmup" : view.CandidateSummary switch
+        {
+            "ENTERED" => "entered",
+            "READY" => "ready",
+            "REJECTED" => view.Candidates.Any(x => x.Plan is null) ? "no_eligible_plan" : "policy_rejected",
+            _ => "evaluated_waiting"
+        };
 
     sealed record StructureLayer(DateTimeOffset Cutoff, ImmutableArray<PriceZone> Zones,
         ImmutableArray<TouchEpisode> Episodes, VolumeProfile Profile, ImmutableArray<string> RetiredZoneIds,
