@@ -822,12 +822,22 @@ public sealed class StructureAnalysisService(
     public object Summary(IEnumerable<string> symbols)
     {
         ArgumentNullException.ThrowIfNull(symbols);
+        var runtimeState = runtime.Snapshot();
+        var now = clock.GetLocalNow();
+        var marketOpen = runtimeState.Market.Start is { } marketStart && runtimeState.Market.End is { } marketEnd
+            && MarketRules.IsOpen(now, marketStart, marketEnd);
         var rows = symbols
             .Select(symbol =>
             {
                 _published.TryGetValue(symbol, out var view);
                 var failed = _options.Mode != StructureEngineMode.Off && _failed.ContainsKey(symbol);
-                var status = failed
+                var status = _options.Mode == StructureEngineMode.Off
+                    ? StructureAnalysisStatus.Disabled
+                    : !runtimeState.Running
+                        ? StructureAnalysisStatus.Stopped
+                        : !marketOpen
+                            ? StructureAnalysisStatus.MarketClosed
+                            : failed
                     ? StructureAnalysisStatus.Unavailable
                     : view?.Status ?? (_options.Mode == StructureEngineMode.Off
                         ? StructureAnalysisStatus.Disabled
@@ -840,6 +850,7 @@ public sealed class StructureAnalysisService(
                     candidateCount = view?.Candidates.Length ?? 0,
                     readyCount = view?.Candidates.Count(x => x.State == "READY") ?? 0,
                     enteredCount = view?.Candidates.Count(x => x.State == "ENTERED") ?? 0,
+                    rejectionCodes = view?.Candidates.SelectMany(x => x.RejectionCodes).Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToArray() ?? [],
                     status,
                     trendState = view?.Trend?.State,
                     signedTrend = view?.Trend?.SignedTrend,
@@ -876,7 +887,7 @@ public sealed class StructureAnalysisService(
     }
 
     static string ReadinessReason(StructureAnalysisView? view, bool failed, string status) =>
-        failed || status == StructureAnalysisStatus.Unavailable ? "evaluation_failed" : status switch
+        failed ? "evaluation_failed" : status == StructureAnalysisStatus.Unavailable ? "input_unavailable" : status switch
         {
             StructureAnalysisStatus.Disabled => "disabled",
             StructureAnalysisStatus.Stopped => "stopped",
