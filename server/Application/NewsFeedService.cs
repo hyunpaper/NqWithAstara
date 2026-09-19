@@ -48,11 +48,6 @@ public sealed class NewsFeedService(
     public async Task PollAsync(CancellationToken ct)
     {
         if (!options.Enabled) return;
-        if (string.IsNullOrWhiteSpace(options.MarketauxApiKey))
-        {
-            state.PollFailed(clock.GetUtcNow(), "notConfigured");
-            return;
-        }
         state.PollStarted(clock.GetUtcNow());
         await _gate.WaitAsync(ct);
         try
