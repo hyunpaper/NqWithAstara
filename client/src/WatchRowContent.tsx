@@ -88,6 +88,7 @@ export function WatchList({
   const listRef = useRef<HTMLDivElement>(null);
   const press = useRef<PressState | null>(null);
   const suppressClick = useRef(false);
+  const saving = useRef(false);
 
   const serverSymbols = items.map((x) => x.symbol);
   const serverKey = serverSymbols.join(",");
@@ -99,6 +100,11 @@ export function WatchList({
 
   useEffect(() => {
     setPending((current) => (current && !sameSet(current, serverSymbols) ? null : current));
+    setGrab((current) => (current && !sameSet(current.origin, serverSymbols) ? null : current));
+    if (press.current && !sameSet([press.current.symbol, ...serverSymbols], serverSymbols)) {
+      clearPress();
+      setDrag(null);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverKey]);
 
@@ -114,12 +120,16 @@ export function WatchList({
   };
 
   const save = async (next: string[]) => {
+    if (saving.current) return;
+    saving.current = true;
     setPending(next);
     try {
       await saveOrder(next);
     } catch (e) {
       setPending(null);
       onError(e instanceof Error ? e.message : "관심종목 순서를 저장하지 못했습니다");
+    } finally {
+      saving.current = false;
     }
   };
 
@@ -137,6 +147,7 @@ export function WatchList({
       return;
     }
     if (action.type === "move") {
+      if (saving.current) return;
       const index = symbols.indexOf(symbol);
       const target = stepTargetIndex(index, symbols.length, action.delta);
       if (target != null) setPending(moveItem(symbols, index, target));
@@ -152,6 +163,7 @@ export function WatchList({
   };
 
   const step = (index: number, delta: number) => {
+    if (saving.current) return;
     const target = stepTargetIndex(index, symbols.length, delta);
     if (target == null) return;
     void commit(moveItem(symbols, index, target));
@@ -222,10 +234,18 @@ export function WatchList({
     setDrag(null);
   };
 
+  const cancelGrab = () => {
+    clearPress();
+    setDrag(null);
+    setGrab(null);
+  };
+
   if (!items.length) return <div className="watch-list">{empty}</div>;
 
   return (
-    <div className="watch-list" ref={listRef}>
+    <div className="watch-list" ref={listRef} onBlur={(e) => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) cancelGrab();
+    }}>
       {ordered.map((item, index) => (
         <Fragment key={item.symbol}>
           {drag && drag.insertion === index && (
@@ -259,6 +279,7 @@ export function WatchList({
               className="watch-select"
               aria-label={`${item.symbol} ${item.name}`}
               onClick={() => {
+                cancelGrab();
                 if (suppressClick.current) {
                   suppressClick.current = false;
                   return;
@@ -286,7 +307,7 @@ export function WatchList({
               className="watch-move"
               aria-label={`${item.symbol} 위로 이동`}
               disabled={!canStep(index, symbols.length, -1)}
-              onClick={() => step(index, -1)}
+              onClick={() => { cancelGrab(); step(index, -1); }}
             >
               <ChevronUp size={14} />
             </button>
@@ -294,14 +315,14 @@ export function WatchList({
               className="watch-move"
               aria-label={`${item.symbol} 아래로 이동`}
               disabled={!canStep(index, symbols.length, 1)}
-              onClick={() => step(index, 1)}
+              onClick={() => { cancelGrab(); step(index, 1); }}
             >
               <ChevronDown size={14} />
             </button>
             <button
               className="delete"
               aria-label={`${item.symbol} 관심종목 삭제`}
-              onClick={() => onDelete(item.symbol)}
+              onClick={() => { cancelGrab(); onDelete(item.symbol); }}
             >
               <Trash2 size={14} />
             </button>
