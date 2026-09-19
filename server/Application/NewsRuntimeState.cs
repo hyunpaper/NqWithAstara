@@ -7,6 +7,8 @@ public sealed class NewsOptions
 {
     public bool Enabled { get; set; }
     public string FeedUrl { get; set; } = "https://www.saveticker.com";
+    public string MarketauxApiKey { get; set; } = "";
+    public string MarketauxUrl { get; set; } = "https://api.marketaux.com/v1/news/all";
     public int PollSeconds { get; set; } = 60;
     public string OllamaUrl { get; set; } = "http://localhost:11434";
     public string Model { get; set; } = "qwen2.5:7b-instruct";
@@ -48,7 +50,8 @@ public sealed record NewsRecord(
     DateTimeOffset ClassifiedAt,
     string InputKind = NewsInputKinds.Body,
     string PromptVersion = "",
-    string? ClassifiedFrom = null);
+    string? ClassifiedFrom = null,
+    IReadOnlyList<NewsEntity>? Entities = null);
 
 /// <summary>health·조회가 함께 보는 뉴스 런타임 상태(#151 §6). 스레드 안전하다.</summary>
 public sealed class NewsRuntimeState

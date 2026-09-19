@@ -15,7 +15,9 @@ public sealed record NewsFeedItem(
     IReadOnlyList<string> Tickers,
     string Headline = "",
     bool HeadlineOnly = false,
-    string? GroupId = null);
+    string? GroupId = null,
+    IReadOnlyList<NewsEntity>? Entities = null);
+
 
 /// <summary>기사 상세(#151). AI 요약이 있으면 본문 대신 그것을 분류 입력으로 쓴다.</summary>
 public sealed record NewsDetail(string Summary, string Body);

@@ -3,6 +3,8 @@ using System.Text.Json;
 
 namespace Astra.Server.Domain.News;
 
+public sealed record NewsEntity(string Symbol, string Name, string Industry, double? SentimentScore, double? MatchScore);
+
 /// <summary>감성 분류 라벨(#151). 판정 실패는 <see cref="Unclassified"/>로 남긴다.</summary>
 public static class NewsSentiments
 {
@@ -47,7 +49,8 @@ public sealed record NewsArticle(
     IReadOnlyList<string> Tickers,
     string Headline = "",
     bool HeadlineOnly = false,
-    string? GroupId = null);
+    string? GroupId = null,
+    IReadOnlyList<NewsEntity>? Entities = null);
 
 /// <summary>분류 입력으로 무엇을 썼는지(#151). 판정 근거를 사후에 되짚기 위해 레코드에 남긴다.</summary>
 public static class NewsInputKinds

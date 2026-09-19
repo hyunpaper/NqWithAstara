@@ -48,6 +48,11 @@ public sealed class NewsFeedService(
     public async Task PollAsync(CancellationToken ct)
     {
         if (!options.Enabled) return;
+        if (string.IsNullOrWhiteSpace(options.MarketauxApiKey))
+        {
+            state.PollFailed(clock.GetUtcNow(), "notConfigured");
+            return;
+        }
         state.PollStarted(clock.GetUtcNow());
         await _gate.WaitAsync(ct);
         try
@@ -127,7 +132,7 @@ public sealed class NewsFeedService(
         state.SeenArticles(fresh.Count);
         var articles = fresh.OrderBy(x => ParseId(x.Id))
             .Select(item => new NewsArticle(item.Id, item.Title, item.Summary, item.Source, item.CreatedAt,
-                item.Tickers, item.Headline, item.HeadlineOnly, item.GroupId))
+                item.Tickers, item.Headline, item.HeadlineOnly, item.GroupId, item.Entities))
             .ToArray();
 
         var followerIds = GroupFollowerArticles(articles, watchlist);
@@ -320,7 +325,7 @@ public sealed class NewsFeedService(
             clock.GetUtcNow(),
             inputKind,
             result.PromptVersion,
-            classifiedFrom);
+            classifiedFrom, entry.Article.Entities);
     }
 
     async Task SaveAsync(NewsRecord record, CancellationToken ct)
