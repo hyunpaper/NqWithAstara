@@ -34,7 +34,7 @@ public sealed class StateQueryService(ILocalStore store, IMonitorSignals signals
                 entryQuality = x.EntryQuality, netR = x.NetR, quotePrice = x.QuotePrice, at = x.At,
                 planId = x.PlanId, stop = x.Stop, target = x.Target, reason = x.Reason
             }).ToArray();
-        // 이슈 #130: additive `warnings` — 실계좌 수수료율과 StructurePolicy.RoundTripFeePercent 불일치·만료 임박 경고.
+        // 이슈 #230: additive `warnings` — 실계좌 수수료율 불일치 경고.
         var warnings = feeCheck?.Warnings ?? Array.Empty<string>();
         return new { running = state.Running, mode = "live", connection = new { status = state.ConnectionStatus, message = state.ConnectionMessage, guideUrl = state.ConnectionMessage.Contains("허용 IP") ? "https://developers.tossinvest.com/docs" : null }, transport = new { mode = websocket ? "websocket" : "polling", status = stream.Status, message = websocket ? stream.Message : "REST 폴링 사용 중 · " + stream.Message, lastTickAt = stream.LastTickAt }, market = new { isOpen = open, label = open ? "정규장" : state.Market.Label, nextOpen = state.Market.NextOpen }, updatedAt = state.UpdatedAt, watchlist = watch, signals = rows, events = Array.Empty<object>(), structureSummary, structureEvents, warnings };
     }
