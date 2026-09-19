@@ -48,6 +48,7 @@ public sealed class NewsFeedService(
     public async Task PollAsync(CancellationToken ct)
     {
         if (!options.Enabled) return;
+        state.PollStarted(clock.GetUtcNow());
         await _gate.WaitAsync(ct);
         try
         {
@@ -59,7 +60,7 @@ public sealed class NewsFeedService(
             state.PollCompleted(clock.GetUtcNow());
         }
         catch (OperationCanceledException) { throw; }
-        catch (Exception exception) { diagnostics.PollFailed("news", exception); }
+        catch (Exception exception) { diagnostics.PollFailed("news", exception); state.PollFailed(clock.GetUtcNow(), exception.Message); }
         finally { _gate.Release(); }
     }
 

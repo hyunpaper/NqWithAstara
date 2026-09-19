@@ -1770,3 +1770,16 @@ footer {
 }
 .confluence-technique-score { text-align: right; color: var(--muted); }
 .confluence-meta { margin: 0; padding: 0 18px 14px; color: var(--muted); font-size: 10px; }
+
+.news-ticker { width: 100%; overflow: hidden; border-bottom: 1px solid var(--border); background: var(--panel); font-size: 11px; }
+.news-ticker-summary { padding: 5px 18px; color: var(--muted); }
+.news-ticker-viewport { overflow: hidden; outline: none; }
+.news-ticker-viewport:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.news-ticker-track { display: inline-flex; min-width: max-content; gap: 28px; padding: 5px 0; animation: news-ticker-scroll 55s linear infinite; }
+.news-ticker-viewport:hover .news-ticker-track, .news-ticker-viewport:focus-within .news-ticker-track { animation-play-state: paused; }
+.news-ticker-item { color: var(--muted); }
+.news-ticker-item b { color: var(--text); text-transform: uppercase; }
+.news-ticker-item.positive b { color: var(--accent); }
+.news-ticker-item.negative b { color: var(--red); }
+@keyframes news-ticker-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+@media (prefers-reduced-motion: reduce) { .news-ticker-track { animation: none; } }
