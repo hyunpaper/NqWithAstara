@@ -47,6 +47,16 @@ export function applyDrop<T>(
   return { items: next, changed: !sameOrder(next, items) };
 }
 
+/** 한 칸 이동 목표 인덱스 — 경계를 벗어나면 null(버튼 비활성). */
+export function stepTargetIndex(index: number, length: number, delta: number): number | null {
+  const target = index + delta;
+  return target < 0 || target >= length ? null : target;
+}
+
+export function canStep(index: number, length: number, delta: number): boolean {
+  return stepTargetIndex(index, length, delta) !== null;
+}
+
 /** 접근성 대안: Alt+↑/↓만 한 칸 이동으로 해석하고 그 외에는 null. */
 export function keyboardTargetIndex(
   index: number,
@@ -58,6 +68,23 @@ export function keyboardTargetIndex(
   if (delta === 0) return null;
   const target = index + delta;
   return target < 0 || target >= length ? null : target;
+}
+
+export type GrabAction =
+  | { type: "grab" }
+  | { type: "move"; delta: -1 | 1 }
+  | { type: "drop" }
+  | { type: "cancel" };
+
+/** 핸들 키보드 조작: Space로 잡기 → ↑/↓ 이동 → Space/Enter 놓기, Esc 취소. */
+export function grabKeyAction(key: string, grabbed: boolean): GrabAction | null {
+  const space = key === " " || key === "Spacebar";
+  if (!grabbed) return space ? { type: "grab" } : null;
+  if (space || key === "Enter") return { type: "drop" };
+  if (key === "ArrowUp") return { type: "move", delta: -1 };
+  if (key === "ArrowDown") return { type: "move", delta: 1 };
+  if (key === "Escape") return { type: "cancel" };
+  return null;
 }
 
 export const WATCH_ORDER_URL = "/api/watchlist/order";

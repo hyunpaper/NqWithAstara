@@ -1,14 +1,21 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
-import { Trash2 } from "lucide-react";
+import type {
+  KeyboardEvent as ReactKeyboardEvent,
+  PointerEvent as ReactPointerEvent,
+  ReactNode,
+} from "react";
+import { ChevronDown, ChevronUp, GripVertical, Trash2 } from "lucide-react";
 import {
   LONG_PRESS_MS,
   applyDrop,
+  canStep,
   exceedsPressSlop,
+  grabKeyAction,
   insertionIndex,
   keyboardTargetIndex,
   moveItem,
   sameOrder,
+  stepTargetIndex,
   sameSet,
   type WatchRowRect,
 } from "./watchReorder";
@@ -57,7 +64,7 @@ type PressState = {
   rects: WatchRowRect[];
 };
 
-/// <summary>꾹 눌러 드래그·Alt+화살표로 순서를 바꾸는 관심종목 목록 (§UI, #224)</summary>
+/// <summary>그립 핸들 즉시 드래그·꾹 눌러 드래그·키보드로 순서를 바꾸는 관심종목 목록 (§UI, #229)</summary>
 export function WatchList({
   items,
   selected,
@@ -77,9 +84,11 @@ export function WatchList({
 }) {
   const [pending, setPending] = useState<string[] | null>(null);
   const [drag, setDrag] = useState<{ symbol: string; insertion: number } | null>(null);
+  const [grab, setGrab] = useState<{ symbol: string; origin: string[] } | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const press = useRef<PressState | null>(null);
   const suppressClick = useRef(false);
+  const saving = useRef(false);
 
   const serverSymbols = items.map((x) => x.symbol);
   const serverKey = serverSymbols.join(",");
@@ -91,6 +100,11 @@ export function WatchList({
 
   useEffect(() => {
     setPending((current) => (current && !sameSet(current, serverSymbols) ? null : current));
+    setGrab((current) => (current && !sameSet(current.origin, serverSymbols) ? null : current));
+    if (press.current && !sameSet([press.current.symbol, ...serverSymbols], serverSymbols)) {
+      clearPress();
+      setDrag(null);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverKey]);
 
@@ -105,18 +119,66 @@ export function WatchList({
     press.current = null;
   };
 
-  const commit = async (next: string[]) => {
-    if (sameOrder(next, symbols)) return;
+  const save = async (next: string[]) => {
+    if (saving.current) return;
+    saving.current = true;
     setPending(next);
     try {
       await saveOrder(next);
     } catch (e) {
       setPending(null);
       onError(e instanceof Error ? e.message : "관심종목 순서를 저장하지 못했습니다");
+    } finally {
+      saving.current = false;
     }
   };
 
-  const beginPress = (e: ReactPointerEvent<HTMLDivElement>, symbol: string, index: number) => {
+  const commit = async (next: string[]) => {
+    if (sameOrder(next, symbols)) return;
+    await save(next);
+  };
+
+  const grabKey = (e: ReactKeyboardEvent<HTMLElement>, symbol: string) => {
+    const action = grabKeyAction(e.key, grab?.symbol === symbol);
+    if (!action) return;
+    e.preventDefault();
+    if (action.type === "grab") {
+      setGrab({ symbol, origin: symbols });
+      return;
+    }
+    if (action.type === "move") {
+      if (saving.current) return;
+      const index = symbols.indexOf(symbol);
+      const target = stepTargetIndex(index, symbols.length, action.delta);
+      if (target != null) setPending(moveItem(symbols, index, target));
+      return;
+    }
+    const origin = grab!.origin;
+    setGrab(null);
+    if (action.type === "cancel") {
+      setPending(origin);
+      return;
+    }
+    if (!sameOrder(symbols, origin)) void save(symbols);
+  };
+
+  const step = (symbol: string, delta: number) => {
+    if (saving.current) return;
+    const base = grab?.origin ?? symbols;
+    const index = base.indexOf(symbol);
+    const target = stepTargetIndex(index, base.length, delta);
+    if (target == null) return;
+    const next = moveItem(base, index, target);
+    if (sameOrder(next, serverSymbols)) return;
+    void save(next);
+  };
+
+  const beginPress = (
+    e: ReactPointerEvent<HTMLElement>,
+    symbol: string,
+    index: number,
+    immediate = false,
+  ) => {
     if (e.pointerType === "mouse" && e.button !== 0) return;
     suppressClick.current = false;
     clearPress();
@@ -133,7 +195,7 @@ export function WatchList({
       insertion: index,
       rects: [],
     };
-    state.timer = window.setTimeout(() => {
+    const activate = () => {
       state.rects = measure();
       state.active = true;
       try {
@@ -142,11 +204,13 @@ export function WatchList({
         /* 포인터 캡처를 지원하지 않는 환경 */
       }
       setDrag({ symbol, insertion: index });
-    }, LONG_PRESS_MS);
+    };
+    if (immediate) activate();
+    else state.timer = window.setTimeout(activate, LONG_PRESS_MS);
     press.current = state;
   };
 
-  const movePress = (e: ReactPointerEvent<HTMLDivElement>) => {
+  const movePress = (e: ReactPointerEvent<HTMLElement>) => {
     const state = press.current;
     if (!state || state.pointerId !== e.pointerId) return;
     if (!state.active) {
@@ -158,7 +222,7 @@ export function WatchList({
     setDrag({ symbol: state.symbol, insertion: state.insertion });
   };
 
-  const endPress = (e: ReactPointerEvent<HTMLDivElement>) => {
+  const endPress = (e: ReactPointerEvent<HTMLElement>) => {
     const state = press.current;
     if (!state || state.pointerId !== e.pointerId) return;
     clearPress();
@@ -174,17 +238,26 @@ export function WatchList({
     setDrag(null);
   };
 
+  const rollbackGrab = () => {
+    clearPress();
+    setDrag(null);
+    if (grab) setPending(grab.origin);
+    setGrab(null);
+  };
+
   if (!items.length) return <div className="watch-list">{empty}</div>;
 
   return (
-    <div className="watch-list" ref={listRef}>
+    <div className="watch-list" ref={listRef} onBlur={(e) => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) rollbackGrab();
+    }}>
       {ordered.map((item, index) => (
         <Fragment key={item.symbol}>
           {drag && drag.insertion === index && (
             <div className="watch-drop-marker" aria-hidden="true" />
           )}
           <div
-            className={`watch-row ${selected === item.symbol ? "active" : ""} ${drag?.symbol === item.symbol ? "dragging" : ""}`}
+            className={`watch-row ${selected === item.symbol ? "active" : ""} ${drag?.symbol === item.symbol ? "dragging" : ""} ${grab?.symbol === item.symbol ? "grabbed" : ""}`}
             data-symbol={item.symbol}
             onPointerDown={(e) => beginPress(e, item.symbol, index)}
             onPointerMove={movePress}
@@ -192,9 +265,26 @@ export function WatchList({
             onPointerCancel={cancelPress}
           >
             <button
+              className="watch-grip"
+              aria-label={`${item.symbol} 순서 변경 핸들`}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                beginPress(e, item.symbol, index, true);
+              }}
+              onPointerMove={movePress}
+              onPointerUp={endPress}
+              onPointerCancel={cancelPress}
+              onClick={(e) => e.preventDefault()}
+              onKeyDown={(e) => grabKey(e, item.symbol)}
+              aria-pressed={grab?.symbol === item.symbol}
+            >
+              <GripVertical size={14} />
+            </button>
+            <button
               className="watch-select"
               aria-label={`${item.symbol} ${item.name}`}
               onClick={() => {
+                rollbackGrab();
                 if (suppressClick.current) {
                   suppressClick.current = false;
                   return;
@@ -219,9 +309,25 @@ export function WatchList({
               />
             </button>
             <button
+              className="watch-move"
+              aria-label={`${item.symbol} 위로 이동`}
+              disabled={!canStep(index, symbols.length, -1)}
+              onClick={() => { rollbackGrab(); step(item.symbol, -1); }}
+            >
+              <ChevronUp size={14} />
+            </button>
+            <button
+              className="watch-move"
+              aria-label={`${item.symbol} 아래로 이동`}
+              disabled={!canStep(index, symbols.length, 1)}
+              onClick={() => { rollbackGrab(); step(item.symbol, 1); }}
+            >
+              <ChevronDown size={14} />
+            </button>
+            <button
               className="delete"
               aria-label={`${item.symbol} 관심종목 삭제`}
-              onClick={() => onDelete(item.symbol)}
+              onClick={() => { rollbackGrab(); onDelete(item.symbol); }}
             >
               <Trash2 size={14} />
             </button>

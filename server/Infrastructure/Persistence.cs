@@ -26,4 +26,21 @@ public sealed class LocalStore(IWebHostEnvironment env) : Application.ILocalStor
         }
         finally { _gate.Release(); }
     }
+
+    /// <summary>같은 잠금 안에서 백업 → 변경을 처리한다. 백업 쓰기가 실패하면 원본 파일을 건드리지 않는다 (#228).</summary>
+    public async Task<TResult> UpdateWithBackup<T, TResult>(string file, string backupFile, T fallback, Func<T, (T Data, TResult Result)> change)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            Directory.CreateDirectory(_root); var p = Path.Combine(_root, file);
+            var raw = File.Exists(p) ? await File.ReadAllTextAsync(p) : null;
+            var value = raw is null ? fallback : JsonSerializer.Deserialize<T>(raw, Json) ?? fallback;
+            var backupPath = Path.Combine(_root, backupFile); var backupTmp = backupPath + ".tmp";
+            await File.WriteAllTextAsync(backupTmp, raw ?? JsonSerializer.Serialize(value, Json)); File.Move(backupTmp, backupPath, false);
+            var changed = change(value); var t = p + ".tmp";
+            await File.WriteAllTextAsync(t, JsonSerializer.Serialize(changed.Data, Json)); File.Move(t, p, true); return changed.Result;
+        }
+        finally { _gate.Release(); }
+    }
 }

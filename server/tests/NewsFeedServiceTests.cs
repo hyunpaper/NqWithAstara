@@ -31,6 +31,8 @@ public sealed class NewsFeedServiceTests
 
         public Task PollAsync() => Service.PollAsync(CancellationToken.None);
 
+        public Task PollAsync(CancellationToken ct) => Service.PollAsync(ct);
+
         public void Page(int page, params NewsFeedItem[] items) => Feed.Pages[page] = items.ToList();
 
         public IReadOnlyList<NewsRecord> Saved() => Store.Files.TryGetValue("2026-09-12.jsonl", out var lines)
@@ -342,6 +344,32 @@ public sealed class NewsFeedServiceTests
         Assert.Equal("news-feed", Assert.Single(harness.Diagnostics.Failures).Scope);
         Assert.Empty(harness.Store.Texts);
         Assert.NotNull(harness.State.LastPollAt);
+    }
+
+    [Fact]
+    public async Task NonCancelledFeedTimeoutIsReportedWithoutStoppingPolling()
+    {
+        var harness = new Harness();
+        harness.Feed.ListError = new OperationCanceledException("timeout");
+
+        await harness.PollAsync();
+
+        Assert.Equal("news-feed", Assert.Single(harness.Diagnostics.Failures).Scope);
+        Assert.Equal("timeout", harness.State.LastError);
+        Assert.Null(harness.State.LastSuccessAt);
+    }
+
+    [Fact]
+    public async Task HostCancellationPropagatesWithoutRecordingFeedFailure()
+    {
+        var harness = new Harness();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => harness.PollAsync(cts.Token));
+
+        Assert.Empty(harness.Diagnostics.Failures);
+        Assert.Null(harness.State.LastError);
     }
 
     [Fact]

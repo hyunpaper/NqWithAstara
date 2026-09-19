@@ -43,11 +43,16 @@ builder.Services.AddSingleton<IStructuralTradeEntries, StructuralTradeEntryServi
 builder.Services.AddSingleton<StructureAlertPublisher>();
 // 이슈 #132: 종목 메타(`/stocks`) 세션 캐시 — 구조 게이트와 회전율 지표가 공유한다.
 builder.Services.AddSingleton<SymbolMetadataService>();
-builder.Services.AddSingleton<StructureObservationWriter>(); builder.Services.AddSingleton<StructureAnalysisService>();
+builder.Services.AddSingleton<StructureObservationWriter>();
+builder.Services.AddSingleton<RejectedPlanResearchService>(sp => {
+    var cfg = sp.GetRequiredService<IConfiguration>().GetSection("Research:RejectedPlan");
+    return new RejectedPlanResearchService(sp.GetRequiredService<ILocalStore>(), new RejectedPlanResearchOptions(cfg.GetValue("Enabled", false), Math.Clamp(cfg.GetValue("Limit", 500), 1, 5000)));
+});
+builder.Services.AddSingleton<StructureAnalysisService>();
 // 이슈 #41: 폴링 → 구조 엔진 호가 배선. 새 게이트웨이가 아니라 LiquidityQueryService 캐시를 공유한다.
 builder.Services.AddSingleton<StructureLiquidityFeed>();
 builder.Services.AddSingleton<MonitorRuntimeState>(); builder.Services.AddSingleton<MonitorPollingService>(); builder.Services.AddSingleton<MonitorService>(); builder.Services.AddSingleton<IMonitorSignals>(x => x.GetRequiredService<MonitorPollingService>());
-builder.Services.AddSingleton<MonitorControlService>(); builder.Services.AddSingleton<MetricsQueryService>(); builder.Services.AddSingleton<LiquidityQueryService>(); builder.Services.AddSingleton<SimulationReportQueryService>(); builder.Services.AddSingleton<ValidationQueryService>(); builder.Services.AddSingleton<CatalogQueryService>(); builder.Services.AddSingleton<PositionService>(); builder.Services.AddSingleton<StateQueryService>(); builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<MonitorControlService>(); builder.Services.AddSingleton<MetricsQueryService>(); builder.Services.AddSingleton<LiquidityQueryService>(); builder.Services.AddSingleton<SimulationReportQueryService>(); builder.Services.AddSingleton<SimulationResetService>(); builder.Services.AddSingleton<ValidationQueryService>(); builder.Services.AddSingleton<CatalogQueryService>(); builder.Services.AddSingleton<PositionService>(); builder.Services.AddSingleton<StateQueryService>(); builder.Services.AddSingleton(TimeProvider.System);
 // 이슈 #130: 실계좌 US 왕복 수수료와 StructurePolicy.RoundTripFeePercent 정합 확인.
 builder.Services.AddSingleton<FeeRateCheckService>();
 // 이슈 #213: 코드 기본 수수료 단일 출처와 설정 바인딩 결과가 갈라지면 기동 시 경고한다.
