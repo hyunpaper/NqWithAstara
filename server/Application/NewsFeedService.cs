@@ -114,7 +114,8 @@ public sealed class NewsFeedService(
             }
 
             if (known is null) break;
-            var newer = items.Where(x => ParseId(x.Id) > known.LastId).ToArray();
+            var newer = items.Where(x => ParseId(x.Id) > known.LastId
+                || (known.LastCreatedAt is not null && x.CreatedAt > known.LastCreatedAt.Value)).ToArray();
             fresh.AddRange(newer);
             // 신규가 한 페이지를 가득 채웠을 때만 더 과거 페이지를 본다.
             if (newer.Length < items.Count) break;
