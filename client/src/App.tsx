@@ -1513,7 +1513,7 @@ function Dashboard() {
             <h2>전체 성과 요약</h2>
           </div>
           <div className="panel-actions">
-            <button className="theme danger" disabled={removable === 0 || resetBusy} onClick={() => setResetOpen(true)}>
+            <button className="theme danger" disabled={s.total === 0 || resetBusy} onClick={() => setResetOpen(true)}>
               <Trash2 size={15} /> 이력 초기화
             </button>
             <LayoutDashboard size={18} />
