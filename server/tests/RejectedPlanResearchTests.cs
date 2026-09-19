@@ -105,4 +105,17 @@ public sealed class RejectedPlanResearchTests
         Assert.False(await new RejectedPlanResearchService(new ThrowingStore(true), new RejectedPlanResearchOptions(true)).RecordAsync(c, D3.Symbol, "h", D3.At(10)));
         Assert.False(await new RejectedPlanResearchService(new ThrowingStore(false), new RejectedPlanResearchOptions(true)).RecordAsync(c, D3.Symbol, "h", D3.At(10)));
     }
+
+    [Fact]
+    public async Task DisabledReadIsEmptyAndAsOfFilterExcludesFutureRows()
+    {
+        var store = new MemoryObservationStore();
+        var disabled = new RejectedPlanResearchService(store, new RejectedPlanResearchOptions(false));
+        Assert.Empty(await disabled.ReadAsync(1, D3.At(10)));
+        var enabled = new RejectedPlanResearchService(store, new RejectedPlanResearchOptions(true));
+        var c = new StructureCandidateDto("api-filter", "REBOUND", "z", D3.At(1), D3.At(2), D3.At(3), D3.At(4), "REJECTED", null, 99, null, 98.5m, 101, 1.5m, Plan(), [], [], [], false, false);
+        Assert.True(await enabled.RecordAsync(c, D3.Symbol, "h", D3.At(20)));
+        Assert.Empty(await enabled.ReadAsync(10, D3.At(10)));
+        Assert.Single(await enabled.ReadAsync(1, D3.At(20)));
+    }
 }
