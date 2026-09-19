@@ -10,9 +10,11 @@ public sealed class RejectedPlanResearchService(ILocalStore store, RejectedPlanR
     readonly RejectedPlanResearchOptions options = options ?? new();
     readonly SemaphoreSlim gate = new(1, 1);
     public const string FileName = "research/rejected-plans.json";
+    public bool Enabled => options.Enabled;
 
     public async Task<IReadOnlyList<RejectedPlanResearchRow>> ReadAsync(int limit = 100, DateTimeOffset? asOf = null, CancellationToken ct = default)
     {
+        if (!options.Enabled) return [];
         var rows = await store.Read(FileName, new List<RejectedPlanResearchRow>());
         return rows.Where(x => asOf is null || x.AsOf <= asOf).OrderByDescending(x => x.AsOf).Take(Math.Clamp(limit, 1, 500)).ToArray();
     }
