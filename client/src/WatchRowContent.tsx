@@ -234,9 +234,10 @@ export function WatchList({
     setDrag(null);
   };
 
-  const cancelGrab = () => {
+  const rollbackGrab = () => {
     clearPress();
     setDrag(null);
+    if (grab) setPending(grab.origin);
     setGrab(null);
   };
 
@@ -244,7 +245,7 @@ export function WatchList({
 
   return (
     <div className="watch-list" ref={listRef} onBlur={(e) => {
-      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) cancelGrab();
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) rollbackGrab();
     }}>
       {ordered.map((item, index) => (
         <Fragment key={item.symbol}>
@@ -279,7 +280,7 @@ export function WatchList({
               className="watch-select"
               aria-label={`${item.symbol} ${item.name}`}
               onClick={() => {
-                cancelGrab();
+                rollbackGrab();
                 if (suppressClick.current) {
                   suppressClick.current = false;
                   return;
@@ -307,7 +308,7 @@ export function WatchList({
               className="watch-move"
               aria-label={`${item.symbol} 위로 이동`}
               disabled={!canStep(index, symbols.length, -1)}
-              onClick={() => { cancelGrab(); step(index, -1); }}
+              onClick={() => { rollbackGrab(); step(index, -1); }}
             >
               <ChevronUp size={14} />
             </button>
@@ -315,14 +316,14 @@ export function WatchList({
               className="watch-move"
               aria-label={`${item.symbol} 아래로 이동`}
               disabled={!canStep(index, symbols.length, 1)}
-              onClick={() => { cancelGrab(); step(index, 1); }}
+              onClick={() => { rollbackGrab(); step(index, 1); }}
             >
               <ChevronDown size={14} />
             </button>
             <button
               className="delete"
               aria-label={`${item.symbol} 관심종목 삭제`}
-              onClick={() => { cancelGrab(); onDelete(item.symbol); }}
+              onClick={() => { rollbackGrab(); onDelete(item.symbol); }}
             >
               <Trash2 size={14} />
             </button>
