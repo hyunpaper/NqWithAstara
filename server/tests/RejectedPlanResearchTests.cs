@@ -76,4 +76,19 @@ public sealed class RejectedPlanResearchTests
         var row = Assert.Single(await service.ReadAsync());
         Assert.Equal("new", row.EventId);
     }
+
+    [Fact]
+    public async Task AnyFuturePlanCutoffIsRejected()
+    {
+        foreach (var future in new[] { "trigger", "confirmed", "structure" })
+        {
+            var store = new MemoryObservationStore();
+            var service = new RejectedPlanResearchService(store, new RejectedPlanResearchOptions(true));
+            var trigger = future == "trigger" ? D3.At(20) : D3.At(1);
+            var confirmed = future == "confirmed" ? D3.At(20) : D3.At(2);
+            var cutoff = future == "structure" ? D3.At(20) : D3.At(3);
+            var c = new StructureCandidateDto(future, "REBOUND", "z", trigger, confirmed, cutoff, D3.At(30), "REJECTED", null, 99, null, 98.5m, 101, 1.5m, Plan(), [], [], [], false, false);
+            Assert.False(await service.RecordAsync(c, D3.Symbol, "hash", D3.At(10)));
+        }
+    }
 }
