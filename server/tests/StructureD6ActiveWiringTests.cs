@@ -214,6 +214,7 @@ public sealed class StructureD6ActiveWiringTests
         MemoryObservationStore? observations = null, StructurePolicy? policy = null)
     {
         var selectedPolicy = policy ?? P;
+        var defaultFixture = ReferenceEquals(selectedPolicy, StructurePolicy.Default);
         var clock = new MovableClock(Fx.At(60));
         var recording = store ?? new RecordingStore();
         if (recording.Watch.Count == 0) recording.Watch.Add(new WatchItem(Fx.Symbol, "테스트"));
@@ -223,13 +224,24 @@ public sealed class StructureD6ActiveWiringTests
         var entries = new CountingEntryPort(new StructuralTradeEntryService(recording));
         var structure = new StructureAnalysisService(recording, new StructureObservationWriter(obs, selectedPolicy), runtime,
             clock, diagnostics, new StructureEngineOptions(mode), selectedPolicy, entries);
-        var gateway = new ScriptedGateway(D6.Session, () => D6.CompletedBars(clock.Now),
-            () => (D6.QuotePrice(clock.Now), clock.Now), () => D6.Daily());
+        var gateway = new ScriptedGateway(D6.Session, () => defaultFixture ? DefaultBars(clock.Now) : D6.CompletedBars(clock.Now),
+            () => (defaultFixture ? DefaultPrice(clock.Now) : D6.QuotePrice(clock.Now), clock.Now), () => defaultFixture ? DefaultDaily() : D6.Daily());
         var poller = new MonitorPollingService(recording, gateway, new QuietStream(), runtime, clock, diagnostics,
             structure);
         runtime.CommitStart();
         return new Harness(poller, recording, obs, runtime, structure, clock, entries, diagnostics);
     }
+
+    static Candle[] DefaultBars(DateTimeOffset now) => D6.CompletedBars(now).Select(Compress).ToArray();
+    static double DefaultPrice(DateTimeOffset now) => 99.90 + (D6.QuotePrice(now) - 99.90) * 0.35;
+    static Candle[] DefaultDaily() => D6.Daily().Select(Compress).ToArray();
+    static Candle Compress(Candle c) => c with
+    {
+        Open = 99.90 + (c.Open - 99.90) * 0.35,
+        High = 99.90 + (c.High - 99.90) * 0.35,
+        Low = 99.90 + (c.Low - 99.90) * 0.35,
+        Close = 99.90 + (c.Close - 99.90) * 0.35,
+    };
 
     static async Task PollAt(Harness harness, int minute, int seconds = 0)
     {
@@ -254,7 +266,7 @@ public sealed class StructureD6ActiveWiringTests
     }
 
     [Fact]
-    public async Task DefaultPolicyLivePollingRecordsPolicyRejectionsWithoutWriting()
+    public async Task DefaultPolicyLivePollingRecordsTheSamePolicyRejectionBoundary()
     {
         var harness = Build(StructureEngineMode.Active, policy: StructurePolicy.Default);
         await PollAt(harness, 64);
@@ -264,8 +276,8 @@ public sealed class StructureD6ActiveWiringTests
         Assert.Equal(StructurePolicy.Default.PolicyHash, view.PolicyHash);
         Assert.Equal("REJECTED", view.CandidateSummary);
         var candidate = Assert.Single(view.Candidates);
-        Assert.Contains("EXCESSIVE_REWARD_TO_RISK", candidate.RejectionCodes);
         Assert.Contains("TREND_DEEPLY_OPPOSES_REBOUND", candidate.RejectionCodes);
+        Assert.Contains("STOP_INSIDE_COST", candidate.RejectionCodes);
     }
 
     /// <summary>
