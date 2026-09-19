@@ -43,7 +43,7 @@ builder.Services.AddSingleton<IStructuralTradeEntries, StructuralTradeEntryServi
 builder.Services.AddSingleton<StructureAlertPublisher>();
 // 이슈 #132: 종목 메타(`/stocks`) 세션 캐시 — 구조 게이트와 회전율 지표가 공유한다.
 builder.Services.AddSingleton<SymbolMetadataService>();
-builder.Services.AddSingleton<StructureObservationWriter>(); builder.Services.AddSingleton<StructureAnalysisService>();
+builder.Services.AddSingleton<StructureObservationWriter>(); builder.Services.AddSingleton<RejectedPlanResearchService>(sp => new RejectedPlanResearchService(sp.GetRequiredService<ILocalStore>(), false)); builder.Services.AddSingleton<StructureAnalysisService>();
 // 이슈 #41: 폴링 → 구조 엔진 호가 배선. 새 게이트웨이가 아니라 LiquidityQueryService 캐시를 공유한다.
 builder.Services.AddSingleton<StructureLiquidityFeed>();
 builder.Services.AddSingleton<MonitorRuntimeState>(); builder.Services.AddSingleton<MonitorPollingService>(); builder.Services.AddSingleton<MonitorService>(); builder.Services.AddSingleton<IMonitorSignals>(x => x.GetRequiredService<MonitorPollingService>());

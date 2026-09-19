@@ -6,7 +6,10 @@ public sealed record RejectedPlanResearchRow(string EventId, string Symbol, stri
 /// <summary>REJECTED 후보 중 실제 plan이 있는 항목만 별도 연구 파일에 보존한다.</summary>
 public sealed class RejectedPlanResearchService(ILocalStore store, bool enabled = false, int limit = 500)
 {
-    public const string FileName = "research-rejected-plans.json";
+    public const string FileName = "research/rejected-plans.json";
+
+    public Task<IReadOnlyList<RejectedPlanResearchRow>> ReadAsync(CancellationToken ct = default) =>
+        store.Read(FileName, new List<RejectedPlanResearchRow>()).ContinueWith(x => (IReadOnlyList<RejectedPlanResearchRow>)x.Result, ct);
 
     public async Task<bool> RecordAsync(StructureCandidateDto candidate, string symbol, string policyHash,
         DateTimeOffset asOf, CancellationToken ct = default)
