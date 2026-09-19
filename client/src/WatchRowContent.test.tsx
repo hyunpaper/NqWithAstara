@@ -111,6 +111,18 @@ describe("관심종목 키보드 잡기 확정 상태", () => {
     fireEvent.click(screen.getByRole("button", { name: /AAA Holdings/ }));
     expect(rowOrder(container)).toEqual(SYMBOLS);
   });
+
+  it("잡기 중 한 칸 이동 버튼은 원래 순서 기준으로 저장한다", async () => {
+    const saveOrder = vi.fn(async () => {});
+    const { container } = renderWatchList(saveOrder);
+    const grip = screen.getByRole("button", { name: /AAA 순서 변경 핸들/ });
+    fireEvent.keyDown(grip, { key: " " });
+    fireEvent.keyDown(grip, { key: "ArrowDown" });
+    fireEvent.click(screen.getByRole("button", { name: /AAA 아래로 이동/ }));
+    await act(async () => {});
+    expect(saveOrder).toHaveBeenCalledWith(["BBB", "AAA", "CCC"]);
+    expect(rowOrder(container)).toEqual(["BBB", "AAA", "CCC"]);
+  });
 });
 
 function stubRowRects() {

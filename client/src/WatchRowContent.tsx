@@ -162,11 +162,15 @@ export function WatchList({
     if (!sameOrder(symbols, origin)) void save(symbols);
   };
 
-  const step = (index: number, delta: number) => {
+  const step = (symbol: string, delta: number) => {
     if (saving.current) return;
-    const target = stepTargetIndex(index, symbols.length, delta);
+    const base = grab?.origin ?? symbols;
+    const index = base.indexOf(symbol);
+    const target = stepTargetIndex(index, base.length, delta);
     if (target == null) return;
-    void commit(moveItem(symbols, index, target));
+    const next = moveItem(base, index, target);
+    if (sameOrder(next, serverSymbols)) return;
+    void save(next);
   };
 
   const beginPress = (
@@ -308,7 +312,7 @@ export function WatchList({
               className="watch-move"
               aria-label={`${item.symbol} 위로 이동`}
               disabled={!canStep(index, symbols.length, -1)}
-              onClick={() => { rollbackGrab(); step(index, -1); }}
+              onClick={() => { rollbackGrab(); step(item.symbol, -1); }}
             >
               <ChevronUp size={14} />
             </button>
@@ -316,7 +320,7 @@ export function WatchList({
               className="watch-move"
               aria-label={`${item.symbol} 아래로 이동`}
               disabled={!canStep(index, symbols.length, 1)}
-              onClick={() => { rollbackGrab(); step(index, 1); }}
+              onClick={() => { rollbackGrab(); step(item.symbol, 1); }}
             >
               <ChevronDown size={14} />
             </button>
