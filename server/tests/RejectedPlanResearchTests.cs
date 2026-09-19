@@ -37,4 +37,19 @@ public sealed class RejectedPlanResearchTests
         Assert.Single(results, x => x);
         Assert.Single(await service.ReadAsync());
     }
+
+    [Fact]
+    public async Task EnabledRejectedPlanUsesOnlyResearchFileAndLeavesMainTradeFilesUntouched()
+    {
+        var store = new MemoryObservationStore();
+        var service = new RejectedPlanResearchService(store, new RejectedPlanResearchOptions(true));
+        var c = new StructureCandidateDto("integration-event", "REBOUND", "z", D3.At(1), D3.At(2), D3.At(3), D3.At(4), "REJECTED", null, 99, null, 98.5m, 101, 1.5m, Plan(), [], ["COST"], [], false, false);
+        Assert.True(await service.RecordAsync(c, D3.Symbol, "hash", D3.At(10)));
+        Assert.Contains(RejectedPlanResearchService.FileName, store.Files.Keys);
+        Assert.DoesNotContain("simtrades.json", store.Files.Keys);
+        Assert.DoesNotContain("positions.json", store.Files.Keys);
+        var row = Assert.Single(await service.ReadAsync());
+        Assert.Null(row.HorizonAt);
+        Assert.Null(row.Outcome);
+    }
 }
