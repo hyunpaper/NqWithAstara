@@ -3,6 +3,12 @@ using Xunit;
 
 public sealed class RejectedPlanResearchTests
 {
+    sealed class ThrowingStore(bool read) : ILocalStore
+    {
+        public Task<T> Read<T>(string file, T fallback) => read ? throw new IOException("read") : Task.FromResult(fallback);
+        public Task Write<T>(string file, T data) => read ? Task.CompletedTask : throw new IOException("write");
+    }
+
     static StructurePlanDto Plan() => new("p", "REBOUND", 99, 98, 98.5m, 101, "i", 98, 99,
         "t", 100, 101, .1m, "test", .05m, 1.5m, 1m, 1.5m, null, .1m, .01m, null, false,
         "cost", "fill", D3.At(1), D3.At(60), "v5", "hash", [], "test");
@@ -90,5 +96,13 @@ public sealed class RejectedPlanResearchTests
             var c = new StructureCandidateDto(future, "REBOUND", "z", trigger, confirmed, cutoff, D3.At(30), "REJECTED", null, 99, null, 98.5m, 101, 1.5m, Plan(), [], [], [], false, false);
             Assert.False(await service.RecordAsync(c, D3.Symbol, "hash", D3.At(10)));
         }
+    }
+
+    [Fact]
+    public async Task ReadAndWriteFailuresAreIsolated()
+    {
+        var c = new StructureCandidateDto("failure", "REBOUND", "z", D3.At(1), D3.At(2), D3.At(3), D3.At(4), "REJECTED", null, 99, null, 98.5m, 101, 1.5m, Plan(), [], [], [], false, false);
+        Assert.False(await new RejectedPlanResearchService(new ThrowingStore(true), new RejectedPlanResearchOptions(true)).RecordAsync(c, D3.Symbol, "h", D3.At(10)));
+        Assert.False(await new RejectedPlanResearchService(new ThrowingStore(false), new RejectedPlanResearchOptions(true)).RecordAsync(c, D3.Symbol, "h", D3.At(10)));
     }
 }
