@@ -59,7 +59,11 @@ public sealed class NewsFeedService(
             state.QueueDepth(QueueDepth);
             state.PollCompleted(clock.GetUtcNow());
         }
-        catch (OperationCanceledException) { throw; }
+        catch (OperationCanceledException exception) when (!ct.IsCancellationRequested)
+        {
+            diagnostics.PollFailed("news-feed", exception);
+            state.PollFailed(clock.GetUtcNow(), exception.Message);
+        }
         catch (Exception exception) { diagnostics.PollFailed("news-feed", exception); state.PollFailed(clock.GetUtcNow(), exception.Message); }
         finally { _gate.Release(); }
     }

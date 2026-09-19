@@ -345,6 +345,19 @@ public sealed class NewsFeedServiceTests
     }
 
     [Fact]
+    public async Task NonCancelledFeedTimeoutIsReportedWithoutStoppingPolling()
+    {
+        var harness = new Harness();
+        harness.Feed.ListError = new OperationCanceledException("timeout");
+
+        await harness.PollAsync();
+
+        Assert.Equal("news-feed", Assert.Single(harness.Diagnostics.Failures).Scope);
+        Assert.Equal("timeout", harness.State.LastError);
+        Assert.Null(harness.State.LastSuccessAt);
+    }
+
+    [Fact]
     public async Task RestoreReadsTodayFileSoQueriesSurviveRestart()
     {
         var harness = new Harness();
