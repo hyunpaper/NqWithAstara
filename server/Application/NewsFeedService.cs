@@ -48,6 +48,7 @@ public sealed class NewsFeedService(
     public async Task PollAsync(CancellationToken ct)
     {
         if (!options.Enabled) return;
+        state.PollStarted(clock.GetUtcNow());
         await _gate.WaitAsync(ct);
         try
         {
@@ -58,8 +59,13 @@ public sealed class NewsFeedService(
             state.QueueDepth(QueueDepth);
             state.PollCompleted(clock.GetUtcNow());
         }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception exception) { diagnostics.PollFailed("news", exception); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (OperationCanceledException exception)
+        {
+            diagnostics.PollFailed("news-feed", exception);
+            state.PollFailed(clock.GetUtcNow(), exception.Message);
+        }
+        catch (Exception exception) { diagnostics.PollFailed("news-feed", exception); state.PollFailed(clock.GetUtcNow(), exception.Message); }
         finally { _gate.Release(); }
     }
 
@@ -97,8 +103,6 @@ public sealed class NewsFeedService(
         {
             IReadOnlyList<NewsFeedItem> items;
             try { items = await feed.ListAsync(page, ct); }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested) { break; }
-            catch (Exception exception) { diagnostics.PollFailed("news-feed", exception); break; }
             finally { budget--; }
 
             if (items.Count == 0) break;

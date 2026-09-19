@@ -54,6 +54,7 @@ import { tradeEntryTooltip } from "./dashboardTypes";
 import { blockTradeLabel, flowSourceLabel } from "./tradeTape";
 import { turnoverText } from "./metricsFormat";
 import NewsPanel from "./NewsPanel";
+import NewsTicker from "./NewsTicker";
 import type { NewsSymbolScore } from "./newsTypes";
 import {
   findSymbolScore,
@@ -1029,6 +1030,7 @@ export default function App() {
             </button>
           </div>
         </header>
+        <NewsTicker />
         {notice && (
           <div className="notice">
             <Bell size={15} />

@@ -48,6 +48,9 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
     {
         enabled = options.Enabled,
         lastPollAt = state.LastPollAt,
+        lastAttemptAt = state.LastAttemptAt,
+        lastSuccessAt = state.LastSuccessAt,
+        lastError = state.LastError,
         queue = state.Queue,
         dropped = state.Dropped,
         seen = state.Seen,

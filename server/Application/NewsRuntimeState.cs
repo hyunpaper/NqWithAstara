@@ -58,6 +58,9 @@ public sealed class NewsRuntimeState
     readonly Dictionary<string, LinkedListNode<NewsRecord>> _index = new(StringComparer.Ordinal);
 
     public DateTimeOffset? LastPollAt { get; private set; }
+    public DateTimeOffset? LastAttemptAt { get; private set; }
+    public DateTimeOffset? LastSuccessAt { get; private set; }
+    public string? LastError { get; private set; }
     public int Queue { get; private set; }
     public long Dropped { get; private set; }
     public long Seen { get; private set; }
@@ -65,7 +68,9 @@ public sealed class NewsRuntimeState
     public bool OllamaOk { get; private set; } = true;
     public bool StorageLimited { get; private set; }
 
-    public void PollCompleted(DateTimeOffset at) { lock (_gate) LastPollAt = at; }
+    public void PollStarted(DateTimeOffset at) { lock (_gate) LastAttemptAt = at; }
+    public void PollCompleted(DateTimeOffset at) { lock (_gate) { LastPollAt = at; LastSuccessAt = at; LastError = null; } }
+    public void PollFailed(DateTimeOffset at, string error) { lock (_gate) { LastPollAt = at; LastError = error; } }
     public void QueueDepth(int depth) { lock (_gate) Queue = depth; }
     public void Drop(int count) { lock (_gate) Dropped += count; }
     public void SeenArticles(int count) { lock (_gate) Seen += count; }
