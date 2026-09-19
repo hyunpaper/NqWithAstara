@@ -886,28 +886,29 @@ public sealed class StructureAnalysisService(
         };
     }
 
-    static string ReadinessReason(StructureAnalysisView? view, bool failed, string status) => status switch
+    public static string ReadinessReasonForContract(string status, bool failed, string? candidateSummary = null) => status switch
         {
             StructureAnalysisStatus.Disabled => "disabled",
             StructureAnalysisStatus.Stopped => "stopped",
             StructureAnalysisStatus.MarketClosed => "market_closed",
             StructureAnalysisStatus.Unavailable when failed => "evaluation_failed",
             StructureAnalysisStatus.Unavailable => "input_unavailable",
-            StructureAnalysisStatus.Warmup when view is null => "warmup",
-            _ => CandidateReadiness(view)
+            StructureAnalysisStatus.Warmup when candidateSummary is null => "warmup",
+            _ => candidateSummary switch
+            {
+                null => "warmup",
+                "ENTERED" => "entered",
+                "READY" => "ready",
+                "REJECTED" => "candidate_rejected",
+                "INVALIDATED" => "candidate_invalidated",
+                "EXPIRED" => "candidate_expired",
+                "WAIT" => "candidate_inactive",
+                _ => "evaluated_waiting"
+            }
         };
 
-    static string CandidateReadiness(StructureAnalysisView? view) => view?.CandidateSummary switch
-        {
-            null => "warmup",
-            "ENTERED" => "entered",
-            "READY" => "ready",
-            "REJECTED" => "candidate_rejected",
-            "INVALIDATED" => "candidate_invalidated",
-            "EXPIRED" => "candidate_expired",
-            "WAIT" => "candidate_inactive",
-            _ => "evaluated_waiting"
-        };
+    static string ReadinessReason(StructureAnalysisView? view, bool failed, string status) =>
+        ReadinessReasonForContract(status, failed, view?.CandidateSummary);
 
     sealed record StructureLayer(DateTimeOffset Cutoff, ImmutableArray<PriceZone> Zones,
         ImmutableArray<TouchEpisode> Episodes, VolumeProfile Profile, ImmutableArray<string> RetiredZoneIds,
