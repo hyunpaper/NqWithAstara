@@ -17,6 +17,7 @@ import {
   Plus,
   Search,
   Square,
+  Trash2,
   Wifi,
   WifiOff,
   X,
@@ -1450,6 +1451,10 @@ function Dashboard() {
   const [data, setData] = useState<SimData | null>(null);
   const [tab, setTab] = useState<"sim" | "real">("sim");
   const [loadError, setLoadError] = useState("");
+  const [resetOpen, setResetOpen] = useState(false);
+  const [includeOpen, setIncludeOpen] = useState(false);
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetMessage, setResetMessage] = useState("");
   useVisiblePolling(async () => {
     try {
       setData(await api<SimData>("/api/sim"));
@@ -1479,6 +1484,24 @@ function Dashboard() {
   const analysis = data.analysis;
   const byKind = data.byKind;
   const trades = data.trades;
+  const removable = Math.max(0, s.total - s.open);
+  const reset = async () => {
+    setResetBusy(true);
+    try {
+      const result = await api<{ removed: number; kept: number; backup: string | null }>("/api/sim/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ includeOpen }),
+      });
+      setResetOpen(false);
+      setResetMessage(`삭제 ${result.removed}건 · 백업 ${result.backup ?? "없음"}`);
+      setData(await api<SimData>("/api/sim"));
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : "시뮬레이션 이력을 초기화하지 못했습니다.");
+    } finally {
+      setResetBusy(false);
+    }
+  };
   return (
     <div className="dash">
       <DashTabs tab={tab} onChange={setTab} />
@@ -1487,7 +1510,12 @@ function Dashboard() {
           <div>
             <h2>전체 성과 요약</h2>
           </div>
-          <LayoutDashboard size={18} />
+          <div className="panel-actions">
+            <button className="theme danger" disabled={s.total === 0 || resetBusy} onClick={() => setResetOpen(true)}>
+              <Trash2 size={15} /> 이력 초기화
+            </button>
+            <LayoutDashboard size={18} />
+          </div>
         </div>
         <div className="metrics-body">
           <div className="metrics-grid">
@@ -1518,6 +1546,25 @@ function Dashboard() {
           </div>
         </div>
       </section>
+      {resetMessage && <div className="sample-warning">{resetMessage}</div>}
+      {resetOpen && (
+        <div className="panel" role="dialog" aria-modal="true" aria-label="시뮬레이션 이력 초기화">
+          <div className="panel-head">
+            <div>
+              <h2>시뮬레이션 이력 초기화</h2>
+              <p>{includeOpen ? `전체 거래 ${s.total}건을 삭제합니다.` : `종결 거래 ${removable}건을 삭제합니다.`} 백업이 생성됩니다.</p>
+            </div>
+            <button className="theme" onClick={() => setResetOpen(false)} disabled={resetBusy}>취소</button>
+          </div>
+          <label>
+            <input type="checkbox" checked={includeOpen} onChange={(e) => setIncludeOpen(e.target.checked)} />
+            진행 중(OPEN) 거래 {s.open}건도 삭제
+          </label>
+          <div className="panel-actions">
+            <button className="theme danger" onClick={() => void reset()} disabled={resetBusy}>확인</button>
+          </div>
+        </div>
+      )}
       {!!s.missingPnl && <div className="sample-warning">청산 {s.closed}건 중 손익이 없는 {s.missingPnl}건은 승률·평균·합계 계산에서 제외했습니다.</div>}
       {analysis?.sampleWarning && <div className="sample-warning">{analysis.sampleWarning}</div>}
       {analysis && (
