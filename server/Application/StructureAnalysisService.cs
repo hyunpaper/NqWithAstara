@@ -121,7 +121,8 @@ public sealed class StructureAnalysisService(
     IStructuralTradeEntries? tradeEntries = null,
     StructureAlertPublisher? alerts = null,
     SymbolMetadataService? metadata = null,
-    ConfluenceService? confluence = null)
+    ConfluenceService? confluence = null,
+    RejectedPlanResearchService? research = null)
 {
     public const string LatchFile = "structure-lifecycle.json";
     public const string EntryOwnerV4 = "v4";
@@ -478,6 +479,9 @@ public sealed class StructureAnalysisService(
                 PolicyHash, request.Generation, displayLayer, candidateLayer, candidates, trend, quality,
                 notes.ToImmutableArray(), warnings.ToImmutableArray(), view, entryBlocked);
             _published[request.Symbol] = view;
+            if (_options.Mode == StructureEngineMode.Active && research is not null)
+                foreach (var candidate in view.Candidates)
+                    await research.RecordAsync(candidate, view.Symbol, view.PolicyHash, view.AnalysisAsOf ?? now, ct);
         }
     }
 
@@ -894,6 +898,9 @@ public sealed class StructureAnalysisService(
             symbols = rows
         };
     }
+
+    public Task<IReadOnlyList<RejectedPlanResearchRow>> ResearchRejectedAsync(int limit = 100, DateTimeOffset? asOf = null, CancellationToken ct = default) =>
+        research?.ReadAsync(limit, asOf, ct) ?? Task.FromResult<IReadOnlyList<RejectedPlanResearchRow>>([]);
 
     internal static string ReadinessReasonForContract(string status, bool failed, string? candidateSummary = null) => status switch
         {

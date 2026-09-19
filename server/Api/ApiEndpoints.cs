@@ -31,6 +31,7 @@ public static class ApiEndpoints
         app.MapGet("/api/metrics/{symbol}", MetricsAsync);
         app.MapGet("/api/liquidity/{symbol}", LiquidityAsync);
         app.MapGet("/api/structure/{symbol}", StructureAsync);
+        app.MapGet("/api/structure/research/rejected", async (int? limit, DateTimeOffset? asOf, StructureAnalysisService service, CancellationToken ct) => Results.Ok(await service.ResearchRejectedAsync(limit ?? 100, asOf, ct)));
         app.MapGet("/api/confluence/weights", ConfluenceWeights);
         app.MapGet("/api/confluence/{symbol}", ConfluenceAsync);
         app.MapPost("/api/replays", StartReplayAsync);
