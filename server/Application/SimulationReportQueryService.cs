@@ -10,6 +10,30 @@ public sealed record SimulationVersionReport(string Version, string Label, Simul
 /// <summary>이슈 #27: <paramref name="Structure"/>는 additive 필드다 — 기존 /api/sim 소비자의 필드 의미를 바꾸지 않는다.</summary>
 public sealed record SimulationReport(SimulationStats Summary, IEnumerable<SimulationKindReport> ByKind, SimulationAnalysis? Analysis, IEnumerable<SimulationVersionReport> ByVersion, IEnumerable<SimTrade> Trades, StructureCohortReport Structure);
 
+public sealed record SimulationResetResult(int Removed, int Kept, string? Backup);
+
+/// <summary>시뮬 거래 이력 초기화(#228). 삭제 전 백업이 성공해야만 원본을 바꾼다.</summary>
+public sealed class SimulationResetService(ILocalStore store, TimeProvider clock)
+{
+    public const string TradesFile = "simtrades.json";
+
+    public async Task<SimulationResetResult> ResetAsync(bool includeOpen)
+    {
+        var current = await store.Read(TradesFile, new List<SimTrade>());
+        var removable = current.Count(x => includeOpen || !IsOpen(x));
+        if (removable == 0) return new(0, current.Count, null);
+
+        var backup = $"simtrades.backup-{clock.GetLocalNow():yyyyMMdd-HHmmss}.json";
+        return await store.UpdateWithBackup(TradesFile, backup, new List<SimTrade>(), trades =>
+        {
+            List<SimTrade> kept = includeOpen ? new() : trades.Where(IsOpen).ToList();
+            return (kept, new SimulationResetResult(trades.Count - kept.Count, kept.Count, backup));
+        });
+    }
+
+    static bool IsOpen(SimTrade trade) => string.Equals(trade.Status, "OPEN", StringComparison.Ordinal);
+}
+
 public sealed class SimulationReportQueryService(ILocalStore store, TimeProvider clock)
 {
     public async Task<SimulationReport> GetAsync()

@@ -24,6 +24,7 @@ public static class ApiEndpoints
         app.MapPost("/api/start", async (MonitorControlService c, CancellationToken ct) => { await c.StartAsync(ct); return Results.Ok(); });
         app.MapPost("/api/stop", async (MonitorControlService c, CancellationToken ct) => { await c.StopAsync(ct); return Results.Ok(); });
         app.MapGet("/api/sim", async (SimulationReportQueryService q) => Results.Ok(await q.GetAsync()));
+        app.MapPost("/api/sim/reset", SimResetAsync);
         app.MapGet("/api/validation", ValidationAsync);
         app.MapGet("/api/validation/real-vs-v5", RealVsV5Async);
         app.MapPost("/api/validation/real-fills/refresh", RealFillsRefreshAsync);
@@ -66,6 +67,13 @@ public static class ApiEndpoints
     {
         var result = await c.ReorderAsync(body?.Symbols, ct);
         return result.Status == WatchlistChangeStatus.Ok ? Results.NoContent() : Results.BadRequest(new { message = result.Message });
+    }
+    /// <summary>시뮬 거래 이력 초기화(#228). 백업이 실패하면 삭제하지 않고 500을 돌려준다.</summary>
+    static async Task<IResult> SimResetAsync(SimResetRequest? body, SimulationResetService service)
+    {
+        try { return Results.Ok(await service.ResetAsync(body?.IncludeOpen ?? false)); }
+        catch (IOException) { return Results.Problem("백업 생성에 실패해 시뮬 이력을 삭제하지 않았습니다.", statusCode: 500); }
+        catch (UnauthorizedAccessException) { return Results.Problem("백업 생성에 실패해 시뮬 이력을 삭제하지 않았습니다.", statusCode: 500); }
     }
     static async Task<IResult> AddWatchAsync(WatchItem? item, MonitorControlService c, CancellationToken ct) { try { var r = await c.AddAsync(item, ct); return r.Status switch { WatchlistChangeStatus.Ok => Results.Ok(), WatchlistChangeStatus.Invalid => Results.BadRequest(), WatchlistChangeStatus.NotFound => Results.NotFound(), _ => Results.BadRequest(new { message = r.Message }) }; } catch (HttpRequestException) { return Results.Problem("Toss 종목 조회에 실패했습니다.", statusCode: 502); } }
     static async Task<IResult> SearchAsync(string q, CatalogQueryService query, CancellationToken ct) { try { return Results.Ok(await query.SearchAsync(q, ct)); } catch (HttpRequestException) { return Results.Problem("Toss 종목 조회에 실패했습니다.", statusCode: 502); } }
@@ -122,3 +130,5 @@ public static class ApiEndpoints
 }
 
 public sealed record WatchlistOrderRequest(string[]? Symbols);
+
+public sealed record SimResetRequest(bool IncludeOpen);

@@ -6,6 +6,13 @@ public interface ILocalStore
     Task<T> Read<T>(string file, T fallback);
     Task Write<T>(string file, T data);
     Task<TResult> Update<T, TResult>(string file, T fallback, Func<T, (T Data, TResult Result)> change);
+
+    /// <summary>백업 사본을 먼저 만든 뒤 변경한다. 백업이 실패하면 원본을 바꾸지 않는다 (#228).</summary>
+    async Task<TResult> UpdateWithBackup<T, TResult>(string file, string backupFile, T fallback, Func<T, (T Data, TResult Result)> change)
+    {
+        await Write(backupFile, await Read(file, fallback));
+        return await Update(file, fallback, change);
+    }
 }
 
 public interface IMarketDataGateway
