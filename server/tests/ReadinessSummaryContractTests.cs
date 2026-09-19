@@ -76,4 +76,23 @@ public sealed class ReadinessSummaryContractTests
         Assert.Equal("marketClosed", row.GetProperty("status").GetString());
         Assert.Equal("market_closed", row.GetProperty("readinessReason").GetString());
     }
+
+    [Fact]
+    public async Task SummarySerializesInjectedCandidateStateAndSortedRejections()
+    {
+        var runtime = new MonitorRuntimeState();
+        var generation = D3.StartedRuntime(runtime);
+        var service = D3.Service(StructureEngineMode.Active, new MemoryObservationStore(), runtime, new MovableClock(D3.At(45)));
+        await service.ObserveAsync(D3.Request(generation, 64), CancellationToken.None);
+        Assert.True(service.TryGetPublished(D3.Symbol, out var view));
+        var candidate = new StructureCandidateDto(EventId: "contract", Kind: "REBOUND", ZoneId: "zone",
+            TriggerBarStart: D3.At(40), TriggerConfirmedAt: D3.At(41), StructureCutoff: D3.At(50), ExpiresAt: D3.At(70),
+            State: "REJECTED", EntryQuality: null, EntryReference: 99m, InvalidationAnchor: null, Stop: null,
+            Target: null, NetR: null, Plan: null, Components: [], RejectionCodes: ["TREND", "COST", "TREND"],
+            Notes: [], CounterTrend: false, RetestConfirmed: false);
+        service.PublishForContractTest(view with { CandidateSummary = "REJECTED", Candidates = [candidate] });
+        var row = JsonSerializer.SerializeToElement(service.Summary([D3.Symbol])).GetProperty("symbols")[0];
+        Assert.Equal("candidate_rejected", row.GetProperty("readinessReason").GetString());
+        Assert.Equal(["COST", "TREND"], row.GetProperty("rejectionCodes").EnumerateArray().Select(x => x.GetString()).ToArray());
+    }
 }

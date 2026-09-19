@@ -208,6 +208,14 @@ public sealed class StructureAnalysisService(
     public bool TryGetPublished(string symbol, out StructureAnalysisView view) =>
         _published.TryGetValue(symbol, out view!);
 
+    // 테스트 전용 seam: 실제 공개 Summary 경로를 후보 상태별로 검증하기 위한 주입점이다.
+    internal void PublishForContractTest(StructureAnalysisView view, bool failed = false)
+    {
+        _published[view.Symbol] = view;
+        if (failed) _failed[view.Symbol] = 0;
+        else _failed.TryRemove(view.Symbol, out _);
+    }
+
     // ── 관측 경로 ────────────────────────────────────────────────────────────
 
     public async Task ObserveAsync(StructureObservationRequest request, CancellationToken ct)
