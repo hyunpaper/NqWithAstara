@@ -886,12 +886,13 @@ public sealed class StructureAnalysisService(
         };
     }
 
-    static string ReadinessReason(StructureAnalysisView? view, bool failed, string status) =>
-        failed ? "evaluation_failed" : status == StructureAnalysisStatus.Unavailable ? "input_unavailable" : status switch
+    static string ReadinessReason(StructureAnalysisView? view, bool failed, string status) => status switch
         {
             StructureAnalysisStatus.Disabled => "disabled",
             StructureAnalysisStatus.Stopped => "stopped",
             StructureAnalysisStatus.MarketClosed => "market_closed",
+            StructureAnalysisStatus.Unavailable when failed => "evaluation_failed",
+            StructureAnalysisStatus.Unavailable => "input_unavailable",
             StructureAnalysisStatus.Warmup when view is null => "warmup",
             _ => CandidateReadiness(view)
         };
