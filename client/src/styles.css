@@ -198,6 +198,14 @@ aside {
   transform: scale(1.02);
   opacity: 0.92;
 }
+.watch-row.grabbed {
+  background: var(--soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.watch-row.grabbed .watch-grip {
+  opacity: 1;
+  color: var(--accent);
+}
 .watch-drop-marker {
   height: 0;
   position: relative;
@@ -214,6 +222,34 @@ aside {
 }
 .watch-row.active {
   border-left-color: var(--accent);
+}
+.watch-grip {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  cursor: grab;
+  touch-action: none;
+}
+.watch-row:hover .watch-grip,
+.watch-row.dragging .watch-grip,
+.watch-grip:focus-visible {
+  opacity: 0.7;
+}
+.watch-row.dragging,
+.watch-row.dragging .watch-grip {
+  cursor: grabbing;
+}
+@media (hover: none) {
+  .watch-grip {
+    opacity: 0.7;
+  }
 }
 .watch-select {
   height: 100%;
@@ -267,6 +303,26 @@ aside {
 .watch-list .down {
   flex: 0 0 auto;
   font-size: 12px;
+}
+.watch-move {
+  flex: 0 0 auto;
+  width: 0;
+  opacity: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  display: grid;
+  place-items: center;
+}
+.watch-row:hover .watch-move,
+.watch-move:focus-visible {
+  width: 28px;
+  opacity: 0.7;
+}
+.watch-row:hover .watch-move:disabled {
+  opacity: 0.22;
 }
 .delete {
   opacity: 0;

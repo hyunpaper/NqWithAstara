@@ -78,6 +78,53 @@ const rowOrder = (container: HTMLElement) =>
     (el: HTMLElement) => el.dataset.symbol,
   );
 
+const renderWatchList = (saveOrder = vi.fn(async () => {})) => {
+  const view = render(
+    <WatchList
+      items={listItems()}
+      selected="AAA"
+      onSelect={vi.fn()}
+      onDelete={vi.fn()}
+      saveOrder={saveOrder}
+      onError={vi.fn()}
+    />,
+  );
+  return { ...view, saveOrder };
+};
+
+describe("관심종목 키보드 잡기 확정 상태", () => {
+  it("Space·ArrowDown 뒤 blur면 원래 순서로 되돌리고 저장하지 않는다", () => {
+    const { container, saveOrder } = renderWatchList();
+    const grip = screen.getByRole("button", { name: /AAA 순서 변경 핸들/ });
+    fireEvent.keyDown(grip, { key: " " });
+    fireEvent.keyDown(grip, { key: "ArrowDown" });
+    fireEvent.blur(container.querySelector(".watch-list")!, { relatedTarget: null });
+    expect(rowOrder(container)).toEqual(SYMBOLS);
+    expect(saveOrder).not.toHaveBeenCalled();
+  });
+
+  it("잡기 중 다른 버튼으로 전환하면 원래 순서로 되돌린다", () => {
+    const { container } = renderWatchList();
+    const grip = screen.getByRole("button", { name: /AAA 순서 변경 핸들/ });
+    fireEvent.keyDown(grip, { key: " " });
+    fireEvent.keyDown(grip, { key: "ArrowDown" });
+    fireEvent.click(screen.getByRole("button", { name: /AAA Holdings/ }));
+    expect(rowOrder(container)).toEqual(SYMBOLS);
+  });
+
+  it("잡기 중 한 칸 이동 버튼은 원래 순서 기준으로 저장한다", async () => {
+    const saveOrder = vi.fn(async () => {});
+    const { container } = renderWatchList(saveOrder);
+    const grip = screen.getByRole("button", { name: /AAA 순서 변경 핸들/ });
+    fireEvent.keyDown(grip, { key: " " });
+    fireEvent.keyDown(grip, { key: "ArrowDown" });
+    fireEvent.click(screen.getByRole("button", { name: /AAA 아래로 이동/ }));
+    await act(async () => {});
+    expect(saveOrder).toHaveBeenCalledWith(["BBB", "AAA", "CCC"]);
+    expect(rowOrder(container)).toEqual(["BBB", "AAA", "CCC"]);
+  });
+});
+
 function stubRowRects() {
   const original = HTMLElement.prototype.getBoundingClientRect;
   HTMLElement.prototype.getBoundingClientRect = function rect(this: HTMLElement) {

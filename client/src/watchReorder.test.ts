@@ -11,6 +11,9 @@ import {
   moveItem,
   sameOrder,
   sameSet,
+  stepTargetIndex,
+  canStep,
+  grabKeyAction,
   watchOrderRequest,
 } from "./watchReorder";
 
@@ -83,6 +86,28 @@ describe("watchReorder", () => {
     expect(keyboardTargetIndex(2, 3, { key: "ArrowDown", altKey: true })).toBeNull();
     expect(keyboardTargetIndex(1, 3, { key: "ArrowDown", altKey: false })).toBeNull();
     expect(keyboardTargetIndex(1, 3, { key: "Enter", altKey: true })).toBeNull();
+  });
+
+  it("한 칸 이동 목표는 경계에서 null이다", () => {
+    expect(stepTargetIndex(1, 3, -1)).toBe(0);
+    expect(stepTargetIndex(1, 3, 1)).toBe(2);
+    expect(stepTargetIndex(0, 3, -1)).toBeNull();
+    expect(stepTargetIndex(2, 3, 1)).toBeNull();
+    expect(canStep(0, 3, 1)).toBe(true);
+    expect(canStep(0, 3, -1)).toBe(false);
+    expect(canStep(2, 3, 1)).toBe(false);
+  });
+
+  it("핸들 키보드 조작을 잡기 상태에 따라 해석한다", () => {
+    expect(grabKeyAction(" ", false)).toEqual({ type: "grab" });
+    expect(grabKeyAction("Spacebar", false)).toEqual({ type: "grab" });
+    expect(grabKeyAction("ArrowDown", false)).toBeNull();
+    expect(grabKeyAction(" ", true)).toEqual({ type: "drop" });
+    expect(grabKeyAction("Enter", true)).toEqual({ type: "drop" });
+    expect(grabKeyAction("ArrowUp", true)).toEqual({ type: "move", delta: -1 });
+    expect(grabKeyAction("ArrowDown", true)).toEqual({ type: "move", delta: 1 });
+    expect(grabKeyAction("Escape", true)).toEqual({ type: "cancel" });
+    expect(grabKeyAction("Tab", true)).toBeNull();
   });
 
   it("순서 저장 요청 계약을 고정한다", () => {
