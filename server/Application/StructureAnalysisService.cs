@@ -899,8 +899,8 @@ public sealed class StructureAnalysisService(
         };
     }
 
-    public Task<IReadOnlyList<RejectedPlanResearchRow>> ResearchRejectedAsync(CancellationToken ct = default) =>
-        research?.ReadAsync(ct) ?? Task.FromResult<IReadOnlyList<RejectedPlanResearchRow>>([]);
+    public Task<IReadOnlyList<RejectedPlanResearchRow>> ResearchRejectedAsync(int limit = 100, DateTimeOffset? asOf = null, CancellationToken ct = default) =>
+        research?.ReadAsync(limit, asOf, ct) ?? Task.FromResult<IReadOnlyList<RejectedPlanResearchRow>>([]);
 
     internal static string ReadinessReasonForContract(string status, bool failed, string? candidateSummary = null) => status switch
         {

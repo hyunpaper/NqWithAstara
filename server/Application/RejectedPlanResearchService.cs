@@ -8,8 +8,11 @@ public sealed class RejectedPlanResearchService(ILocalStore store, bool enabled 
 {
     public const string FileName = "research/rejected-plans.json";
 
-    public Task<IReadOnlyList<RejectedPlanResearchRow>> ReadAsync(CancellationToken ct = default) =>
-        store.Read(FileName, new List<RejectedPlanResearchRow>()).ContinueWith(x => (IReadOnlyList<RejectedPlanResearchRow>)x.Result, ct);
+    public async Task<IReadOnlyList<RejectedPlanResearchRow>> ReadAsync(int limit = 100, DateTimeOffset? asOf = null, CancellationToken ct = default)
+    {
+        var rows = await store.Read(FileName, new List<RejectedPlanResearchRow>());
+        return rows.Where(x => asOf is null || x.AsOf <= asOf).OrderByDescending(x => x.AsOf).Take(Math.Clamp(limit, 1, 500)).ToArray();
+    }
 
     public async Task<bool> RecordAsync(StructureCandidateDto candidate, string symbol, string policyHash,
         DateTimeOffset asOf, CancellationToken ct = default)
