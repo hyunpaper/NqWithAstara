@@ -211,10 +211,10 @@ public sealed class StructureD6ActiveWiringTests
         CountingEntryPort Entries, SilentDiagnostics Diagnostics);
 
     static Harness Build(StructureEngineMode mode, RecordingStore? store = null,
-        MemoryObservationStore? observations = null, StructurePolicy? policy = null)
+        MemoryObservationStore? observations = null, StructurePolicy? policy = null, bool useDefaultFixture = false)
     {
         var selectedPolicy = policy ?? P;
-        var defaultFixture = ReferenceEquals(selectedPolicy, StructurePolicy.Default);
+        var defaultFixture = useDefaultFixture;
         var clock = new MovableClock(Fx.At(60));
         var recording = store ?? new RecordingStore();
         if (recording.Watch.Count == 0) recording.Watch.Add(new WatchItem(Fx.Symbol, "테스트"));
@@ -232,9 +232,34 @@ public sealed class StructureD6ActiveWiringTests
         return new Harness(poller, recording, obs, runtime, structure, clock, entries, diagnostics);
     }
 
-    static Candle[] DefaultBars(DateTimeOffset now) => D6.CompletedBars(now).Select(Compress).ToArray();
-    static double DefaultPrice(DateTimeOffset now) => 99.90 + (D6.QuotePrice(now) - 99.90) * 0.35;
-    static Candle[] DefaultDaily() => D6.Daily().Select(Compress).ToArray();
+    static Candle[] DefaultBars(DateTimeOffset now)
+    {
+        var bars = D6.CompletedBars(now).Select(Compress).ToArray();
+        for (var i = 46; i < bars.Length; i++)
+        {
+            var close = 99.46 + (i - 46) * 0.014;
+            bars[i] = bars[i] with { Open = close - .02, High = close + .05, Low = close - .05, Close = close };
+        }
+        for (var i = 35; i < Math.Min(40, bars.Length); i++)
+        {
+            var close = 99.42 + (i - 35) * .012;
+            bars[i] = bars[i] with { Open = close - .02, High = close + .03, Low = 99.30 + (i - 35) * .045, Close = close };
+        }
+        for (var i = 40; i < Math.Min(45, bars.Length); i++)
+        {
+            var close = 99.58 + (i - 40) * .02;
+            bars[i] = bars[i] with { Open = close - .01, High = 99.62 + (i - 40) * .02, Low = close - .04, Close = close };
+        }
+        if (bars.Length > 44) bars[44] = bars[44] with { Open = 99.57, High = 99.62, Low = 99.50, Close = 99.55 };
+        if (bars.Length > 45) bars[45] = bars[45] with { Open = 99.52, High = 99.58, Low = 99.40, Close = 99.46 };
+        if (bars.Length > 46) bars[46] = bars[46] with { Open = 99.40, High = 99.55, Low = 99.30, Close = 99.46 };
+        if (bars.Length > 47) bars[47] = bars[47] with { Open = 99.46, High = 99.58, Low = 99.40, Close = 99.52 };
+        if (bars.Length > 48) bars[48] = bars[48] with { Open = 99.52, High = 99.65, Low = 99.48, Close = 99.60 };
+        if (bars.Length > 49) bars[49] = bars[49] with { Open = 99.60, High = 99.70, Low = 99.55, Close = 99.66 };
+        return bars;
+    }
+    static double DefaultPrice(DateTimeOffset now) => DefaultBars(now).Last().Close;
+    static Candle[] DefaultDaily() => D6.Daily().Select((c, i) => i == 4 ? c with { High = 100.80 } : c).ToArray();
     static Candle Compress(Candle c) => c with
     {
         Open = 99.90 + (c.Open - 99.90) * 0.35,
@@ -277,7 +302,7 @@ public sealed class StructureD6ActiveWiringTests
         Assert.Equal("REJECTED", view.CandidateSummary);
         var candidate = Assert.Single(view.Candidates);
         Assert.Contains("TREND_DEEPLY_OPPOSES_REBOUND", candidate.RejectionCodes);
-        Assert.Contains("STOP_INSIDE_COST", candidate.RejectionCodes);
+        Assert.Contains("EXCESSIVE_REWARD_TO_RISK", candidate.RejectionCodes);
     }
 
     /// <summary>
