@@ -1455,6 +1455,7 @@ function Dashboard() {
   const [includeOpen, setIncludeOpen] = useState(false);
   const [resetBusy, setResetBusy] = useState(false);
   const [resetMessage, setResetMessage] = useState("");
+  const [resetError, setResetError] = useState("");
   useVisiblePolling(async () => {
     try {
       setData(await api<SimData>("/api/sim"));
@@ -1487,17 +1488,18 @@ function Dashboard() {
   const removable = Math.max(0, s.total - s.open);
   const reset = async () => {
     setResetBusy(true);
+    setResetError("");
     try {
       const result = await api<{ removed: number; kept: number; backup: string | null }>("/api/sim/reset", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ includeOpen }),
       });
+      setData(await api<SimData>("/api/sim"));
       setResetOpen(false);
       setResetMessage(`삭제 ${result.removed}건 · 백업 ${result.backup ?? "없음"}`);
-      setData(await api<SimData>("/api/sim"));
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : "시뮬레이션 이력을 초기화하지 못했습니다.");
+      setResetError(e instanceof Error ? e.message : "시뮬레이션 이력을 초기화하지 못했습니다.");
     } finally {
       setResetBusy(false);
     }
@@ -1511,7 +1513,7 @@ function Dashboard() {
             <h2>전체 성과 요약</h2>
           </div>
           <div className="panel-actions">
-            <button className="theme danger" disabled={s.total === 0 || resetBusy} onClick={() => setResetOpen(true)}>
+            <button className="theme danger" disabled={removable === 0 || resetBusy} onClick={() => setResetOpen(true)}>
               <Trash2 size={15} /> 이력 초기화
             </button>
             <LayoutDashboard size={18} />
@@ -1547,6 +1549,7 @@ function Dashboard() {
         </div>
       </section>
       {resetMessage && <div className="sample-warning">{resetMessage}</div>}
+      {resetError && <div className="error"><AlertTriangle size={16} /><span>{resetError}</span></div>}
       {resetOpen && (
         <div className="panel" role="dialog" aria-modal="true" aria-label="시뮬레이션 이력 초기화">
           <div className="panel-head">
@@ -1561,7 +1564,7 @@ function Dashboard() {
             진행 중(OPEN) 거래 {s.open}건도 삭제
           </label>
           <div className="panel-actions">
-            <button className="theme danger" onClick={() => void reset()} disabled={resetBusy}>확인</button>
+            <button className="theme danger" onClick={() => void reset()} disabled={resetBusy || (!includeOpen && removable === 0) || (includeOpen && s.total === 0)}>확인</button>
           </div>
         </div>
       )}
