@@ -363,7 +363,9 @@ public sealed class NewsFeedService(
 
     async Task SaveStateAsync(NewsFeedState next, CancellationToken ct)
     {
-        if (_state is not null && next.LastId <= _state.LastId) return;
+        if (_state is not null
+            && next.LastId <= _state.LastId
+            && (next.LastCreatedAt is null || _state.LastCreatedAt is not null && next.LastCreatedAt <= _state.LastCreatedAt)) return;
         _state = next;
         await store.WriteTextAsync(StateFile, JsonSerializer.Serialize(next, Json), ct);
     }
