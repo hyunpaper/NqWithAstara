@@ -18,6 +18,16 @@ public sealed class RejectedPlanResearchTests
     }
 
     [Fact]
+    public async Task EnabledPlanlessRejectionStillDoesNotWrite()
+    {
+        var store = new MemoryObservationStore();
+        var service = new RejectedPlanResearchService(store, new RejectedPlanResearchOptions(true));
+        var c = new StructureCandidateDto("no-plan", "REBOUND", "z", D3.At(1), D3.At(2), D3.At(3), D3.At(4), "REJECTED", null, 99, null, null, null, null, null, [], ["NO_TARGET"], [], false, false);
+        Assert.False(await service.RecordAsync(c, D3.Symbol, "hash", D3.At(10)));
+        Assert.Empty(store.Files);
+    }
+
+    [Fact]
     public async Task FutureCandidateIsIgnoredAndReadIsLimited()
     {
         var store = new MemoryObservationStore();
@@ -51,5 +61,19 @@ public sealed class RejectedPlanResearchTests
         var row = Assert.Single(await service.ReadAsync());
         Assert.Null(row.HorizonAt);
         Assert.Null(row.Outcome);
+    }
+
+    [Fact]
+    public async Task TwoEventsAreOrderedAndEvictOldestAtLimit()
+    {
+        var store = new MemoryObservationStore();
+        var service = new RejectedPlanResearchService(store, new RejectedPlanResearchOptions(true, 1));
+        foreach (var id in new[] { "old", "new" })
+        {
+            var c = new StructureCandidateDto(id, "REBOUND", "z", D3.At(1), D3.At(2), D3.At(3), D3.At(4), "REJECTED", null, 99, null, 98.5m, 101, 1.5m, Plan(), [], [], [], false, false);
+            Assert.True(await service.RecordAsync(c, D3.Symbol, "hash", id == "old" ? D3.At(10) : D3.At(20)));
+        }
+        var row = Assert.Single(await service.ReadAsync());
+        Assert.Equal("new", row.EventId);
     }
 }
