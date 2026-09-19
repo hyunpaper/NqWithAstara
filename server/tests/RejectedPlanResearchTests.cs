@@ -7,6 +7,7 @@ public sealed class RejectedPlanResearchTests
     {
         public Task<T> Read<T>(string file, T fallback) => read ? throw new IOException("read") : Task.FromResult(fallback);
         public Task Write<T>(string file, T data) => read ? Task.CompletedTask : throw new IOException("write");
+        public Task<TResult> Update<T, TResult>(string file, T fallback, Func<T, (T Data, TResult Result)> change) => throw new IOException("update");
     }
 
     static StructurePlanDto Plan() => new("p", "REBOUND", 99, 98, 98.5m, 101, "i", 98, 99,
