@@ -211,8 +211,9 @@ public sealed class StructureD6ActiveWiringTests
         CountingEntryPort Entries, SilentDiagnostics Diagnostics);
 
     static Harness Build(StructureEngineMode mode, RecordingStore? store = null,
-        MemoryObservationStore? observations = null)
+        MemoryObservationStore? observations = null, StructurePolicy? policy = null)
     {
+        var selectedPolicy = policy ?? P;
         var clock = new MovableClock(Fx.At(60));
         var recording = store ?? new RecordingStore();
         if (recording.Watch.Count == 0) recording.Watch.Add(new WatchItem(Fx.Symbol, "테스트"));
@@ -220,8 +221,8 @@ public sealed class StructureD6ActiveWiringTests
         var runtime = new MonitorRuntimeState();
         var diagnostics = new SilentDiagnostics();
         var entries = new CountingEntryPort(new StructuralTradeEntryService(recording));
-        var structure = new StructureAnalysisService(recording, new StructureObservationWriter(obs, P), runtime,
-            clock, diagnostics, new StructureEngineOptions(mode), P, entries);
+        var structure = new StructureAnalysisService(recording, new StructureObservationWriter(obs, selectedPolicy), runtime,
+            clock, diagnostics, new StructureEngineOptions(mode), selectedPolicy, entries);
         var gateway = new ScriptedGateway(D6.Session, () => D6.CompletedBars(clock.Now),
             () => (D6.QuotePrice(clock.Now), clock.Now), () => D6.Daily());
         var poller = new MonitorPollingService(recording, gateway, new QuietStream(), runtime, clock, diagnostics,
@@ -250,6 +251,21 @@ public sealed class StructureD6ActiveWiringTests
         Assert.True(harness.Structure.TryGetPublished(Fx.Symbol, out var view));
         Assert.True(harness.Store.Trades.Count == 1, "진입 없음 → " + Describe(view));
         return (harness, harness.Store.Trades[0], view);
+    }
+
+    [Fact]
+    public async Task DefaultPolicyLivePollingRecordsPolicyRejectionsWithoutWriting()
+    {
+        var harness = Build(StructureEngineMode.Active, policy: StructurePolicy.Default);
+        await PollAt(harness, 64);
+        await PollAt(harness, 65);
+        Assert.True(harness.Structure.TryGetPublished(Fx.Symbol, out var view));
+        Assert.Empty(harness.Store.Trades);
+        Assert.Equal(StructurePolicy.Default.PolicyHash, view.PolicyHash);
+        Assert.Equal("REJECTED", view.CandidateSummary);
+        var candidate = Assert.Single(view.Candidates);
+        Assert.Contains("EXCESSIVE_REWARD_TO_RISK", candidate.RejectionCodes);
+        Assert.Contains("TREND_DEEPLY_OPPOSES_REBOUND", candidate.RejectionCodes);
     }
 
     /// <summary>
