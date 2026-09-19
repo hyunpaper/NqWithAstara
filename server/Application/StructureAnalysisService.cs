@@ -215,6 +215,7 @@ public sealed class StructureAnalysisService(
         if (failed) _failed[view.Symbol] = 0;
         else _failed.TryRemove(view.Symbol, out _);
     }
+    internal void MarkFailedForContractTest(string symbol) => _failed[symbol] = 0;
 
     // ── 관측 경로 ────────────────────────────────────────────────────────────
 
@@ -894,7 +895,7 @@ public sealed class StructureAnalysisService(
         };
     }
 
-    public static string ReadinessReasonForContract(string status, bool failed, string? candidateSummary = null) => status switch
+    internal static string ReadinessReasonForContract(string status, bool failed, string? candidateSummary = null) => status switch
         {
             StructureAnalysisStatus.Disabled => "disabled",
             StructureAnalysisStatus.Stopped => "stopped",

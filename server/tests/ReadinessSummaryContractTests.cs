@@ -48,18 +48,11 @@ public sealed class ReadinessSummaryContractTests
     }
 
     [Fact]
-    public void RejectionCodesContractIsDistinctAndOrdinalSorted()
-    {
-        var codes = new[] { "TREND", "COST", "TREND", "COST" }
-            .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToArray();
-        Assert.Equal(["COST", "TREND"], codes);
-    }
-
-    [Fact]
     public void SummaryUsesStoppedRuntimeStateBeforeStaleFailure()
     {
         var runtime = new MonitorRuntimeState();
         var service = D3.Service(StructureEngineMode.Active, new MemoryObservationStore(), runtime, new MovableClock(D3.At(45)));
+        service.MarkFailedForContractTest(D3.Symbol);
         var row = JsonSerializer.SerializeToElement(service.Summary([D3.Symbol])).GetProperty("symbols")[0];
         Assert.Equal("stopped", row.GetProperty("status").GetString());
         Assert.Equal("stopped", row.GetProperty("readinessReason").GetString());
@@ -72,6 +65,7 @@ public sealed class ReadinessSummaryContractTests
         var generation = runtime.CommitStart();
         runtime.TryCommit(generation, s => s with { Market = new MarketSession(false, "휴장", null, D3.At(0), D3.At(10)) });
         var service = D3.Service(StructureEngineMode.Active, new MemoryObservationStore(), runtime, new MovableClock(D3.At(45)));
+        service.MarkFailedForContractTest(D3.Symbol);
         var row = JsonSerializer.SerializeToElement(service.Summary([D3.Symbol])).GetProperty("symbols")[0];
         Assert.Equal("marketClosed", row.GetProperty("status").GetString());
         Assert.Equal("market_closed", row.GetProperty("readinessReason").GetString());
