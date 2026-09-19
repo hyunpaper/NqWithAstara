@@ -2,7 +2,9 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WatchList, WatchRowContent } from "./WatchRowContent";
 import { LONG_PRESS_MS } from "./watchReorder";
-import css from "./styles.css?raw";
+import rawCss from "./styles.css?raw";
+
+const css = rawCss.replace(/\r\n/g, "\n");
 
 describe("WatchRowContent", () => {
   it("1행에 티커와 등락률을, 2행에 배지를 둔다", () => {
