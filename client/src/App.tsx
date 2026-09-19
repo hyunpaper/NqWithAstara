@@ -134,7 +134,7 @@ type State = {
    */
   structureEvents?: StructureEventRow[] | null;
   /**
-   * 이슈 #130: 실계좌 US 왕복 수수료와 StructurePolicy.RoundTripFeePercent 불일치·만료 임박 경고.
+   * 이슈 #230: 실계좌 US 왕복 수수료와 StructurePolicy.RoundTripFeePercent 불일치 경고.
    * 구버전 서버에는 없을 수 있으므로 optional로 둔다.
    */
   warnings?: string[] | null;

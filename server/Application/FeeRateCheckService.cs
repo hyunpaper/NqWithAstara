@@ -13,7 +13,6 @@ public sealed class FeeRateCheckService(IMarketDataGateway gateway, StructurePol
     const string BrokerageAccountType = "BROKERAGE";
     const string UsMarketCountry = "US";
     const double MismatchTolerance = .0001;
-    static readonly TimeSpan ExpiryWindow = TimeSpan.FromDays(3);
 
     readonly object _gate = new();
     IReadOnlyList<string> _warnings = [];
@@ -57,15 +56,13 @@ public sealed class FeeRateCheckService(IMarketDataGateway gateway, StructurePol
             var warnings = new List<string>();
             if (row is null)
             {
-                warnings.Add("V5_FEE_RATE_EXPIRING:none");
+                diagnostics.MarketDataFailed("ACCOUNT", "fee-rate-check", new InvalidOperationException("FEE_RATE_CHECK_UNAVAILABLE: no active US commission row"));
             }
             else
             {
                 var roundTrip = row.Rate * 2 * 100;
                 if (Math.Abs((double)roundTrip - policy.RoundTripFeePercent) > MismatchTolerance)
                     warnings.Add($"V5_FEE_RATE_MISMATCH:policy={policy.RoundTripFeePercent.ToString(CultureInfo.InvariantCulture)};account={roundTrip.ToString(CultureInfo.InvariantCulture)}");
-                if (row.EndDate is { } end && end.ToDateTime(TimeOnly.MinValue) - today.ToDateTime(TimeOnly.MinValue) <= ExpiryWindow)
-                    warnings.Add($"V5_FEE_RATE_EXPIRING:{end:yyyy-MM-dd}");
             }
             SetWarnings(warnings);
         }
