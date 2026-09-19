@@ -3,6 +3,10 @@ using Xunit;
 
 public sealed class RejectedPlanResearchTests
 {
+    static StructurePlanDto Plan() => new("p", "REBOUND", 99, 98, 98.5m, 101, "i", 98, 99,
+        "t", 100, 101, .1m, "test", .05m, 1.5m, 1m, 1.5m, null, .1m, .01m, null, false,
+        "cost", "fill", D3.At(1), D3.At(60), "v5", "hash", [], "test");
+
     [Fact]
     public async Task FeatureOffAndPlanlessRejectionDoNotWrite()
     {
@@ -21,5 +25,16 @@ public sealed class RejectedPlanResearchTests
         var candidate = new StructureCandidateDto("e", "REBOUND", "z", D3.At(10), D3.At(2), D3.At(3), D3.At(4), "REJECTED", null, 1, null, null, null, null, null, [], [], [], false, false);
         Assert.False(await service.RecordAsync(candidate, D3.Symbol, "p", D3.At(4)));
         Assert.Empty(await service.ReadAsync(1));
+    }
+
+    [Fact]
+    public async Task EnabledPlanIsIdempotentAcrossAsOfAndParallelCalls()
+    {
+        var store = new MemoryObservationStore();
+        var service = new RejectedPlanResearchService(store, new RejectedPlanResearchOptions(true, 1));
+        var c = new StructureCandidateDto("e", "REBOUND", "z", D3.At(1), D3.At(2), D3.At(3), D3.At(4), "REJECTED", null, 99, null, 98.5m, 101, 1.5m, Plan(), [], ["COST"], [], false, false);
+        var results = await Task.WhenAll(Enumerable.Range(0, 4).Select(i => service.RecordAsync(c, D3.Symbol, "hash", D3.At(10 + i))));
+        Assert.Single(results, x => x);
+        Assert.Single(await service.ReadAsync());
     }
 }
