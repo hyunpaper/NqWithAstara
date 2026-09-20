@@ -523,7 +523,9 @@ public sealed class StructureAnalysisService(
             var stored = await pendingEntries.GetAsync(snapshot.Symbol);
             if (stored is not null)
             {
-                var state = ResolvePendingState(stored.Pending, completedBars);
+                var state = stored.Confirmation is not null
+                    ? new LivePendingResolution(LivePendingDecision.Confirm, null, "PERSISTED_CONFIRMATION")
+                    : ResolvePendingState(stored.Pending, completedBars);
                 if (state.Decision == LivePendingDecision.Wait)
                     return new ActiveEntryResult(candidates, false, "V5_PENDING_CONFIRMATION_WAITING");
                 if (state.Decision == LivePendingDecision.Missed)
@@ -533,10 +535,12 @@ public sealed class StructureAnalysisService(
                 }
                 var claimed = await pendingEntries.ClaimAsync(snapshot.Symbol, now);
                 if (claimed is null) return new ActiveEntryResult(candidates, false, "V5_PENDING_ALREADY_CLAIMED");
-                var bar = state.ConfirmationBar!;
+                var bar = state.ConfirmationBar;
                 var pendingContext = claimed.Context;
-                var confirmation = PendingEntryPolicy.Confirm(claimed.Pending, bar, now, bar.Close,
+                var confirmation = stored.Confirmation ?? PendingEntryPolicy.Confirm(claimed.Pending, bar!, now, bar!.Close,
                     "LIVE_CONFIRMATION_BAR_CLOSE");
+                if (stored.Confirmation is null && confirmation.Decision == PendingEntryDecision.Confirmed)
+                    await pendingEntries.SaveConfirmationAsync(snapshot.Symbol, confirmation, now);
                 if (confirmation.Decision != PendingEntryDecision.Confirmed)
                     return new ActiveEntryResult(candidates, false, "V5_PENDING_CONFIRMATION_REJECTED");
                 var pendingResult = await tradeEntries.TryEnterAsync(new Domain.StructuralEntryRequest(snapshot.Symbol,
