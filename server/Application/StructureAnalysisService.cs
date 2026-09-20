@@ -534,15 +534,15 @@ public sealed class StructureAnalysisService(
                 var claimed = await pendingEntries.ClaimAsync(snapshot.Symbol, now);
                 if (claimed is null) return new ActiveEntryResult(candidates, false, "V5_PENDING_ALREADY_CLAIMED");
                 var bar = state.ConfirmationBar!;
-                var context = claimed.Context;
+                var pendingContext = claimed.Context;
                 var confirmation = PendingEntryPolicy.Confirm(claimed.Pending, bar, now, bar.Close,
                     "LIVE_CONFIRMATION_BAR_CLOSE");
                 if (confirmation.Decision != PendingEntryDecision.Confirmed)
                     return new ActiveEntryResult(candidates, false, "V5_PENDING_CONFIRMATION_REJECTED");
-                var result = await tradeEntries.TryEnterAsync(new Domain.StructuralEntryRequest(snapshot.Symbol,
-                    claimed.Pending.SignalBarStart, now, snapshot.SessionEnd, context,
+                var pendingResult = await tradeEntries.TryEnterAsync(new Domain.StructuralEntryRequest(snapshot.Symbol,
+                    claimed.Pending.SignalBarStart, now, snapshot.SessionEnd, pendingContext,
                     completedBarStarts, snapshot.SessionStart, null, confirmation), ct);
-                if (result.Outcome is Domain.StructuralEntryOutcome.Entered or Domain.StructuralEntryOutcome.AlreadyEntered)
+                if (pendingResult.Outcome is Domain.StructuralEntryOutcome.Entered or Domain.StructuralEntryOutcome.AlreadyEntered)
                 {
                     await pendingEntries.RemoveAsync(snapshot.Symbol);
                     return new ActiveEntryResult(candidates.Select(x => x.EventId == claimed.Pending.EntryEventId
