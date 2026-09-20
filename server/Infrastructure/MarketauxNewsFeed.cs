@@ -35,11 +35,18 @@ public sealed class MarketauxNewsFeed : INewsFeed
 
     async Task<IReadOnlyList<NewsFeedItem>> GoogleRssAsync(CancellationToken ct)
     {
-        using var response = await _http.GetAsync(_options.GoogleNewsUrl, ct);
-        response.EnsureSuccessStatusCode();
-        var xml = await response.Content.ReadAsStringAsync(ct);
-        var doc = XDocument.Parse(xml);
-        return doc.Descendants("item").Select(item =>
+        var urls = new[] { _options.GoogleNewsUrl, _options.YahooNewsUrl }.Distinct(StringComparer.OrdinalIgnoreCase);
+        var documents = await Task.WhenAll(urls.Select(async url =>
+        {
+            try
+            {
+                using var response = await _http.GetAsync(url, ct);
+                response.EnsureSuccessStatusCode();
+                return XDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            }
+            catch (HttpRequestException) { return null; }
+        }));
+        return documents.Where(x => x is not null).SelectMany(x => x!.Descendants("item")).Select(item =>
         {
             var link = item.Element("link")?.Value?.Trim() ?? "";
             var title = item.Element("title")?.Value?.Trim() ?? "";
@@ -47,7 +54,7 @@ public sealed class MarketauxNewsFeed : INewsFeed
             var published = DateTimeOffset.TryParse(item.Element("pubDate")?.Value, out var at)
                 ? at : DateTimeOffset.UtcNow;
             return new NewsFeedItem(link.Length == 0 ? title : link, title, title, source, published, []);
-        }).Where(x => x.Id.Length > 0).ToArray();
+        }).Where(x => x.Id.Length > 0).GroupBy(x => x.Id, StringComparer.Ordinal).Select(x => x.First()).Take(100).ToArray();
     }
 
     static NewsFeedItem Map(Item x)

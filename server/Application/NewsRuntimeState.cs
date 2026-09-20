@@ -10,6 +10,7 @@ public sealed class NewsOptions
     public string MarketauxApiKey { get; set; } = "";
     public string MarketauxUrl { get; set; } = "https://api.marketaux.com/v1/news/all";
     public string GoogleNewsUrl { get; set; } = "https://news.google.com/rss/search?q=stock%20market%20OR%20semiconductor%20OR%20earnings&hl=en-US&gl=US&ceid=US:en";
+    public string YahooNewsUrl { get; set; } = "https://finance.yahoo.com/rss/2.0/headline?s=SOXL,SOXX,NVDA,AMD,INTC&region=US&lang=en-US";
     public int PollSeconds { get; set; } = 60;
     public string OllamaUrl { get; set; } = "http://localhost:11434";
     public string Model { get; set; } = "qwen2.5:7b-instruct";
