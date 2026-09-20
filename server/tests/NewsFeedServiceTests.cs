@@ -97,6 +97,46 @@ public sealed class NewsFeedServiceTests
     }
 
     [Fact]
+    public async Task FeedRequestMinuteLimitResetsAfterTimeAdvances()
+    {
+        var harness = new Harness();
+        harness.Options.MaxFeedRequestsPerMinute = 2;
+        harness.Options.MaxDailyFeedRequests = 10;
+        harness.Page(1, Item("100", "기준"));
+        await harness.PollAsync();
+        harness.Page(1, Item("101", "첫 기사"), Item("100", "기준"));
+        await harness.PollAsync();
+        harness.Page(1, Item("102", "차단 기사"), Item("101", "첫 기사"));
+        await harness.PollAsync();
+        Assert.Equal(2, harness.Feed.ListCalls.Count);
+        harness.Clock.Now = harness.Clock.Now.AddMinutes(1).AddSeconds(1);
+        await harness.PollAsync();
+        Assert.Equal(3, harness.Feed.ListCalls.Count);
+    }
+
+    [Fact]
+    public async Task FeedRequestDailyLimitSurvivesServiceRestart()
+    {
+        var harness = new Harness();
+        harness.Options.MaxFeedRequestsPerMinute = 10;
+        harness.Options.MaxDailyFeedRequests = 2;
+        harness.Page(1, Item("100", "기준"));
+        await harness.PollAsync();
+        harness.Page(1, Item("101", "새 기사"), Item("100", "기준"));
+        await harness.PollAsync();
+        harness.Clock.Now = harness.Clock.Now.AddMinutes(2);
+
+        var restarted = new Harness();
+        restarted.Options.MaxFeedRequestsPerMinute = 10;
+        restarted.Options.MaxDailyFeedRequests = 2;
+        restarted.Store.Texts[NewsFeedService.StateFile] = harness.Store.Texts[NewsFeedService.StateFile];
+        restarted.Page(1, Item("102", "재기동 후 기사"), Item("101", "새 기사"));
+        await restarted.PollAsync();
+
+        Assert.Empty(restarted.Feed.ListCalls);
+    }
+
+    [Fact]
     public async Task AlreadyProcessedArticleIsNotClassifiedTwice()
     {
         var harness = new Harness();

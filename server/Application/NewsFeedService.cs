@@ -6,7 +6,8 @@ using Astra.Server.Domain.News;
 namespace Astra.Server.Application;
 
 /// <summary>증분 상태(#151 §1). 첫 기동은 기준점만 저장하고 과거 기사를 분류하지 않는다.</summary>
-public sealed record NewsFeedState(long LastId, DateTimeOffset? LastCreatedAt);
+public sealed record NewsFeedState(long LastId, DateTimeOffset? LastCreatedAt,
+    IReadOnlyList<DateTimeOffset>? FeedRequestTimes = null);
 
 /// <summary>
 /// 뉴스 수집·큐·분류 파이프라인(#151 §1·§3·§5). 호스트 타이머가 <see cref="PollAsync"/>만 호출한다.
@@ -31,7 +32,8 @@ public sealed class NewsFeedService(
     readonly LinkedList<QueuedArticle> _other = new();
     readonly HashSet<string> _queued = new(StringComparer.Ordinal);
     readonly Queue<DateTimeOffset> _classifications = new();
-    readonly Queue<DateTimeOffset> _feedRequests = new();
+    readonly Queue<DateTimeOffset> _dailyFeedRequests = new();
+    readonly Queue<DateTimeOffset> _minuteFeedRequests = new();
 
     /// <summary>대표 기사 id -> 같은 사건 그룹의 나머지 기사(#171). 대표가 분류되면 함께 저장한다.</summary>
     readonly Dictionary<string, List<QueuedArticle>> _pendingFollowers = new(StringComparer.Ordinal);
@@ -125,7 +127,7 @@ public sealed class NewsFeedService(
         }
 
         if (maxId > 0 || maxCreatedAt is not null)
-            await SaveStateAsync(new NewsFeedState(maxId, maxCreatedAt), ct);
+            await SaveStateAsync(new NewsFeedState(maxId, maxCreatedAt, _dailyFeedRequests.ToArray()), ct);
         if (known is null || fresh.Count == 0) return budget;
 
         state.SeenArticles(fresh.Count);
@@ -358,7 +360,11 @@ public sealed class NewsFeedService(
         try
         {
             var text = await store.ReadTextAsync(StateFile, ct);
-            if (!string.IsNullOrWhiteSpace(text)) _state = JsonSerializer.Deserialize<NewsFeedState>(text, Json);
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                _state = JsonSerializer.Deserialize<NewsFeedState>(text, Json);
+                RestoreFeedRequestTimes(_state?.FeedRequestTimes);
+            }
         }
         catch (Exception exception) { diagnostics.PollFailed("news-state", exception); }
         return _state;
@@ -366,9 +372,12 @@ public sealed class NewsFeedService(
 
     async Task SaveStateAsync(NewsFeedState next, CancellationToken ct)
     {
+        var requestsChanged = _state?.FeedRequestTimes is null
+            || !_state.FeedRequestTimes.SequenceEqual(next.FeedRequestTimes ?? []);
         if (_state is not null
             && next.LastId <= _state.LastId
-            && (next.LastCreatedAt is null || _state.LastCreatedAt is not null && next.LastCreatedAt <= _state.LastCreatedAt)) return;
+            && (next.LastCreatedAt is null || _state.LastCreatedAt is not null && next.LastCreatedAt <= _state.LastCreatedAt)
+            && !requestsChanged) return;
         _state = next;
         await store.WriteTextAsync(StateFile, JsonSerializer.Serialize(next, Json), ct);
     }
@@ -387,13 +396,28 @@ public sealed class NewsFeedService(
 
     bool ReserveFeedRequest(DateTimeOffset now)
     {
-        while (_feedRequests.Count > 0 && now - _feedRequests.Peek() >= TimeSpan.FromHours(24))
-            _feedRequests.Dequeue();
-        if (_feedRequests.Count >= Math.Max(1, options.MaxDailyFeedRequests)) return false;
-        while (_feedRequests.Count > 0 && now - _feedRequests.Peek() >= TimeSpan.FromMinutes(1))
-            _feedRequests.Dequeue();
-        if (_feedRequests.Count >= Math.Max(1, options.MaxFeedRequestsPerMinute)) return false;
-        _feedRequests.Enqueue(now);
+        Trim(_dailyFeedRequests, now, TimeSpan.FromHours(24));
+        Trim(_minuteFeedRequests, now, TimeSpan.FromMinutes(1));
+        if (_dailyFeedRequests.Count >= Math.Max(1, options.MaxDailyFeedRequests)
+            || _minuteFeedRequests.Count >= Math.Max(1, options.MaxFeedRequestsPerMinute)) return false;
+        _dailyFeedRequests.Enqueue(now);
+        _minuteFeedRequests.Enqueue(now);
         return true;
+    }
+
+    void RestoreFeedRequestTimes(IReadOnlyList<DateTimeOffset>? times)
+    {
+        if (times is null) return;
+        var now = clock.GetUtcNow();
+        foreach (var time in times.Order())
+        {
+            if (now - time < TimeSpan.FromHours(24)) _dailyFeedRequests.Enqueue(time);
+            if (now - time < TimeSpan.FromMinutes(1)) _minuteFeedRequests.Enqueue(time);
+        }
+    }
+
+    static void Trim(Queue<DateTimeOffset> queue, DateTimeOffset now, TimeSpan window)
+    {
+        while (queue.Count > 0 && now - queue.Peek() >= window) queue.Dequeue();
     }
 }
