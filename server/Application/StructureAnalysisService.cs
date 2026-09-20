@@ -125,6 +125,20 @@ public sealed class StructureAnalysisService(
     RejectedPlanResearchService? research = null,
     StructuralPendingEntryService? pendingEntries = null)
 {
+    public enum LivePendingDecision { Wait, Confirm, Missed }
+    public sealed record LivePendingResolution(LivePendingDecision Decision, Candle? ConfirmationBar, string Reason);
+
+    /// <summary>후보 선택과 독립적인 pending 상태 머신. 실시간도 replay와 동일하게 확인봉 종가를 사용한다.</summary>
+    public static LivePendingResolution ResolvePendingState(PendingEntry pending, IReadOnlyList<Candle> completedBars)
+    {
+        var latest = completedBars.OrderByDescending(x => x.Timestamp).FirstOrDefault();
+        if (latest is null || latest.Timestamp < pending.ConfirmationBarStart)
+            return new(LivePendingDecision.Wait, null, "WAITING_CONFIRMATION_BAR");
+        if (latest.Timestamp > pending.ConfirmationBarStart)
+            return new(LivePendingDecision.Missed, null, "MISSING_CONFIRMATION_BAR");
+        return new(LivePendingDecision.Confirm, latest, "CONFIRMATION_BAR_READY");
+    }
+
     public const string LatchFile = "structure-lifecycle.json";
     public const string EntryOwnerV4 = "v4";
     public const string EntryOwnerV5 = "v5";
@@ -521,18 +535,19 @@ public sealed class StructureAnalysisService(
             var stored = await pendingEntries.GetAsync(snapshot.Symbol);
             if (stored is not null)
             {
-                var latest = completedBars.OrderByDescending(x => x.Timestamp).FirstOrDefault();
-                if (latest is null || latest.Timestamp < stored.Pending.ConfirmationBarStart)
+                var pendingState = ResolvePendingState(stored.Pending, completedBars);
+                if (pendingState.Decision == LivePendingDecision.Wait)
                     return Blocked(candidates, chosen, "V5_PENDING_CONFIRMATION_WAITING");
-                if (latest.Timestamp > stored.Pending.ConfirmationBarStart)
+                if (pendingState.Decision == LivePendingDecision.Missed)
                 {
                     await pendingEntries.RemoveAsync(snapshot.Symbol);
                     return Blocked(candidates, chosen, "V5_PENDING_CONFIRMATION_MISSED");
                 }
                 var claimed = await pendingEntries.ClaimAsync(snapshot.Symbol, now);
                 if (claimed is null) return Blocked(candidates, chosen, "V5_PENDING_ALREADY_CLAIMED");
-                var confirmation = PendingEntryPolicy.Confirm(claimed.Pending, latest, now,
-                    (double?)snapshot.QuotePrice ?? latest.Close, "LIVE_CONFIRMATION_BAR");
+                var confirmationBar = pendingState.ConfirmationBar!;
+                var confirmation = PendingEntryPolicy.Confirm(claimed.Pending, confirmationBar, now,
+                    confirmationBar.Close, "LIVE_CONFIRMATION_BAR_CLOSE");
                 if (confirmation.Decision != PendingEntryDecision.Confirmed)
                     return Blocked(candidates, chosen, "V5_PENDING_CONFIRMATION_REJECTED");
                 var confirmed = await tradeEntries.TryEnterAsync(new Domain.StructuralEntryRequest(snapshot.Symbol,

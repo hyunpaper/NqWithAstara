@@ -32,6 +32,18 @@ public sealed class StructuralPendingEntryServiceTests
         Assert.Null(await service.GetAsync("SOXL"));
     }
 
+    [Fact]
+    public void LivePendingStateIsIndependentOfPreferredCandidate()
+    {
+        var pending = Entry().Pending;
+        Assert.Equal(StructureAnalysisService.LivePendingDecision.Wait,
+            StructureAnalysisService.ResolvePendingState(pending, [new Candle(Start, 100, 101, 99, 100, 1)]).Decision);
+        Assert.Equal(StructureAnalysisService.LivePendingDecision.Confirm,
+            StructureAnalysisService.ResolvePendingState(pending, [new Candle(Start.AddMinutes(1), 100, 101, 99, 100, 1)]).Decision);
+        Assert.Equal(StructureAnalysisService.LivePendingDecision.Missed,
+            StructureAnalysisService.ResolvePendingState(pending, [new Candle(Start.AddMinutes(2), 100, 101, 99, 100, 1)]).Decision);
+    }
+
     sealed class MemoryStore : ILocalStore
     {
         readonly Dictionary<string, string> data = [];
