@@ -7,7 +7,7 @@ namespace Astra.Server.Application;
 
 /// <summary>증분 상태(#151 §1). 첫 기동은 기준점만 저장하고 과거 기사를 분류하지 않는다.</summary>
 public sealed record NewsFeedState(long LastId, DateTimeOffset? LastCreatedAt,
-    IReadOnlyList<DateTimeOffset>? FeedRequestTimes = null);
+    IReadOnlyList<DateTimeOffset>? FeedRequestTimes = null, string? LastKey = null);
 
 /// <summary>
 /// 뉴스 수집·큐·분류 파이프라인(#151 §1·§3·§5). 호스트 타이머가 <see cref="PollAsync"/>만 호출한다.
@@ -126,13 +126,14 @@ public sealed class NewsFeedService(
         var page = 1;
         var maxId = known?.LastId ?? 0;
         DateTimeOffset? maxCreatedAt = known?.LastCreatedAt;
+        var maxKey = known?.LastKey;
 
         while (page <= Math.Max(1, options.MaxPages) && budget > 0)
         {
             if (!ReserveFeedRequest(clock.GetUtcNow())) break;
             // 공급자 호출은 빈 응답이나 예외에서도 쿼터를 소비할 수 있다.
             // 호출 직후 시각을 저장해 재기동으로 일일 한도를 우회하지 않게 한다.
-            await SaveStateAsync(new NewsFeedState(maxId, maxCreatedAt, _dailyFeedRequests.ToArray()), ct);
+            await SaveStateAsync(new NewsFeedState(maxId, maxCreatedAt, _dailyFeedRequests.ToArray(), maxKey), ct);
             IReadOnlyList<NewsFeedItem> items;
             try { items = await feed.ListAsync(page, ct); }
             finally { budget--; }
@@ -141,13 +142,13 @@ public sealed class NewsFeedService(
             foreach (var item in items)
             {
                 var id = ParseId(item.Id);
-                if (id > maxId) maxId = id;
-                if (maxCreatedAt is null || item.CreatedAt > maxCreatedAt) maxCreatedAt = item.CreatedAt;
+                if (IsAfter(item.CreatedAt, id, item.Id, maxCreatedAt, maxId, maxKey))
+                { maxId = id; maxCreatedAt = item.CreatedAt; maxKey = item.Id; }
             }
 
             if (known is null) break;
-            var newer = items.Where(x => ParseId(x.Id) > known.LastId
-                || (known.LastCreatedAt is not null && x.CreatedAt > known.LastCreatedAt.Value)).ToArray();
+            var newer = items.Where(x => IsAfter(x.CreatedAt, ParseId(x.Id), x.Id,
+                known.LastCreatedAt, known.LastId, known.LastKey)).ToArray();
             fresh.AddRange(newer);
             // 신규가 한 페이지를 가득 채웠을 때만 더 과거 페이지를 본다.
             if (newer.Length < items.Count) break;
@@ -155,11 +156,11 @@ public sealed class NewsFeedService(
         }
 
         if (maxId > 0 || maxCreatedAt is not null)
-            await SaveStateAsync(new NewsFeedState(maxId, maxCreatedAt, _dailyFeedRequests.ToArray()), ct);
+            await SaveStateAsync(new NewsFeedState(maxId, maxCreatedAt, _dailyFeedRequests.ToArray(), maxKey), ct);
         if (known is null || fresh.Count == 0) return budget;
 
         state.SeenArticles(fresh.Count);
-        var articles = fresh.OrderBy(x => ParseId(x.Id))
+        var articles = fresh.OrderBy(x => x.CreatedAt).ThenBy(x => ParseId(x.Id)).ThenBy(x => x.Id, StringComparer.Ordinal)
             .Select(item => new NewsArticle(item.Id, item.Title, item.Summary, item.Source, item.CreatedAt,
                 item.Tickers, item.Headline, item.HeadlineOnly, item.GroupId, item.Entities, item.Content, Url: item.Url))
             .ToArray();
@@ -437,6 +438,7 @@ public sealed class NewsFeedService(
         if (_state is not null
             && next.LastId <= _state.LastId
             && (next.LastCreatedAt is null || _state.LastCreatedAt is not null && next.LastCreatedAt <= _state.LastCreatedAt)
+            && string.Equals(next.LastKey, _state.LastKey, StringComparison.Ordinal)
             && !requestsChanged) return;
         _state = next;
         await store.WriteTextAsync(StateFile, JsonSerializer.Serialize(next, Json), ct);
@@ -453,6 +455,16 @@ public sealed class NewsFeedService(
 
     static long ParseId(string id)
         => long.TryParse(id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : 0;
+
+    static bool IsAfter(DateTimeOffset createdAt, long id, string key,
+        DateTimeOffset? watermarkAt, long watermarkId, string? watermarkKey)
+    {
+        if (watermarkAt is null) return true;
+        var time = createdAt.CompareTo(watermarkAt.Value);
+        if (time != 0) return time > 0;
+        if (id != 0 && watermarkId != 0 && id != watermarkId) return id > watermarkId;
+        return string.CompareOrdinal(key, watermarkKey ?? string.Empty) > 0;
+    }
 
     bool ReserveFeedRequest(DateTimeOffset now)
     {

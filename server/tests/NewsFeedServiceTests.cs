@@ -99,6 +99,21 @@ public sealed class NewsFeedServiceTests
     }
 
     [Fact]
+    public async Task GuidFeedUsesIdTieBreakerWhenArticlesShareTimestamp()
+    {
+        var harness = new Harness();
+        var first = NewsBuilder.Item("00000000-0000-0000-0000-000000000001", "기준", Start, []);
+        harness.Page(1, first);
+        await harness.PollAsync();
+
+        var second = NewsBuilder.Item("00000000-0000-0000-0000-000000000002", "동일 시각 신규", Start, []);
+        harness.Page(1, second, first);
+        await harness.PollAsync();
+
+        Assert.Equal("동일 시각 신규", Assert.Single(harness.Classifier.Requests).Title);
+    }
+
+    [Fact]
     public async Task FeedRequestMinuteLimitResetsAfterTimeAdvances()
     {
         var harness = new Harness();
