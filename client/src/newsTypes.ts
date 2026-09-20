@@ -28,6 +28,10 @@ export type NewsArticle = {
   body?: string | null;
   provenance?: string | null;
   translationStatus?: "translated" | "untranslated" | "pending" | null;
+  collectedAt?: string | null;
+  evidenceSource?: string | null;
+  promptVersion?: string | null;
+  classifiedFrom?: string | null;
 };
 export type NewsEntity = { symbol: string; name: string; industry: string; sentimentScore: number | null; matchScore: number | null };
 
@@ -111,6 +115,10 @@ export const normalizeArticle = (raw: unknown): NewsArticle | null => {
     body: str(r.body) ?? str(r.content),
     provenance: str(r.provenance) ?? str(r.sourceType),
     translationStatus: r.translationStatus === "translated" || r.translationStatus === "untranslated" || r.translationStatus === "pending" ? r.translationStatus : null,
+    collectedAt: str(r.collectedAt),
+    evidenceSource: str(r.evidenceSource),
+    promptVersion: str(r.promptVersion),
+    classifiedFrom: str(r.classifiedFrom),
   };
 };
 

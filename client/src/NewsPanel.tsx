@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Newspaper } from "lucide-react";
 import { normalizeArticlesResponse, type NewsArticle } from "./newsTypes";
 import { absoluteTimeKst, inputKindLabel, relativeTimeKo, sentimentBadge } from "./newsFormat";
@@ -9,9 +9,31 @@ export default function NewsPanel({ symbol }: { symbol: string }) {
   const [articles, setArticles] = useState<NewsArticle[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [selected, setSelected] = useState<NewsArticle | null>(null);
+  const [detail, setDetail] = useState<NewsArticle | null>(null);
+  const [detailState, setDetailState] = useState<"idle" | "loading" | "error">("idle");
+  const detailRequest = useRef<AbortController | null>(null);
+
+  const openDetail = async (article: NewsArticle) => {
+    detailRequest.current?.abort();
+    const controller = new AbortController();
+    detailRequest.current = controller;
+    setSelected(article);
+    setDetail(article);
+    setDetailState("loading");
+    try {
+      const response = await fetch(`/api/news/${encodeURIComponent(article.id)}`, { signal: controller.signal });
+      if (!response.ok) throw new Error(`상세 조회 실패 (${response.status})`);
+      const normalized = normalizeArticlesResponse({ articles: [await response.json()] }).articles[0];
+      if (!normalized) throw new Error("기사 상세 형식이 올바르지 않습니다.");
+      if (!controller.signal.aborted) { setDetail(normalized); setDetailState("idle"); }
+    } catch (error) {
+      if (!controller.signal.aborted) setDetailState("error");
+    }
+  };
 
   useEffect(() => {
     setArticles([]); setSelected(null);
+    setDetail(null); setDetailState("idle");
     setLoaded(false);
     let active = true;
     let inFlight = false;
@@ -57,6 +79,7 @@ export default function NewsPanel({ symbol }: { symbol: string }) {
       active = false;
       if (timer) clearTimeout(timer);
       request?.abort();
+      detailRequest.current?.abort();
       document.removeEventListener("visibilitychange", visibility);
     };
   }, [symbol]);
@@ -81,7 +104,7 @@ export default function NewsPanel({ symbol }: { symbol: string }) {
             const kind = inputKindLabel(a.inputKind);
             return (
               <li key={a.id}>
-                <button type="button" className="news-row-button" onClick={() => setSelected(a)} aria-label={`${a.titleKo ?? a.title} 상세 보기`}>
+                <button type="button" className="news-row-button" onClick={() => void openDetail(a)} aria-label={`${a.titleKo ?? a.title} 상세 보기`}>
                   <div className="news-row-head">
                     <span
                       className="news-time"
@@ -101,7 +124,7 @@ export default function NewsPanel({ symbol }: { symbol: string }) {
           })}
         </ul>
       )}
-      {selected && <NewsDetailPanel article={selected} onClose={() => setSelected(null)} />}
+      {selected && <NewsDetailPanel article={detail ?? selected} state={detailState} onClose={() => { detailRequest.current?.abort(); setSelected(null); setDetail(null); }} />}
     </section>
   );
 }
