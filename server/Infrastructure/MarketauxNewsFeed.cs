@@ -1,7 +1,9 @@
 using System.Globalization;
 using System.Net.Http.Json;
+using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Astra.Server.Application;
 using Astra.Server.Domain.News;
@@ -11,6 +13,8 @@ namespace Astra.Server.Infrastructure;
 /// <summary>Marketaux 전체 시장 피드 어댑터. symbols 없이 전체 기사를 수집한다.</summary>
 public sealed class MarketauxNewsFeed : INewsFeed
 {
+    public const int RssTextLimit = 1500;
+    static readonly Regex HtmlTags = new("<[^>]*>", RegexOptions.Compiled);
     readonly NewsOptions _options;
     readonly HttpClient _http;
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
@@ -52,11 +56,24 @@ public sealed class MarketauxNewsFeed : INewsFeed
         {
             var link = item.Element("link")?.Value?.Trim() ?? "";
             var title = item.Element("title")?.Value?.Trim() ?? "";
+            var description = NormalizeRssText(item.Element("description")?.Value);
+            var summary = NormalizeRssText(item.Element("summary")?.Value);
+            var listedEvidence = string.Join("\n", new[] { description, summary }.Where(x => x.Length > 0));
+            var content = NormalizeRssText(item.Elements().FirstOrDefault(x => x.Name.LocalName.Equals("encoded", StringComparison.OrdinalIgnoreCase))?.Value);
             var source = item.Element("source")?.Value?.Trim() ?? "Google News";
             var published = DateTimeOffset.TryParse(item.Element("pubDate")?.Value, out var at)
                 ? at : DateTimeOffset.UtcNow;
-            return new NewsFeedItem(link.Length == 0 ? title : link, title, title, source, published, []);
+            return new NewsFeedItem(link.Length == 0 ? title : link, title, listedEvidence, source, published, [], Content: content);
         }).Where(x => x.Id.Length > 0).GroupBy(x => x.Id, StringComparer.Ordinal).Select(x => x.First()).Take(100).ToArray();
+    }
+
+    static string NormalizeRssText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return "";
+        var decoded = WebUtility.HtmlDecode(value);
+        var plain = HtmlTags.Replace(decoded, " ");
+        plain = Regex.Replace(plain, "\\s+", " ").Trim();
+        return plain.Length > RssTextLimit ? plain[..RssTextLimit] : plain;
     }
 
     static NewsFeedItem Map(Item x)

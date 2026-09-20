@@ -8,6 +8,7 @@ Rules:
 - Judge price impact, not wording. sentiment is positive, negative, or neutral. strength is 1-5; procedural news is 1.
 - Translate the complete title and source. impact must contain every symbol and values 0-100. Never omit title_ko, source_ko, or impact.
 - Keep reason concise Korean. No markdown, code fence, or explanation.
+- 본문에는 RSS description/content와 번역 요약이 포함될 수 있다. 제목과 본문이 충돌하면 본문에 명시된 사실을 우선하고, 본문이 없을 때만 제목을 근거로 판단한다.
 
 Examples:
 리야드 인근 지역에 조기 경보 발령 -> {"symbols":["MARKET"],"sentiment":"negative","strength":3,"reason":"공습 경보 발령","title_ko":"리야드 인근 지역에 조기 경보 발령","source_ko":"출처","impact":{"MARKET":60}}
