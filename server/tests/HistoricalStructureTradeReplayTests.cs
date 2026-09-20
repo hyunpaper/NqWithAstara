@@ -21,6 +21,17 @@ public sealed class HistoricalStructureTradeReplayTests
     }
 
     [Fact]
+    public void ReplayUsesAnExplicitConservativeCostProfile()
+    {
+        var profile = HistoricalReplayCostProfile.Conservative;
+        var liquidity = profile.Liquidity(100m, Start);
+
+        Assert.Equal(.05m, liquidity.BestAsk!.Value - liquidity.BestBid!.Value);
+        Assert.Equal(1d, liquidity.BidSize);
+        Assert.Equal(1d, liquidity.AskSize);
+    }
+
+    [Fact]
     public void FinalReplayOnlyAppliesBarsThatWereNotAlreadyProcessedBeforeEntry()
     {
         var trade = new SimTrade("id", "TSLA", "PULLBACK", Start, 100, 110, 95, null, null, "OPEN",

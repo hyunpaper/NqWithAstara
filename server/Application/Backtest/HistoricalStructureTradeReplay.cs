@@ -4,8 +4,18 @@ using Astra.Server.Domain.Structure;
 
 namespace Astra.Server.Application.Backtest;
 
-public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePolicy policy)
+public sealed record HistoricalReplayCostProfile(decimal AssumedSpreadPerShare, double BidSize, double AskSize)
 {
+    public static readonly HistoricalReplayCostProfile Conservative = new(.05m, 1d, 1d);
+
+    public StructureLiquidity Liquidity(decimal reference, DateTimeOffset at) => new(
+        reference - AssumedSpreadPerShare / 2m, reference + AssumedSpreadPerShare / 2m, at, BidSize, AskSize);
+}
+
+public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePolicy policy,
+    HistoricalReplayCostProfile? costProfile = null)
+{
+    readonly HistoricalReplayCostProfile _costProfile = costProfile ?? HistoricalReplayCostProfile.Conservative;
     public async Task<ImmutableDictionary<string, ImmutableArray<SimTrade>>> RunAsync(DateOnly from, DateOnly to,
         IReadOnlyList<string> symbols, CancellationToken ct)
     {
@@ -62,7 +72,8 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                     var detected = SetupDetector.Detect(SetupDetectionRequest.Create(symbol, snapshot.SessionStart,
                         snapshot.SessionEnd, snapshot.AnalysisAsOf, now, build.Bars.Bars, evaluated.Zones,
                         evaluated.Episodes, trend, built.Atr1mAtCutoff, snapshot.QuotePrice, snapshot.QuoteAt,
-                        null, build.Quality.BlockersForCandidate.Concat(gate.Blockers).ToImmutableArray()), policy);
+                        _costProfile.Liquidity(snapshot.QuotePrice ?? (decimal)current.Close, now),
+                        build.Quality.BlockersForCandidate.Concat(gate.Blockers).ToImmutableArray()), policy);
                     var candidates = StructuralLifecycle.ApplyLive(
                         StructuralLifecycle.ApplyLatch(latch, detected.Candidates, gate.AllowNewTrigger, policy,
                             evaluated.Zones), snapshot.QuotePrice, now);
