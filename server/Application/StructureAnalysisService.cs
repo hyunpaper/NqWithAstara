@@ -538,7 +538,9 @@ public sealed class StructureAnalysisService(
                     completedBarStarts, snapshot.SessionStart, null,
                     confirmation), ct);
                 return confirmed.Outcome is Domain.StructuralEntryOutcome.Entered or Domain.StructuralEntryOutcome.AlreadyEntered
-                    ? new ActiveEntryResult(candidates, true, NoteEntryCommitted)
+                    ? new ActiveEntryResult(candidates.Select(x => x.EventId == claimed.Pending.EntryEventId
+                        ? x with { Disposition = CandidateDisposition.Entered }
+                        : x).ToImmutableArray(), true, NoteEntryCommitted)
                     : Blocked(candidates, chosen, NoteEntryPlanInvalid);
             }
         }
