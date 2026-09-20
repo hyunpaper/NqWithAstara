@@ -122,7 +122,8 @@ public sealed class StructureAnalysisService(
     StructureAlertPublisher? alerts = null,
     SymbolMetadataService? metadata = null,
     ConfluenceService? confluence = null,
-    RejectedPlanResearchService? research = null)
+    RejectedPlanResearchService? research = null,
+    StructuralPendingEntryService? pendingEntries = null)
 {
     public const string LatchFile = "structure-lifecycle.json";
     public const string EntryOwnerV4 = "v4";
@@ -422,7 +423,8 @@ public sealed class StructureAnalysisService(
             // 이슈 #26: 이 commit에서 READY로 커밋되는 후보를 알림 초안으로 잡아 둔다(진입 성공 시 ENTERED로 바뀌기 전).
             var readyForAlerts = candidates.Where(x => x.Disposition == CandidateDisposition.Ready).ToArray();
             var activeEntry = await TryEnterPreferredAsync(request, candidates, preferred, snapshot, trend, gateNow,
-                build.Bars.Bars.Select(x => x.Start).ToImmutableArray(), ct);
+                build.Bars.Bars.Select(x => new Candle(x.Start, (double)x.Open, (double)x.High,
+                    (double)x.Low, (double)x.Close, (double)x.Volume)).ToArray(), ct);
             if (activeEntry is not null)
             {
                 candidates = activeEntry.Candidates;
@@ -493,7 +495,7 @@ public sealed class StructureAnalysisService(
     /// </summary>
     async Task<ActiveEntryResult?> TryEnterPreferredAsync(StructureObservationRequest request,
         ImmutableArray<EntryCandidate> candidates, string? preferredId, StructureSnapshot snapshot,
-        TrendAssessment? trend, DateTimeOffset now, ImmutableArray<DateTimeOffset> completedBarStarts,
+        TrendAssessment? trend, DateTimeOffset now, IReadOnlyList<Candle> completedBars,
         CancellationToken ct)
     {
         if (_options.Mode != StructureEngineMode.Active || preferredId is null) return null;
@@ -513,10 +515,47 @@ public sealed class StructureAnalysisService(
 
         if (tradeEntries is null) return Blocked(candidates, chosen, NoteEntryUnavailable);
 
+        var completedBarStarts = completedBars.Select(x => x.Timestamp).ToImmutableArray();
+        if (pendingEntries is not null)
+        {
+            var stored = await pendingEntries.GetAsync(snapshot.Symbol);
+            if (stored is not null)
+            {
+                var latest = completedBars.OrderByDescending(x => x.Timestamp).FirstOrDefault();
+                if (latest is null || latest.Timestamp != stored.Pending.ConfirmationBarStart)
+                {
+                    await pendingEntries.RemoveAsync(snapshot.Symbol);
+                    return Blocked(candidates, chosen, "V5_PENDING_CONFIRMATION_MISSED");
+                }
+                var claimed = await pendingEntries.ClaimAsync(snapshot.Symbol, now);
+                if (claimed is null) return Blocked(candidates, chosen, "V5_PENDING_ALREADY_CLAIMED");
+                var confirmation = PendingEntryPolicy.Confirm(claimed.Pending, latest, now,
+                    (double?)snapshot.QuotePrice ?? latest.Close, "LIVE_CONFIRMATION_BAR");
+                if (confirmation.Decision != PendingEntryDecision.Confirmed)
+                    return Blocked(candidates, chosen, "V5_PENDING_CONFIRMATION_REJECTED");
+                var confirmed = await tradeEntries.TryEnterAsync(new Domain.StructuralEntryRequest(snapshot.Symbol,
+                    claimed.Pending.SignalBarStart, now, snapshot.SessionEnd, claimed.Context,
+                    completedBarStarts, snapshot.SessionStart, null,
+                    confirmation), ct);
+                return confirmed.Outcome is Domain.StructuralEntryOutcome.Entered or Domain.StructuralEntryOutcome.AlreadyEntered
+                    ? new ActiveEntryResult(candidates, true, NoteEntryCommitted)
+                    : Blocked(candidates, chosen, NoteEntryPlanInvalid);
+            }
+        }
+
         // §10: 체결 시 FrozenPlan을 저장한다. 진입 이후 이 스냅샷은 다시 만들지 않는다.
         var context = Domain.StructuralSimulation.Freeze(chosen.Plan, chosen.EventId,
             (trend?.State ?? TrendState.Unknown).ToString().ToUpperInvariant(), trend?.SignedTrend,
             chosen.EntryQuality, snapshot.AnalysisAsOf, snapshot.QuoteAt);
+        if (pendingEntries is not null)
+        {
+            var pending = new PendingEntry(chosen.EventId, snapshot.Symbol, TradeSide.Long,
+                chosen.TriggerBarStart, chosen.TriggerBarStart.AddMinutes(1), chosen.ExpiresAt,
+                (double)chosen.Plan.Stop, (double)chosen.Plan.Target, (double)chosen.Plan.EntryReference,
+                chosen.Plan.PlanId, chosen.Plan.PolicyHash);
+            await pendingEntries.QueueAsync(new StoredPendingStructuralEntry(pending, context, now));
+            return Blocked(candidates, chosen, "V5_ENTRY_PENDING_CONFIRMATION");
+        }
         var result = await tradeEntries.TryEnterAsync(new Domain.StructuralEntryRequest(snapshot.Symbol,
             chosen.TriggerBarStart, now, snapshot.SessionEnd, context, completedBarStarts, snapshot.SessionStart,
             chosen.Plan.TargetZoneSnapshot.Aliases), ct);
