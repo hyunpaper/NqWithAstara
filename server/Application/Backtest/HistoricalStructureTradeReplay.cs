@@ -122,14 +122,14 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
 
                     if (!exitedThisPoll && pending is null && preferred is { Disposition: CandidateDisposition.Ready, Plan: not null }
                         && ShouldQueuePending(pendingEventIds, new PendingEntry(preferred.EventId, symbol,
-                            TradeSide.Long, preferred.TriggerBarStart, preferred.TriggerBarStart.AddMinutes(1),
+                            preferred.Side, preferred.TriggerBarStart, preferred.TriggerBarStart.AddMinutes(1),
                             preferred.ExpiresAt, (double)preferred.Plan.Stop, (double)preferred.Plan.Target,
                             (double)preferred.Plan.EntryReference, preferred.Plan.PlanId, preferred.Plan.PolicyHash)))
                     {
                         var context = StructuralSimulation.Freeze(preferred.Plan, preferred.EventId,
                             trend.State.ToString(), trend.SignedTrend, preferred.EntryQuality,
                             snapshot.AnalysisAsOf, snapshot.QuoteAt);
-                        var pendingEntry = new PendingEntry(preferred.EventId, symbol, TradeSide.Long,
+                        var pendingEntry = new PendingEntry(preferred.EventId, symbol, preferred.Side,
                             preferred.TriggerBarStart, preferred.TriggerBarStart.AddMinutes(1), preferred.ExpiresAt,
                             (double)preferred.Plan.Stop, (double)preferred.Plan.Target,
                             (double)preferred.Plan.EntryReference, preferred.Plan.PlanId, preferred.Plan.PolicyHash);

@@ -7,7 +7,11 @@ using Xunit;
 
 public sealed class StructureTrendDirectionGateTests
 {
-    static readonly StructurePolicy P = D2.WideNetR;
+    static readonly StructurePolicy P = D2.WideNetR with
+    {
+        AllowTransitionPullback = true,
+        AllowTransitionBreakout = true
+    };
     const int TriggerMinute = 30;
 
     const double NbisFrozenBreakoutSignedTrend = -65.3416;

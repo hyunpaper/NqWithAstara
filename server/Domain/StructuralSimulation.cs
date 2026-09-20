@@ -78,9 +78,10 @@ public static class StructuralSimulation
             plan.NetRisk, plan.NetR, plan.RiskPercent, plan.Costs.FeePerShare, plan.Costs.ExtraCostPerShare,
             plan.Costs.ValidSpread, plan.Costs.MissingLiquidity, plan.Costs.EligibilityCostModelVersion,
             plan.Costs.RealizedFillCostModelVersion, plan.CreatedAt, plan.ExpiresAt, plan.EngineVersion,
-            plan.PolicyHash, plan.ReasonCodes.ToArray(), plan.HumanExplanation, plan.Atr1mAtPlan);
+            plan.PolicyHash, plan.ReasonCodes.ToArray(), plan.HumanExplanation, plan.Atr1mAtPlan,
+            plan.Side, plan.Regime, plan.Evidence);
         return new FrozenStructureContext(entryEventId, snapshot, trendAtEntry, signedTrendAtEntry,
-            entryQualityAtEntry, analysisAsOf, quoteAt, ExitPolicyVersion);
+            entryQualityAtEntry, analysisAsOf, quoteAt, ExitPolicyVersion, null, plan.Regime, plan.Evidence);
     }
 
     /// <summary>
@@ -122,7 +123,7 @@ public static class StructuralSimulation
             Reasons: [plan.Explanation], Logic: plan.EngineVersion, LastEvaluatedBarAt: null,
             SessionEnd: request.SessionEnd, ExitEstimated: null, LastPriceAt: request.EnteredAt,
             TriggerBarAt: request.TriggerBarStart, Structure: context,
-            Execution: EntryProvenance(request.EnteredAt, request.Confirmation));
+            Execution: EntryProvenance(request.EnteredAt, request.Confirmation), Side: plan.Side);
         trades.Add(trade);
         return new StructuralEntryResult(trades, StructuralEntryOutcome.Entered, trade);
     }

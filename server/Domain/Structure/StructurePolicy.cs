@@ -70,6 +70,7 @@ public sealed record StructurePolicy
     public decimal MinimumSupportedPrice { get; init; } = 1.00m;
     public int PriceTickUnknownWarningPolls { get; init; } = 3;
     public double RoundTripFeePercent { get; init; } = TradingCostDefaults.RoundTripFeePercent;
+    public double? ShortBorrowCostPercent { get; init; }
 
     /// <summary>
     /// §16A 종목 유형: v5 신규 진입을 허용하는 securityType 집합(#132). 레버리지 ETF·비보통주의 tick·변동성
@@ -120,6 +121,15 @@ public sealed record StructurePolicy
     public int RelativeVolumeLookbackBars { get; init; } = 20;
     public double TrendStateThreshold { get; init; } = 25;
     public double TrendEfficiencyThreshold { get; init; } = .25;
+
+    // ── 진입 regime·기대값 진단 ──
+    public int RegimeVolatilityLookbackBars { get; init; } = 20;
+    public double LowVolatilityRatio { get; init; } = .75;
+    public double HighVolatilityRatio { get; init; } = 1.25;
+    public double ExpectedWinRatePrior { get; init; } = .50;
+    public double MinimumExpectedNetR { get; init; } = 0.0;
+    public bool AllowTransitionPullback { get; init; }
+    public bool AllowTransitionBreakout { get; init; }
 
     /// <summary>§7 UP/DOWN 진입·이탈에 요구하는 연속 완료 봉 수. TRANSITION은 여기서 제외된다(§7, #148).</summary>
     public int TrendStateHoldBars { get; init; } = 2;

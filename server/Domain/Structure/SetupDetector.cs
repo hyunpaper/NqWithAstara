@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Astra.Server;
 
 namespace Astra.Server.Domain.Structure;
 
@@ -33,7 +34,8 @@ public sealed record EntryCandidate(string EventId, string DuplicateGuardKey, Se
     CandidateDisposition Disposition, decimal EntryReference, decimal? InvalidationAnchor,
     double? EntryQuality, EntryQualityResult Quality, StructuralTradePlan? Plan, PlanEvaluation Planning,
     ImmutableArray<string> RejectionCodes, ImmutableArray<string> Notes, bool CounterTrend,
-    bool RetestConfirmed, DateTimeOffset? EpisodeStartAt)
+    bool RetestConfirmed, DateTimeOffset? EpisodeStartAt, TradeSide Side = TradeSide.Long,
+    StrategyRegime? Regime = null, EntryEvidence? Evidence = null)
 {
     public decimal? NetR => Planning.NetR;
 
@@ -45,7 +47,8 @@ public sealed record EntryCandidate(string EventId, string DuplicateGuardKey, Se
         StructureMath.Number(EntryQuality), Quality.Fingerprint(), Plan?.Fingerprint() ?? "null",
         string.Join(',', Planning.ReasonCodes), string.Join(',', RejectionCodes), string.Join(',', Notes),
         CounterTrend ? "1" : "0", RetestConfirmed ? "1" : "0",
-        EpisodeStartAt is null ? "null" : StructureMath.Iso(EpisodeStartAt.Value));
+        EpisodeStartAt is null ? "null" : StructureMath.Iso(EpisodeStartAt.Value), Side.ToString(),
+        Regime?.Key ?? "null", Evidence?.Fingerprint() ?? "null");
 }
 
 /// <summary>
@@ -113,6 +116,8 @@ public static class SetupDetector
 
     /// <summary>REBOUND가 극단적 하락 추세에서 롱으로 승격되는 것을 막는 거절 사유(§I-1, #208).</summary>
     public const string CodeTrendDeeplyOpposesRebound = "TREND_DEEPLY_OPPOSES_REBOUND";
+    public const string CodeTransitionPullbackBlocked = "TRANSITION_PULLBACK_BLOCKED";
+    public const string CodeTransitionBreakoutBlocked = "TRANSITION_BREAKOUT_BLOCKED";
 
     public static SetupDetectionResult Detect(SetupDetectionRequest request, StructurePolicy policy)
     {
@@ -372,10 +377,12 @@ public static class SetupDetector
         var kindName = SetupKinds.Name(hypothesis.Kind);
         var eventId = EventId(request.Symbol, request.SessionStart, kindName, hypothesis.Zone.Id, structureCutoff);
         var guardKey = DuplicateGuardKey(request.Symbol, request.SessionStart, kindName, structureCutoff);
+        var side = TradeSide.Long;
+        var regime = StrategyRegimeClassifier.Classify(request.Trend, bars, policy);
 
         var planning = StructuralPlanner.Evaluate(new PlanRequest(request.Symbol, eventId, kindName, entryReference,
             hypothesis.Anchor, hypothesis.Zone, request.Zones, request.Atr1mAtStructureCutoff, spread,
-            triggerConfirmedAt, expiresAt, request.PriceTickSupported), policy);
+            triggerConfirmedAt, expiresAt, request.PriceTickSupported, side, regime), policy);
 
         var relativeVolume = SessionIndicators.RelativeVolume(bars, trigger.Start, policy.RelativeVolumeLookbackBars);
         var quality = EntryQualityEvaluator.Evaluate(new EntryQualityInput(hypothesis.Kind,
@@ -405,6 +412,19 @@ public static class SetupDetector
         }
         foreach (var reason in quality.Reasons) rejections.Add(reason);
 
+        if (request.Trend.State == TrendState.Transition && hypothesis.Kind == SetupKind.Pullback &&
+            !policy.AllowTransitionPullback)
+            rejections.Add(CodeTransitionPullbackBlocked);
+        if (request.Trend.State == TrendState.Transition && hypothesis.Kind == SetupKind.Breakout &&
+            !policy.AllowTransitionBreakout)
+            rejections.Add(CodeTransitionBreakoutBlocked);
+
+        var expectedNetR = planning.NetR is { } netR
+            ? (double)netR * policy.ExpectedWinRatePrior - (1 - policy.ExpectedWinRatePrior)
+            : (double?)null;
+        if (expectedNetR is { } expected && expected <= policy.MinimumExpectedNetR)
+            rejections.Add("EXPECTED_NET_R_NON_POSITIVE");
+
         // null은 TREND_UNAVAILABLE이 이미 막으므로 중복 사유를 만들지 않는다(#42).
         if (RequiresTrendAlignment(hypothesis.Kind) && request.Trend.SignedTrend is { } signedTrend
             && double.IsFinite(signedTrend) && signedTrend < 0)
@@ -429,7 +449,7 @@ public static class SetupDetector
                 invalidated = true;
                 notes.Add(NoteLiveBelowSupportLower);
             }
-            if (planning.Stop is { } stop && live <= stop)
+            if (planning.Stop is { } stopValue && live <= stopValue)
             {
                 invalidated = true;
                 notes.Add(NoteLiveBelowStop);
@@ -446,12 +466,36 @@ public static class SetupDetector
         // 같은 note를 달면 코호트가 "구조 결측 후보 전체"로 희석된다(#65).
         if (structureWaived && disposition == CandidateDisposition.Ready) notes.Add(NoteReadyWithout5mStructure);
 
+        var trendAlignment = request.Trend.SignedTrend is { } signed && double.IsFinite(signed)
+            ? Math.Clamp(signed / 100d, -1d, 1d) : (double?)null;
+        var vwapDistance = request.Trend.Vwap is { } vwap && request.Trend.Atr1m is > 0 &&
+                           double.IsFinite(vwap) && double.IsFinite(request.Trend.Atr1m.Value)
+            ? ((double)trigger.Close - vwap) / request.Trend.Atr1m.Value : (double?)null;
+        var distance = planning.Stop is { } stopDistance && request.Atr1mAtStructureCutoff is > 0
+            ? (double)Math.Abs(entryReference - stopDistance) / request.Atr1mAtStructureCutoff.Value : (double?)null;
+        var evidence = new EntryEvidence(trigger.Start, trigger.End.AddMinutes(1), side, regime,
+            trendAlignment, distance, planning.NetR, expectedNetR, relativeVolume, vwapDistance,
+            hypothesis.Anchor is { } anchorDistance ? Math.Abs(entryReference - anchorDistance) : null,
+            trigger.Start.TimeOfDay,
+            !planning.MissingLiquidity, planning.Viable,
+            rejections.ToImmutableArray(),
+            [
+                $"TREND_ALIGNMENT:{(trendAlignment is null ? "MISSING" : trendAlignment.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))}",
+                $"REGIME:{regime.Key}",
+                $"NET_R:{(planning.NetR is null ? "MISSING" : planning.NetR.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))}",
+                $"RELATIVE_VOLUME:{(relativeVolume is null ? "MISSING" : relativeVolume.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))}",
+                $"VWAP_DISTANCE_ATR:{(vwapDistance is null ? "MISSING" : vwapDistance.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))}",
+                $"COST_COMPLETE:{(!planning.MissingLiquidity ? "1" : "0")}"
+            ]);
+        if (planning.Plan is { } planned)
+            planning = planning with { Plan = planned with { Evidence = evidence } };
+
         return new EntryCandidate(eventId, guardKey, hypothesis.Kind, kindName, hypothesis.Zone.Id, trigger.Start,
             triggerConfirmedAt, structureCutoff, request.AnalysisAsOf, expiresAt, disposition, entryReference,
             hypothesis.Anchor, quality.Score, quality,
             disposition == CandidateDisposition.Ready ? planning.Plan : null, planning,
             rejections.ToImmutableArray(), notes.ToImmutableArray(), hypothesis.CounterTrend,
-            hypothesis.RetestConfirmed, hypothesis.EpisodeStartAt);
+            hypothesis.RetestConfirmed, hypothesis.EpisodeStartAt, side, regime, evidence);
     }
 
     /// <summary>추세 정렬을 전제로 하는 종류. REBOUND는 제외다(§8/§9.4).</summary>

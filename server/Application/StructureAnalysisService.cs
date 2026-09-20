@@ -626,7 +626,7 @@ public sealed class StructureAnalysisService(
             chosen.EntryQuality, snapshot.AnalysisAsOf, snapshot.QuoteAt);
         if (pendingEntries is not null)
         {
-            var pending = new PendingEntry(chosen.EventId, snapshot.Symbol, TradeSide.Long,
+            var pending = new PendingEntry(chosen.EventId, snapshot.Symbol, chosen.Side,
                 chosen.TriggerBarStart, chosen.TriggerBarStart.AddMinutes(1), chosen.ExpiresAt,
                 (double)chosen.Plan.Stop, (double)chosen.Plan.Target, (double)chosen.Plan.EntryReference,
                 chosen.Plan.PlanId, chosen.Plan.PolicyHash);
