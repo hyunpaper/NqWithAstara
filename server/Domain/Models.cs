@@ -29,7 +29,9 @@ public sealed record ExecutionProvenance(DateTimeOffset EntryBarStart, DateTimeO
     DateTimeOffset? EvaluatedBarCloseAt = null, string? BarrierDecision = null,
     double? EvaluatedBarOpen = null, double? EvaluatedBarHigh = null,
     double? EvaluatedBarLow = null, double? EvaluatedBarClose = null,
-    DateTimeOffset? LastQuoteAt = null);
+    DateTimeOffset? LastQuoteAt = null,
+    // 확인봉에서 실제 관측한 값. FrozenPlan의 계획값과 분리된 realized provenance다.
+    double? FillPrice = null, double? SpreadCost = null, string? PriceSource = null);
 
 /// <summary>
 /// 설계 §11 FrozenStructureContext. v5 거래가 체결된 시점의 구조 계획·추세·품질 스냅샷으로, 진입 이후

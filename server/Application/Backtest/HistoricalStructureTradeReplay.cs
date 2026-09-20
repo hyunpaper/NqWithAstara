@@ -6,6 +6,30 @@ namespace Astra.Server.Application.Backtest;
 
 public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePolicy policy)
 {
+    public sealed record ReplayPendingResolution(bool Clear, EntryConfirmation? Confirmation, string Reason);
+
+    /// <summary>운영 replay loop와 테스트가 공유하는 pending 수명주기 판정이다.</summary>
+    public static ReplayPendingResolution ResolvePending(PendingEntry pending, Candle current, DateTimeOffset observedAt)
+    {
+        if (current.Timestamp == pending.ConfirmationBarStart)
+        {
+            var confirmation = PendingEntryPolicy.Confirm(pending, current, observedAt,
+                current.Close, "REPLAY_CONFIRMATION_BAR_CLOSE");
+            return new(true, confirmation, confirmation.Decision.ToString());
+        }
+        if (current.Timestamp > pending.ConfirmationBarStart || observedAt >= pending.ExpiresAt)
+            return new(true, null, "MISSING_CONFIRMATION_BAR");
+        return new(false, null, "WAITING_CONFIRMATION_BAR");
+    }
+
+    public static bool ShouldQueuePending(ISet<string> consumedEventIds, PendingEntry pending) =>
+        !consumedEventIds.Contains(pending.EntryEventId);
+
+    // Replay에서도 실시간과 같은 확인봉 경계를 유지한다. 계획과 체결을 한 튜플로
+    // 보관해 다음 봉이 닫히기 전에는 SimTrade를 생성하지 않는다.
+    sealed record PendingReplayEntry(PendingEntry Pending, FrozenStructureContext Context,
+        EntryCandidate Candidate);
+
     public async Task<ImmutableDictionary<string, ImmutableArray<SimTrade>>> RunAsync(DateOnly from, DateOnly to,
         IReadOnlyList<string> symbols, CancellationToken ct)
     {
@@ -30,6 +54,8 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                 var retired = ImmutableArray<string>.Empty;
                 var latch = StructuralLatch.Empty(symbol, sessionStart, policy.PolicyHash);
                 var processedBars = 0;
+                PendingReplayEntry? pending = null;
+                var pendingEventIds = new HashSet<string>(StringComparer.Ordinal);
 
                 for (var index = 0; index < bars.Length && bars[index].Timestamp.AddMinutes(1) < sessionEnd; index++)
                 {
@@ -39,6 +65,32 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                     var exitedThisPoll = result[symbol].Count(x => x.Status == "OPEN") < openBeforeBar;
                     processedBars = index + 1;
                     var now = current.Timestamp.AddMinutes(1);
+                    var completedStarts = bars.Take(index + 1).Select(x => x.Timestamp).ToArray();
+                    // 이전 신호의 다음 완료 봉에서만 체결을 확인한다. current.Close는
+                    // 해당 봉이 닫힌 뒤에만 관측 가능하므로 look-ahead가 없다.
+                    if (pending is { } queued && current.Timestamp == queued.Pending.ConfirmationBarStart)
+                    {
+                        var resolution = ResolvePending(queued.Pending, current, now);
+                        if (resolution.Confirmation is { Decision: PendingEntryDecision.Confirmed } confirmation)
+                        {
+                            var entered = StructuralSimulation.Enter(result[symbol], new StructuralEntryRequest(symbol,
+                                queued.Candidate.TriggerBarStart, now, sessionEnd, queued.Context,
+                                completedStarts, sessionStart, queued.Candidate.Plan?.TargetZoneSnapshot.Aliases, confirmation), policy);
+                            result[symbol] = entered.Trades;
+                        }
+                        pendingEventIds.Add(queued.Pending.EntryEventId);
+                        pending = null;
+                    }
+                    else if (pending is { } unresolved)
+                    {
+                        var resolution = ResolvePending(unresolved.Pending, current, now);
+                        if (resolution.Clear)
+                        {
+                            // exact confirmation 봉을 놓치면 추후 봉으로 소급 체결하지 않는다.
+                            pendingEventIds.Add(unresolved.Pending.EntryEventId);
+                            pending = null;
+                        }
+                    }
                     var prefix = bars.Take(index + 1).ToArray();
                     var build = StructureSnapshotFactory.Create(symbol, market, prefix, daily[symbol], current.Close,
                         now, now, 1, policy);
@@ -68,21 +120,20 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                             evaluated.Zones), snapshot.QuotePrice, now);
                     var preferred = CandidateSelection.SelectPreferred(candidates);
 
-                    if (!exitedThisPoll && preferred is { Disposition: CandidateDisposition.Ready, Plan: not null })
+                    if (!exitedThisPoll && pending is null && preferred is { Disposition: CandidateDisposition.Ready, Plan: not null }
+                        && ShouldQueuePending(pendingEventIds, new PendingEntry(preferred.EventId, symbol,
+                            TradeSide.Long, preferred.TriggerBarStart, preferred.TriggerBarStart.AddMinutes(1),
+                            preferred.ExpiresAt, (double)preferred.Plan.Stop, (double)preferred.Plan.Target,
+                            (double)preferred.Plan.EntryReference, preferred.Plan.PlanId, preferred.Plan.PolicyHash)))
                     {
                         var context = StructuralSimulation.Freeze(preferred.Plan, preferred.EventId,
                             trend.State.ToString(), trend.SignedTrend, preferred.EntryQuality,
                             snapshot.AnalysisAsOf, snapshot.QuoteAt);
-                        var entered = StructuralSimulation.Enter(result[symbol], new StructuralEntryRequest(symbol,
-                            preferred.TriggerBarStart, EntryTime(preferred.TriggerConfirmedAt, snapshot.AnalysisAsOf),
-                            snapshot.SessionEnd, context,
-                            build.Bars.Bars.Select(x => x.Start).ToArray(), snapshot.SessionStart,
-                            preferred.Plan.TargetZoneSnapshot.Aliases), policy);
-                        result[symbol] = entered.Trades;
-                        if (entered.Outcome is StructuralEntryOutcome.Entered or StructuralEntryOutcome.AlreadyEntered)
-                            candidates = candidates.Select(x => x.EventId == preferred.EventId
-                                ? x with { Disposition = CandidateDisposition.Entered }
-                                : x).ToImmutableArray();
+                        var pendingEntry = new PendingEntry(preferred.EventId, symbol, TradeSide.Long,
+                            preferred.TriggerBarStart, preferred.TriggerBarStart.AddMinutes(1), preferred.ExpiresAt,
+                            (double)preferred.Plan.Stop, (double)preferred.Plan.Target,
+                            (double)preferred.Plan.EntryReference, preferred.Plan.PlanId, preferred.Plan.PolicyHash);
+                        pending = new PendingReplayEntry(pendingEntry, context, preferred);
                     }
                     latch = StructuralLifecycle.Commit(latch, cutoff, candidates, evaluated.RetiredZoneIds,
                         StructuralLifecycle.EventSignature(candidates,
