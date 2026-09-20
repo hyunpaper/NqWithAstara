@@ -326,7 +326,7 @@ public sealed class NewsFeedService(
                 }
                 catch (Exception exception) { diagnostics.PollFailed("news-translate", exception); }
             }
-            await SaveAsync(Compose(entry, result, inputKind), ct);
+            await SaveAsync(Compose(entry, result, inputKind, body), ct);
             await SaveGroupFollowersAsync(entry.Article.Id, result, ct);
         }
         state.QueueDepth(QueueDepth);
@@ -345,11 +345,11 @@ public sealed class NewsFeedService(
             var inputKind = follower.Article.HeadlineOnly || string.IsNullOrWhiteSpace(follower.Article.Summary)
                 ? NewsInputKinds.Headline
                 : NewsInputKinds.Body;
-            await SaveAsync(Compose(follower, copied, inputKind, representativeId), ct);
+            await SaveAsync(Compose(follower, copied, inputKind, "", representativeId), ct);
         }
     }
 
-    NewsRecord Compose(QueuedArticle entry, NewsClassificationResult result, string inputKind, string? classifiedFrom = null)
+    NewsRecord Compose(QueuedArticle entry, NewsClassificationResult result, string inputKind, string classificationText = "", string? classifiedFrom = null)
     {
         var classification = result.Classification;
         // 피드 `tickers` 태그가 있으면 그것을 심볼로 쓰고, 없을 때만 LLM 판정을 쓴다.
@@ -380,7 +380,9 @@ public sealed class NewsFeedService(
             entry.Article.Url,
             clock.GetUtcNow(),
             inputKind == NewsInputKinds.Headline ? "headline" : (string.IsNullOrWhiteSpace(entry.Article.Content) ? "summary" : "body"),
-            classification?.KoreanTitle is null ? "untranslated" : "translated");
+            classification?.KoreanTitle is null ? "untranslated" : "translated",
+            classificationText, inputKind, classifiedFrom ?? entry.Article.Id,
+            null, null, entry.Article.CreatedAt == DateTimeOffset.MinValue ? "unknown" : "known");
     }
 
     async Task SaveAsync(NewsRecord record, CancellationToken ct)

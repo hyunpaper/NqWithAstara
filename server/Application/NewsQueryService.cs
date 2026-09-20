@@ -72,6 +72,8 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         return record is null ? null : Project(record);
     }
 
+    public object? DetailByQuery(string? id) => string.IsNullOrWhiteSpace(id) ? null : Detail(id);
+
     public object? Evidence(string id)
     {
         var record = state.Find(id);
@@ -86,7 +88,12 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
             content = record.Content, sentiment = record.Sentiment,
             strength = record.Strength, reason = record.Reason,
             impactScores = record.ImpactScores, model = record.Model,
-            promptVersion = record.PromptVersion, classifiedAt = record.ClassifiedAt
+            promptVersion = record.PromptVersion, classifiedAt = record.ClassifiedAt,
+            classificationText = record.ClassificationText,
+            classificationSource = record.ClassificationSource,
+            evidenceArticleId = record.EvidenceArticleId,
+            summaryKo = record.SummaryKo, contentKo = record.ContentKo,
+            publishedAtStatus = record.PublishedAtStatus
         };
     }
 
@@ -118,6 +125,12 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         collectedAt = record.CollectedAt,
         evidenceSource = record.EvidenceSource,
         translationStatus = record.TranslationStatus,
+        classificationText = record.ClassificationText,
+        classificationSource = record.ClassificationSource,
+        evidenceArticleId = record.EvidenceArticleId,
+        summaryKo = record.SummaryKo,
+        contentKo = record.ContentKo,
+        publishedAtStatus = record.PublishedAtStatus,
     };
 
     static object Project(NewsSentimentScore score) => new

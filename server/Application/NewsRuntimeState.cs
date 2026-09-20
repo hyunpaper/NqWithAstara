@@ -72,7 +72,13 @@ public sealed record NewsRecord(
     string? Url = null,
     DateTimeOffset? CollectedAt = null,
     string EvidenceSource = "",
-    string TranslationStatus = "not_requested");
+    string TranslationStatus = "not_requested",
+    string ClassificationText = "",
+    string ClassificationSource = "",
+    string? EvidenceArticleId = null,
+    string? SummaryKo = null,
+    string? ContentKo = null,
+    string PublishedAtStatus = "known");
 
 /// <summary>health·조회가 함께 보는 뉴스 런타임 상태(#151 §6). 스레드 안전하다.</summary>
 public sealed class NewsRuntimeState
