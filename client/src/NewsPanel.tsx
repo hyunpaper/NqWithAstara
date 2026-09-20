@@ -2,15 +2,16 @@ import { useEffect, useState } from "react";
 import { Newspaper } from "lucide-react";
 import { normalizeArticlesResponse, type NewsArticle } from "./newsTypes";
 import { absoluteTimeKst, inputKindLabel, relativeTimeKo, sentimentBadge } from "./newsFormat";
-
-const NEWS_URL = "https://www.saveticker.com/news";
+import NewsDetailPanel from "./NewsDetailPanel";
+import NewsEvidenceTooltip from "./NewsEvidenceTooltip";
 
 export default function NewsPanel({ symbol }: { symbol: string }) {
   const [articles, setArticles] = useState<NewsArticle[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [selected, setSelected] = useState<NewsArticle | null>(null);
 
   useEffect(() => {
-    setArticles([]);
+    setArticles([]); setSelected(null);
     setLoaded(false);
     let active = true;
     let inFlight = false;
@@ -80,7 +81,7 @@ export default function NewsPanel({ symbol }: { symbol: string }) {
             const kind = inputKindLabel(a.inputKind);
             return (
               <li key={a.id}>
-                <a href={NEWS_URL} target="_blank" rel="noreferrer">
+                <button type="button" className="news-row-button" onClick={() => setSelected(a)} aria-label={`${a.titleKo ?? a.title} 상세 보기`}>
                   <div className="news-row-head">
                     <span
                       className="news-time"
@@ -89,17 +90,18 @@ export default function NewsPanel({ symbol }: { symbol: string }) {
                       {relativeTimeKo(a.createdAt)}
                     </span>
                     {a.source && <span className="news-source">{a.source}</span>}
-                    {badge && <span className={badge.className}>{badge.label}</span>}
+                    {badge && <span className="news-badge-wrap"><span className={badge.className}>{badge.label}</span><NewsEvidenceTooltip article={a} /></span>}
                   </div>
                   <div className="news-title">{a.title}</div>
                   {a.reason && <div className="news-reason">{a.reason}</div>}
                   {kind && <span className="news-kind">{kind}</span>}
-                </a>
+                </button>
               </li>
             );
           })}
         </ul>
       )}
+      {selected && <NewsDetailPanel article={selected} onClose={() => setSelected(null)} />}
     </section>
   );
 }

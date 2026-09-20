@@ -23,6 +23,11 @@ export type NewsArticle = {
   inputKind: NewsInputKind | null;
   entities: NewsEntity[];
   impactScores?: Record<string, number>;
+  url?: string | null;
+  summary?: string | null;
+  body?: string | null;
+  provenance?: string | null;
+  translationStatus?: "translated" | "untranslated" | "pending" | null;
 };
 export type NewsEntity = { symbol: string; name: string; industry: string; sentimentScore: number | null; matchScore: number | null };
 
@@ -101,6 +106,11 @@ export const normalizeArticle = (raw: unknown): NewsArticle | null => {
     impactScores: typeof r.impactScores === "object" && r.impactScores !== null
       ? Object.fromEntries(Object.entries(r.impactScores as Record<string, unknown>).flatMap(([k, v]) => typeof v === "number" && Number.isFinite(v) ? [[k, v]] : []))
       : {},
+    url: str(r.url) ?? str(r.link),
+    summary: str(r.summary),
+    body: str(r.body) ?? str(r.content),
+    provenance: str(r.provenance) ?? str(r.sourceType),
+    translationStatus: r.translationStatus === "translated" || r.translationStatus === "untranslated" || r.translationStatus === "pending" ? r.translationStatus : null,
   };
 };
 
