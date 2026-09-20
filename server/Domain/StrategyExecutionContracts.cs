@@ -50,7 +50,7 @@ public static class PendingEntryPolicy
         double? observedFill, string priceSource = "CONFIRMATION_BAR")
     {
         var confirmationClose = confirmationBar.Timestamp.AddMinutes(1);
-        if (confirmationBar.Timestamp < pending.ConfirmationBarStart || observedAt < confirmationClose)
+        if (confirmationBar.Timestamp != pending.ConfirmationBarStart || observedAt < confirmationClose)
             return new(pending, PendingEntryDecision.RejectedUnobservedFill, observedAt, null, null, priceSource, "UNOBSERVED");
         if (observedAt > pending.ExpiresAt)
             return new(pending, PendingEntryDecision.Expired, observedAt, null, null, priceSource, "OBSERVED");

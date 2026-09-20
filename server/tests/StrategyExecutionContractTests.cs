@@ -54,6 +54,15 @@ public sealed class StrategyExecutionContractTests
     }
 
     [Fact]
+    public void 예정된_확인봉보다_이후_봉은_확인하지_않는다()
+    {
+        var pending = Pending();
+        var later = new Candle(pending.ConfirmationBarStart.AddMinutes(1), 100, 103, 99, 102, 1000);
+        var result = PendingEntryPolicy.Confirm(pending, later, later.Timestamp.AddMinutes(1), 101);
+        Assert.Equal(PendingEntryDecision.RejectedUnobservedFill, result.Decision);
+    }
+
+    [Fact]
     public void 숏은_갭과_잘못된_가격순서를_거부한다()
     {
         var pending = Pending() with { Side = TradeSide.Short, PlannedStop = 105, PlannedTarget = 95 };
