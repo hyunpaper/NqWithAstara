@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Xml.Linq;
 using Astra.Server.Application;
 using Astra.Server.Domain.News;
 
@@ -19,14 +20,35 @@ public sealed class MarketauxNewsFeed : INewsFeed
 
     public async Task<IReadOnlyList<NewsFeedItem>> ListAsync(int page, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(_options.MarketauxApiKey)) return [];
+        if (string.IsNullOrWhiteSpace(_options.MarketauxApiKey)) return await GoogleRssAsync(ct);
         // 엔터티 없는 거시·시장 기사도 MARKET으로 분류해야 하므로 전체 피드를 유지한다.
         var uri = $"{_options.MarketauxUrl}?api_token={Uri.EscapeDataString(_options.MarketauxApiKey)}&language=en&limit=100&page={page.ToString(CultureInfo.InvariantCulture)}";
-        var payload = await _http.GetFromJsonAsync<Payload>(uri, Json, ct);
-        return payload?.Data?.Where(x => !string.IsNullOrWhiteSpace(x.Uuid)).Select(Map).ToArray() ?? [];
+        try
+        {
+            var payload = await _http.GetFromJsonAsync<Payload>(uri, Json, ct);
+            return payload?.Data?.Where(x => !string.IsNullOrWhiteSpace(x.Uuid)).Select(Map).ToArray() ?? [];
+        }
+        catch (HttpRequestException) { return await GoogleRssAsync(ct); }
     }
 
     public Task<NewsDetail?> DetailAsync(string id, CancellationToken ct) => Task.FromResult<NewsDetail?>(null);
+
+    async Task<IReadOnlyList<NewsFeedItem>> GoogleRssAsync(CancellationToken ct)
+    {
+        using var response = await _http.GetAsync(_options.GoogleNewsUrl, ct);
+        response.EnsureSuccessStatusCode();
+        var xml = await response.Content.ReadAsStringAsync(ct);
+        var doc = XDocument.Parse(xml);
+        return doc.Descendants("item").Select(item =>
+        {
+            var link = item.Element("link")?.Value?.Trim() ?? "";
+            var title = item.Element("title")?.Value?.Trim() ?? "";
+            var source = item.Element("source")?.Value?.Trim() ?? "Google News";
+            var published = DateTimeOffset.TryParse(item.Element("pubDate")?.Value, out var at)
+                ? at : DateTimeOffset.UtcNow;
+            return new NewsFeedItem(link.Length == 0 ? title : link, title, title, source, published, []);
+        }).Where(x => x.Id.Length > 0).ToArray();
+    }
 
     static NewsFeedItem Map(Item x)
     {
