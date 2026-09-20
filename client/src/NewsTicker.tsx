@@ -3,10 +3,17 @@ import { useVisiblePolling } from "./useVisiblePolling";
 import { normalizeArticlesResponse, type NewsArticle } from "./newsTypes";
 
 type Health = { enabled?: boolean; lastSuccessAt?: string | null; lastError?: string | null };
+const sentimentLabel = (value: NewsArticle["sentiment"]) => ({
+  positive: "호재",
+  negative: "악재",
+  neutral: "중립",
+  unclassified: "미분류",
+}[value]);
 export const aggregateTickerArticles = (articles: NewsArticle[], now = Date.now()) => {
   const recent = articles.filter((a) => a.createdAt != null && Date.parse(a.createdAt) >= now - 24 * 60 * 60 * 1000).slice(0, 200);
   const counts = recent.reduce<Record<string, number>>((out, article) => { out[article.sentiment] = (out[article.sentiment] ?? 0) + 1; return out; }, {});
-  return { recent, counts };
+  const sectors = recent.flatMap((a) => a.entities.map((e) => ({ sector: e.industry, sentiment: a.sentiment }))).reduce<Record<string, Record<string, number>>>((out, x) => { const row = out[x.sector] ??= {}; row[x.sentiment] = (row[x.sentiment] ?? 0) + 1; return out; }, {});
+  return { recent, counts, sectors };
 };
 
 export default function NewsTicker() {
@@ -23,8 +30,10 @@ export default function NewsTicker() {
       setFetchError(false);
     } catch { setFetchError(true); }
   }, 60000);
-  const { recent, counts } = aggregateTickerArticles(articles);
+  const { recent, counts, sectors } = aggregateTickerArticles(articles);
+  const sectorSummary = Object.entries(sectors).slice(0, 4).map(([name, c]) => `${name} 호재 ${c.positive ?? 0}/악재 ${c.negative ?? 0}/중립 ${c.neutral ?? 0}`).join(" · ");
   const status = fetchError ? "피드 장애" : !health ? "대기" : health.enabled === false ? "비활성" : health.lastError ? "피드 장애" : !health.lastSuccessAt ? "대기" : recent.length === 0 ? "데이터 없음" : "정상";
-  const summary = `AI 감성 · ${status} · 최근 24시간 최대 200건 중 ${recent.length}건 · 호재 ${counts.positive ?? 0} · 악재 ${counts.negative ?? 0} · 중립 ${counts.neutral ?? 0} · 미분류 ${counts.unclassified ?? 0}`;
-  return <section className={`news-ticker ${status === "정상" ? "ok" : "notice"}`} aria-label="전체 뉴스 감성 티커"><div className="news-ticker-summary">{summary}</div>{recent.length > 0 && <div className="news-ticker-viewport" tabIndex={0}><div className="news-ticker-track" aria-live="polite">{recent.map((a, i) => <span key={`${a.id}-${i}`} className={`news-ticker-item ${a.sentiment}`}><b>{a.sentiment}</b> {a.title}</span>)}{recent.map((a, i) => <span key={`repeat-${a.id}-${i}`} className={`news-ticker-item ${a.sentiment}`} aria-hidden="true"><b>{a.sentiment}</b> {a.title}</span>)}</div></div>}</section>;
+  const summary = `AI 감성 · ${status} · 최근 24시간 최대 200건 중 ${recent.length}건 · 호재 ${counts.positive ?? 0} · 악재 ${counts.negative ?? 0} · 중립 ${counts.neutral ?? 0} · 미분류 ${counts.unclassified ?? 0}${sectorSummary ? ` · 섹터: ${sectorSummary}` : ""}`;
+  const text = (a: NewsArticle) => `${a.titleKo ?? a.title} · ${a.sourceKo ?? a.source ?? "출처 미상"} · 영향도 ${Object.values(a.impactScores ?? {})[0] ?? "-"}`;
+  return <section className={`news-ticker ${status === "정상" ? "ok" : "notice"}`} aria-label="전체 뉴스 감성 티커"><div className="news-ticker-summary">{summary}</div>{recent.length > 0 && <div className="news-ticker-viewport" tabIndex={0}><div className="news-ticker-track" aria-live="polite">{recent.map((a, i) => <span key={`${a.id}-${i}`} className={`news-ticker-item ${a.sentiment}`}><b>{sentimentLabel(a.sentiment)}</b> {text(a)}</span>)}{recent.map((a, i) => <span key={`repeat-${a.id}-${i}`} className={`news-ticker-item ${a.sentiment}`} aria-hidden="true"><b>{sentimentLabel(a.sentiment)}</b> {text(a)}</span>)}</div></div>}</section>;
 }

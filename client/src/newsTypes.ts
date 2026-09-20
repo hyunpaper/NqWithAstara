@@ -7,7 +7,9 @@ export type NewsInputKind = "summary" | "body" | "headline";
 export type NewsArticle = {
   id: string;
   title: string;
+  titleKo?: string | null;
   source: string | null;
+  sourceKo?: string | null;
   createdAt: string | null;
   tickers: string[];
   matchedSymbols: string[];
@@ -19,7 +21,10 @@ export type NewsArticle = {
   latencyMs: number | null;
   classifiedAt: string | null;
   inputKind: NewsInputKind | null;
+  entities: NewsEntity[];
+  impactScores?: Record<string, number>;
 };
+export type NewsEntity = { symbol: string; name: string; industry: string; sentimentScore: number | null; matchScore: number | null };
 
 export type NewsArticlesResponse = {
   enabled: boolean;
@@ -78,7 +83,9 @@ export const normalizeArticle = (raw: unknown): NewsArticle | null => {
   return {
     id,
     title: str(r.title) ?? "(제목 없음)",
+    titleKo: str(r.titleKo),
     source: str(r.source),
+    sourceKo: str(r.sourceKo),
     createdAt: str(r.createdAt),
     tickers: strArray(r.tickers),
     matchedSymbols: strArray(r.matchedSymbols),
@@ -90,6 +97,10 @@ export const normalizeArticle = (raw: unknown): NewsArticle | null => {
     latencyMs: num(r.latencyMs),
     classifiedAt: str(r.classifiedAt),
     inputKind: inputKindOf(r.inputKind),
+    entities: Array.isArray(r.entities) ? r.entities.filter((e): e is Record<string, unknown> => typeof e === "object" && e !== null).map((e) => ({ symbol: str(e.symbol) ?? "", name: str(e.name) ?? "", industry: str(e.industry) ?? "", sentimentScore: num(e.sentimentScore), matchScore: num(e.matchScore) })).filter((e) => e.industry.length > 0) : [],
+    impactScores: typeof r.impactScores === "object" && r.impactScores !== null
+      ? Object.fromEntries(Object.entries(r.impactScores as Record<string, unknown>).flatMap(([k, v]) => typeof v === "number" && Number.isFinite(v) ? [[k, v]] : []))
+      : {},
   };
 };
 

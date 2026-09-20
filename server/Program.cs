@@ -1,4 +1,4 @@
-﻿using Astra.Server;
+using Astra.Server;
 using Astra.Server.Api;
 using Astra.Server.Application;
 using Astra.Server.Application.Backtest;
@@ -49,6 +49,7 @@ builder.Services.AddSingleton<RejectedPlanResearchService>(sp => {
     return new RejectedPlanResearchService(sp.GetRequiredService<ILocalStore>(), new RejectedPlanResearchOptions(cfg.GetValue("Enabled", false), Math.Clamp(cfg.GetValue("Limit", 500), 1, 5000)));
 });
 builder.Services.AddSingleton<StructureAnalysisService>();
+builder.Services.AddSingleton<StructuralPendingEntryService>();
 // 이슈 #41: 폴링 → 구조 엔진 호가 배선. 새 게이트웨이가 아니라 LiquidityQueryService 캐시를 공유한다.
 builder.Services.AddSingleton<StructureLiquidityFeed>();
 builder.Services.AddSingleton<MonitorRuntimeState>(); builder.Services.AddSingleton<MonitorPollingService>(); builder.Services.AddSingleton<MonitorService>(); builder.Services.AddSingleton<IMonitorSignals>(x => x.GetRequiredService<MonitorPollingService>());
@@ -89,8 +90,15 @@ builder.Services.AddSingleton<ConfluenceService>();
 // 이슈 #151: 뉴스 감성(선택 기능). News:Enabled 기본 false이며 false면 피드·Ollama를 호출하지 않는다.
 builder.Services.AddSingleton(_ => { var news = new NewsOptions(); builder.Configuration.GetSection("News").Bind(news); return news; });
 builder.Services.AddSingleton<INewsStore, NewsStore>();
-builder.Services.AddSingleton<INewsFeed>(x => new SaveTickerNewsFeed(x.GetRequiredService<NewsOptions>()));
+builder.Services.AddSingleton<INewsFeed>(x =>
+{
+    var options = x.GetRequiredService<NewsOptions>();
+    return string.IsNullOrWhiteSpace(options.MarketauxApiKey)
+        ? new SaveTickerNewsFeed(options)
+        : new MarketauxNewsFeed(options);
+});
 builder.Services.AddSingleton<INewsClassifier>(x => new OllamaNewsClassifier(x.GetRequiredService<NewsOptions>()));
+builder.Services.AddSingleton<INewsTranslator>(x => new PapagoNewsTranslator(x.GetRequiredService<NewsOptions>()));
 builder.Services.AddSingleton<NewsRuntimeState>(); builder.Services.AddSingleton<NewsFeedService>(); builder.Services.AddSingleton<NewsQueryService>();
 builder.Services.AddHostedService(x => x.GetRequiredService<MonitorService>());
 builder.Services.AddHostedService<NewsService>();

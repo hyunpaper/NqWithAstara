@@ -6,7 +6,8 @@ using Astra.Server.Domain.Structure;
 
 namespace Astra.Server.Application.Backtest;
 
-public sealed record HistoricalReplayRequest(DateOnly From, DateOnly To);
+/// <summary>Symbols가 지정되면 운영 관심종목을 읽지 않고 해당 심볼만 replay한다(OOS 비교용).</summary>
+public sealed record HistoricalReplayRequest(DateOnly From, DateOnly To, IReadOnlyList<string>? Symbols = null);
 
 public sealed record HistoricalReplayExitCounts(int Stop, int Target, int Eod);
 
@@ -78,7 +79,9 @@ public sealed class HistoricalReplayService
             || request.To.DayNumber - request.From.DayNumber + 1 > MaxDays)
             return new(400, null, $"기간은 오늘 이전의 1~{MaxDays}일 범위여야 합니다.");
 
-        var watch = (await _store.Read("watchlist.json", new List<WatchItem>()))
+        var requested = request.Symbols ?? Array.Empty<string>();
+        var watch = (requested.Count > 0 ? requested.Select(x => new WatchItem(x, x))
+            : await _store.Read("watchlist.json", new List<WatchItem>()))
             .Select(x => x.Symbol.Trim().ToUpperInvariant()).Where(x => x.Length > 0 && x != "QQQ")
             .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToImmutableArray();
         if (watch.Length == 0) return new(409, null, "관심종목이 비어 있습니다.");

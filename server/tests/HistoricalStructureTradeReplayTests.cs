@@ -36,6 +36,47 @@ public sealed class HistoricalStructureTradeReplayTests
     }
 
     [Fact]
+    public void PendingReplayConfirmationRequiresExactNextBarAndClearsOnMissingBar()
+    {
+        var pending = new PendingEntry("replay-event", "TSLA", TradeSide.Long,
+            Start, Start.AddMinutes(1), Start.AddMinutes(3), 95, 110, 100, "plan", "policy");
+        var missing = PendingEntryPolicy.Confirm(pending,
+            new Candle(Start.AddMinutes(2), 100, 102, 99, 101, 10), Start.AddMinutes(3), 101);
+        Assert.Equal(PendingEntryDecision.RejectedUnobservedFill, missing.Decision);
+        Assert.Equal("UNOBSERVED", missing.EvidenceStatus);
+
+        var exact = PendingEntryPolicy.Confirm(pending,
+            new Candle(Start.AddMinutes(1), 100, 102, 99, 101, 10), Start.AddMinutes(2), 101);
+        Assert.Equal(PendingEntryDecision.Confirmed, exact.Decision);
+        Assert.Equal(101, exact.FillPrice);
+
+        var resolution = HistoricalStructureTradeReplay.ResolvePending(pending,
+            new Candle(Start.AddMinutes(2), 100, 102, 99, 101, 10), Start.AddMinutes(3));
+        Assert.True(resolution.Clear);
+        Assert.Equal("MISSING_CONFIRMATION_BAR", resolution.Reason);
+        var consumed = new HashSet<string>([pending.EntryEventId]);
+        Assert.False(HistoricalStructureTradeReplay.ShouldQueuePending(consumed, pending));
+        consumed.Clear();
+        Assert.True(HistoricalStructureTradeReplay.ShouldQueuePending(consumed, pending));
+    }
+
+    [Fact]
+    public void ReplayEntryRequestCarriesCompletedBarsForCooldownEvaluation()
+    {
+        var stopped = new SimTrade("stopped", "TSLA", "PULLBACK", Start,
+            100, 110, 95, null, null, "STOP", 95, Start.AddMinutes(1), -5, 95,
+            SessionEnd: Start.AddHours(1));
+        var evaluation = StructuralPlanner.Evaluate(D2.ExampleA(), StructurePolicy.Default);
+        Assert.True(evaluation.Plan is not null);
+        var plan = evaluation.Plan!;
+        var context = StructuralSimulation.Freeze(plan, "replay-cooldown", "UP", 1, 50, Start, null);
+        var request = new StructuralEntryRequest("TSLA", Start.AddMinutes(3), Start.AddMinutes(3),
+            Start.AddHours(1), context, [Start, Start.AddMinutes(1), Start.AddMinutes(2)], Start);
+        var result = StructuralSimulation.Enter([stopped], request, new StructurePolicy { StopReentryCooldownBars = 3 });
+        Assert.Equal(StructuralEntryOutcome.BlockedByStopCooldown, result.Outcome);
+    }
+
+    [Fact]
     public async Task SameBarsAndPolicyProduceTheSameTradeSequence()
     {
         var bars = new MemoryBars();

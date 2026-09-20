@@ -3,6 +3,8 @@ using System.Text.Json;
 
 namespace Astra.Server.Domain.News;
 
+public sealed record NewsEntity(string Symbol, string Name, string Industry, double? SentimentScore, double? MatchScore);
+
 /// <summary>감성 분류 라벨(#151). 판정 실패는 <see cref="Unclassified"/>로 남긴다.</summary>
 public static class NewsSentiments
 {
@@ -32,6 +34,7 @@ public static class NewsSymbols
 public static class NewsPromptVersions
 {
     public const string V2b = "v2b";
+    public const string V2c = "v2c";
 }
 
 /// <summary>
@@ -47,7 +50,8 @@ public sealed record NewsArticle(
     IReadOnlyList<string> Tickers,
     string Headline = "",
     bool HeadlineOnly = false,
-    string? GroupId = null);
+    string? GroupId = null,
+    IReadOnlyList<NewsEntity>? Entities = null);
 
 /// <summary>분류 입력으로 무엇을 썼는지(#151). 판정 근거를 사후에 되짚기 위해 레코드에 남긴다.</summary>
 public static class NewsInputKinds
@@ -190,7 +194,9 @@ public static class NewsSentimentDecay
 }
 
 /// <summary>로컬 LLM 분류 결과(#151 §3). 심볼은 관심종목에 한정하지 않는다.</summary>
-public sealed record NewsClassification(IReadOnlyList<string> Symbols, string Sentiment, int Strength, string Reason);
+public sealed record NewsClassification(IReadOnlyList<string> Symbols, string Sentiment, int Strength, string Reason,
+    string? KoreanTitle = null, string? KoreanSource = null,
+    IReadOnlyDictionary<string, int>? ImpactScores = null);
 
 /// <summary>
 /// 분류 JSON 파서(#151 §3). 코드펜스·앞뒤 잡문을 제거하고 첫 JSON 객체만 읽는다.
@@ -216,7 +222,8 @@ public static class NewsClassificationParser
             var symbols = Symbols(root);
             if (symbols.Count == 0) symbols = [NewsSymbols.Market];
 
-            return new NewsClassification(symbols, sentiment!, Strength(root), Reason(root));
+            return new NewsClassification(symbols, sentiment!, Strength(root), Reason(root),
+                Text(root, "title_ko"), Text(root, "source_ko"), ImpactScores(root));
         }
         catch (JsonException) { return null; }
     }
@@ -260,6 +267,18 @@ public static class NewsClassificationParser
     {
         var reason = Text(root, "reason")?.Trim() ?? "";
         return reason.Length > MaxReasonLength ? reason[..MaxReasonLength] : reason;
+    }
+
+    static IReadOnlyDictionary<string, int>? ImpactScores(JsonElement root)
+    {
+        if (!root.TryGetProperty("impact", out var element) || element.ValueKind != JsonValueKind.Object) return null;
+        var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var property in element.EnumerateObject())
+        {
+            var value = property.Value.ValueKind == JsonValueKind.Number && property.Value.TryGetInt32(out var n) ? n : 0;
+            if (property.Name.Length > 0) result[property.Name.Trim().TrimStart('$').ToUpperInvariant()] = Math.Clamp(value, 0, 100);
+        }
+        return result.Count == 0 ? null : result;
     }
 
     static string? Text(JsonElement root, string name)

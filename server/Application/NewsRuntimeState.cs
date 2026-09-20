@@ -7,20 +7,32 @@ public sealed class NewsOptions
 {
     public bool Enabled { get; set; }
     public string FeedUrl { get; set; } = "https://www.saveticker.com";
+    public string MarketauxApiKey { get; set; } = "";
+    public string MarketauxUrl { get; set; } = "https://api.marketaux.com/v1/news/all";
+    public string GoogleNewsUrl { get; set; } = "https://news.google.com/rss/search?q=stock%20market%20OR%20semiconductor%20OR%20earnings&hl=en-US&gl=US&ceid=US:en";
+    public string YahooNewsUrl { get; set; } = "https://finance.yahoo.com/rss/2.0/headline?s=SOXL,SOXX,NVDA,AMD,INTC&region=US&lang=en-US";
     public int PollSeconds { get; set; } = 60;
     public string OllamaUrl { get; set; } = "http://localhost:11434";
     public string Model { get; set; } = "qwen2.5:7b-instruct";
     public int MaxClassificationsPerMinute { get; set; } = 12;
     public double HalfLifeMinutes { get; set; } = NewsSentimentDecay.DefaultHalfLifeMinutes;
     public string KeepAlive { get; set; } = "30m";
+    public string PapagoClientId { get; set; } = "";
+    public string PapagoClientSecret { get; set; } = "";
 
     /// <summary>목록 확장 상한. 신규가 한 페이지를 넘칠 때만 다음 페이지를 본다.</summary>
-    public int MaxPages { get; set; } = 3;
+    public int MaxPages { get; set; } = 1;
 
     /// <summary>목록·상세를 합한 피드 요청 예산(#151 §1 "분당 요청 ≤3").</summary>
-    public int MaxFeedRequestsPerMinute { get; set; } = 3;
+    public int MaxFeedRequestsPerMinute { get; set; } = 1;
+
+    /// <summary>외부 피드의 24시간 요청 상한. 공급자 쿼터를 넘지 않도록 보수적으로 제한한다.</summary>
+    public int MaxDailyFeedRequests { get; set; } = 1440;
 
     public int MaxQueue { get; set; } = 100;
+
+    /// <summary>재기동 시 번역·영향도 누락 기사에 대한 분류 재시도 상한.</summary>
+    public int ReclassifyUnclassifiedPerPoll { get; set; } = 3;
 
     /// <summary>일자 파일 상한(바이트). 넘으면 더 쓰지 않되 기존 기록은 지우지 않는다.</summary>
     public long MaxDailyBytes { get; set; } = 5 * 1024 * 1024;
@@ -48,7 +60,11 @@ public sealed record NewsRecord(
     DateTimeOffset ClassifiedAt,
     string InputKind = NewsInputKinds.Body,
     string PromptVersion = "",
-    string? ClassifiedFrom = null);
+    string? ClassifiedFrom = null,
+    IReadOnlyList<NewsEntity>? Entities = null,
+    string? TitleKo = null,
+    string? SourceKo = null,
+    IReadOnlyDictionary<string, int>? ImpactScores = null);
 
 /// <summary>health·조회가 함께 보는 뉴스 런타임 상태(#151 §6). 스레드 안전하다.</summary>
 public sealed class NewsRuntimeState

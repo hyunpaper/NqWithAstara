@@ -20,7 +20,7 @@ public sealed record Candle(DateTimeOffset Timestamp, double Open, double High, 
 public sealed record MarketSession(bool IsOpen, string Label, DateTimeOffset? NextOpen, DateTimeOffset? Start, DateTimeOffset? End);
 /// <summary>신호 발동 시점의 가상 진입 기록. 손절/목표 도달 시 자동 청산되며 수수료 0.2%를 손익에 차감한다. 진입 당시 판단 근거(점수·σ·거래량·체결·RSI·사유)를 함께 남겨 사후 분석에 쓴다.
 /// v5 구조 거래는 <see cref="SimTrade.Structure"/>에 진입 시점의 동결 계획(FrozenPlan)을 함께 저장하며, 이후 구조가 변해도 그 거래의 Stop/Target/근거는 바꾸지 않는다(설계 §10/§18). Logic이 소유 버전을 구분한다("v4"/null=레거시, "v5-structure.*"=구조 엔진).</summary>
-public sealed record SimTrade(string Id, string Symbol, string Kind, DateTimeOffset EnteredAt, double EntryPrice, double Target, double Stop, string? TargetBasis, string? StopBasis, string Status, double? ExitPrice, DateTimeOffset? ExitAt, double? PnlPercent, double LastPrice, int? Score = null, double? ExtSigma = null, double? RelVolume = null, double? BuyShare = null, double? Rsi = null, string[]? Reasons = null, string? Logic = null, DateTimeOffset? LastEvaluatedBarAt = null, DateTimeOffset? SessionEnd = null, bool? ExitEstimated = null, DateTimeOffset? LastPriceAt = null, DateTimeOffset? TriggerBarAt = null, FrozenStructureContext? Structure = null, ExecutionProvenance? Execution = null);
+public sealed record SimTrade(string Id, string Symbol, string Kind, DateTimeOffset EnteredAt, double EntryPrice, double Target, double Stop, string? TargetBasis, string? StopBasis, string Status, double? ExitPrice, DateTimeOffset? ExitAt, double? PnlPercent, double LastPrice, int? Score = null, double? ExtSigma = null, double? RelVolume = null, double? BuyShare = null, double? Rsi = null, string[]? Reasons = null, string? Logic = null, DateTimeOffset? LastEvaluatedBarAt = null, DateTimeOffset? SessionEnd = null, bool? ExitEstimated = null, DateTimeOffset? LastPriceAt = null, DateTimeOffset? TriggerBarAt = null, FrozenStructureContext? Structure = null, ExecutionProvenance? Execution = null, TradeSide Side = TradeSide.Long);
 
 /// <summary>체결 판정에 사용한 관측의 출처와 시각. 가격 정책이 아니라 사후 검증용 저장 계약이다.</summary>
 public sealed record ExecutionProvenance(DateTimeOffset EntryBarStart, DateTimeOffset EntryBarCloseAt,
@@ -29,7 +29,9 @@ public sealed record ExecutionProvenance(DateTimeOffset EntryBarStart, DateTimeO
     DateTimeOffset? EvaluatedBarCloseAt = null, string? BarrierDecision = null,
     double? EvaluatedBarOpen = null, double? EvaluatedBarHigh = null,
     double? EvaluatedBarLow = null, double? EvaluatedBarClose = null,
-    DateTimeOffset? LastQuoteAt = null);
+    DateTimeOffset? LastQuoteAt = null,
+    // 확인봉에서 실제 관측한 값. FrozenPlan의 계획값과 분리된 realized provenance다.
+    double? FillPrice = null, double? SpreadCost = null, string? PriceSource = null);
 
 /// <summary>
 /// 설계 §11 FrozenStructureContext. v5 거래가 체결된 시점의 구조 계획·추세·품질 스냅샷으로, 진입 이후

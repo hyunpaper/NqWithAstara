@@ -6,7 +6,8 @@ using Astra.Server.Domain.News;
 namespace Astra.Server.Application;
 
 /// <summary>증분 상태(#151 §1). 첫 기동은 기준점만 저장하고 과거 기사를 분류하지 않는다.</summary>
-public sealed record NewsFeedState(long LastId, DateTimeOffset? LastCreatedAt);
+public sealed record NewsFeedState(long LastId, DateTimeOffset? LastCreatedAt,
+    IReadOnlyList<DateTimeOffset>? FeedRequestTimes = null);
 
 /// <summary>
 /// 뉴스 수집·큐·분류 파이프라인(#151 §1·§3·§5). 호스트 타이머가 <see cref="PollAsync"/>만 호출한다.
@@ -20,7 +21,8 @@ public sealed class NewsFeedService(
     ILocalStore localStore,
     NewsRuntimeState state,
     IMonitorDiagnostics diagnostics,
-    TimeProvider clock)
+    TimeProvider clock,
+    INewsTranslator? translator = null)
 {
     public const string StateFile = "state.json";
 
@@ -31,6 +33,8 @@ public sealed class NewsFeedService(
     readonly LinkedList<QueuedArticle> _other = new();
     readonly HashSet<string> _queued = new(StringComparer.Ordinal);
     readonly Queue<DateTimeOffset> _classifications = new();
+    readonly Queue<DateTimeOffset> _dailyFeedRequests = new();
+    readonly Queue<DateTimeOffset> _minuteFeedRequests = new();
 
     /// <summary>대표 기사 id -> 같은 사건 그룹의 나머지 기사(#171). 대표가 분류되면 함께 저장한다.</summary>
     readonly Dictionary<string, List<QueuedArticle>> _pendingFollowers = new(StringComparer.Ordinal);
@@ -54,6 +58,7 @@ public sealed class NewsFeedService(
         {
             var budget = Math.Max(1, options.MaxFeedRequestsPerMinute);
             await RestoreAsync(ct);
+            QueueMissingReclassifications();
             budget = await CollectAsync(budget, ct);
             await DrainAsync(budget, ct);
             state.QueueDepth(QueueDepth);
@@ -82,10 +87,32 @@ public sealed class NewsFeedService(
             {
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 var record = JsonSerializer.Deserialize<NewsRecord>(line, Json);
-                if (record is not null) state.Add(record, options.RecentCapacity);
+                if (record is null) continue;
+                state.Add(record, options.RecentCapacity);
             }
         }
         catch (Exception exception) { diagnostics.PollFailed("news-restore", exception); }
+    }
+
+    static bool NeedsReclassification(NewsRecord record) => string.Equals(record.Sentiment, NewsSentiments.Unclassified, StringComparison.OrdinalIgnoreCase) || (string.IsNullOrWhiteSpace(record.TitleKo) || string.IsNullOrWhiteSpace(record.SourceKo) || record.ImpactScores is null);
+
+    void QueueMissingReclassifications()
+    {
+        var queued = 0;
+        foreach (var record in state.Recent())
+        {
+            if (queued >= Math.Max(0, options.ReclassifyUnclassifiedPerPoll)) break;
+            if (!NeedsReclassification(record) || IsQueued(record.Id)) continue;
+            var article = new NewsArticle(record.Id, record.Title, "", record.Source, record.CreatedAt,
+                record.Tickers, record.Title, true, null, record.Entities);
+            Enqueue(article, record.MatchedSymbols);
+            queued++;
+        }
+    }
+
+    bool IsQueued(string id)
+    {
+        lock (_queued) return _queued.Contains(id);
     }
 
     async Task<int> CollectAsync(int budget, CancellationToken ct)
@@ -101,6 +128,10 @@ public sealed class NewsFeedService(
 
         while (page <= Math.Max(1, options.MaxPages) && budget > 0)
         {
+            if (!ReserveFeedRequest(clock.GetUtcNow())) break;
+            // 공급자 호출은 빈 응답이나 예외에서도 쿼터를 소비할 수 있다.
+            // 호출 직후 시각을 저장해 재기동으로 일일 한도를 우회하지 않게 한다.
+            await SaveStateAsync(new NewsFeedState(maxId, maxCreatedAt, _dailyFeedRequests.ToArray()), ct);
             IReadOnlyList<NewsFeedItem> items;
             try { items = await feed.ListAsync(page, ct); }
             finally { budget--; }
@@ -114,20 +145,22 @@ public sealed class NewsFeedService(
             }
 
             if (known is null) break;
-            var newer = items.Where(x => ParseId(x.Id) > known.LastId).ToArray();
+            var newer = items.Where(x => ParseId(x.Id) > known.LastId
+                || (known.LastCreatedAt is not null && x.CreatedAt > known.LastCreatedAt.Value)).ToArray();
             fresh.AddRange(newer);
             // 신규가 한 페이지를 가득 채웠을 때만 더 과거 페이지를 본다.
             if (newer.Length < items.Count) break;
             page++;
         }
 
-        if (maxId > 0) await SaveStateAsync(new NewsFeedState(maxId, maxCreatedAt), ct);
+        if (maxId > 0 || maxCreatedAt is not null)
+            await SaveStateAsync(new NewsFeedState(maxId, maxCreatedAt, _dailyFeedRequests.ToArray()), ct);
         if (known is null || fresh.Count == 0) return budget;
 
         state.SeenArticles(fresh.Count);
         var articles = fresh.OrderBy(x => ParseId(x.Id))
             .Select(item => new NewsArticle(item.Id, item.Title, item.Summary, item.Source, item.CreatedAt,
-                item.Tickers, item.Headline, item.HeadlineOnly, item.GroupId))
+                item.Tickers, item.Headline, item.HeadlineOnly, item.GroupId, item.Entities))
             .ToArray();
 
         var followerIds = GroupFollowerArticles(articles, watchlist);
@@ -275,6 +308,20 @@ public sealed class NewsFeedService(
 
             state.Ollama(true);
             _classifications.Enqueue(clock.GetUtcNow());
+            if (result.Classification is not null && translator is not null)
+            {
+                try
+                {
+                    var translated = await translator.TranslateAsync(entry.Article.Title, entry.Article.Source, ct);
+                    if (translated is not null)
+                        result = result with { Classification = result.Classification with
+                        {
+                            KoreanTitle = translated.Value.Title,
+                            KoreanSource = translated.Value.Source
+                        }};
+                }
+                catch (Exception exception) { diagnostics.PollFailed("news-translate", exception); }
+            }
             await SaveAsync(Compose(entry, result, inputKind), ct);
             await SaveGroupFollowersAsync(entry.Article.Id, result, ct);
         }
@@ -320,7 +367,8 @@ public sealed class NewsFeedService(
             clock.GetUtcNow(),
             inputKind,
             result.PromptVersion,
-            classifiedFrom);
+            classifiedFrom, entry.Article.Entities, classification?.KoreanTitle,
+            classification?.KoreanSource, classification?.ImpactScores);
     }
 
     async Task SaveAsync(NewsRecord record, CancellationToken ct)
@@ -354,7 +402,11 @@ public sealed class NewsFeedService(
         try
         {
             var text = await store.ReadTextAsync(StateFile, ct);
-            if (!string.IsNullOrWhiteSpace(text)) _state = JsonSerializer.Deserialize<NewsFeedState>(text, Json);
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                _state = JsonSerializer.Deserialize<NewsFeedState>(text, Json);
+                RestoreFeedRequestTimes(_state?.FeedRequestTimes);
+            }
         }
         catch (Exception exception) { diagnostics.PollFailed("news-state", exception); }
         return _state;
@@ -362,7 +414,12 @@ public sealed class NewsFeedService(
 
     async Task SaveStateAsync(NewsFeedState next, CancellationToken ct)
     {
-        if (_state is not null && next.LastId <= _state.LastId) return;
+        var requestsChanged = _state?.FeedRequestTimes is null
+            || !_state.FeedRequestTimes.SequenceEqual(next.FeedRequestTimes ?? []);
+        if (_state is not null
+            && next.LastId <= _state.LastId
+            && (next.LastCreatedAt is null || _state.LastCreatedAt is not null && next.LastCreatedAt <= _state.LastCreatedAt)
+            && !requestsChanged) return;
         _state = next;
         await store.WriteTextAsync(StateFile, JsonSerializer.Serialize(next, Json), ct);
     }
@@ -378,4 +435,31 @@ public sealed class NewsFeedService(
 
     static long ParseId(string id)
         => long.TryParse(id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : 0;
+
+    bool ReserveFeedRequest(DateTimeOffset now)
+    {
+        Trim(_dailyFeedRequests, now, TimeSpan.FromHours(24));
+        Trim(_minuteFeedRequests, now, TimeSpan.FromMinutes(1));
+        if (_dailyFeedRequests.Count >= Math.Max(1, options.MaxDailyFeedRequests)
+            || _minuteFeedRequests.Count >= Math.Max(1, options.MaxFeedRequestsPerMinute)) return false;
+        _dailyFeedRequests.Enqueue(now);
+        _minuteFeedRequests.Enqueue(now);
+        return true;
+    }
+
+    void RestoreFeedRequestTimes(IReadOnlyList<DateTimeOffset>? times)
+    {
+        if (times is null) return;
+        var now = clock.GetUtcNow();
+        foreach (var time in times.Order())
+        {
+            if (now - time < TimeSpan.FromHours(24)) _dailyFeedRequests.Enqueue(time);
+            if (now - time < TimeSpan.FromMinutes(1)) _minuteFeedRequests.Enqueue(time);
+        }
+    }
+
+    static void Trim(Queue<DateTimeOffset> queue, DateTimeOffset now, TimeSpan window)
+    {
+        while (queue.Count > 0 && now - queue.Peek() >= window) queue.Dequeue();
+    }
 }

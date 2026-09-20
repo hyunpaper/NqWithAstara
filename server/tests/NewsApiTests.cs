@@ -139,19 +139,19 @@ public sealed class NewsQueryServiceTests
 
         var json = Serialize(query.Health());
 
-        Assert.Equal("v2b", json.GetProperty("promptVersion").GetString());
+        Assert.Equal("v2c", json.GetProperty("promptVersion").GetString());
     }
 
     [Fact]
     public void ArticlesExposeThePromptVersion()
     {
         var (query, state, options) = Build();
-        state.Add(Record("1", NewsSentiments.Positive, 3, Now, "NVDA") with { PromptVersion = "v2b" },
+        state.Add(Record("1", NewsSentiments.Positive, 3, Now, "NVDA") with { PromptVersion = "v2c" },
             options.RecentCapacity);
 
         var first = Serialize(query.Articles(null, null)).GetProperty("articles")[0];
 
-        Assert.Equal("v2b", first.GetProperty("promptVersion").GetString());
+        Assert.Equal("v2c", first.GetProperty("promptVersion").GetString());
     }
 
     [Fact]
@@ -201,7 +201,7 @@ public sealed class NewsHostContractTests(AstraHostFixture host) : IClassFixture
         Assert.Equal(0, news.GetProperty("queue").GetInt32());
         Assert.Equal("ok", news.GetProperty("ollama").GetString());
         Assert.Equal(JsonValueKind.Null, news.GetProperty("lastPollAt").ValueKind);
-        Assert.Equal("v2b", news.GetProperty("promptVersion").GetString());
+        Assert.Equal("v2c", news.GetProperty("promptVersion").GetString());
     }
 
     [Fact]

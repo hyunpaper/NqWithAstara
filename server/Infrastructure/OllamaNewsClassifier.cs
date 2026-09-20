@@ -10,19 +10,21 @@ using Astra.Server.Domain.News;
 namespace Astra.Server.Infrastructure;
 
 /// <summary>
-/// 로컬 Ollama 감성 분류기(#151 §3, #171 프롬프트 v2b). 타임아웃·파싱 실패는 unclassified로 남기고,
+/// 로컬 Ollama 감성 분류기(#151 §3, #171 프롬프트 v2c). 타임아웃·파싱 실패는 unclassified로 남기고,
 /// 연결 자체가 안 되면 Available=false로 알려 호출자가 기사를 소비하지 않게 한다.
 /// </summary>
 public sealed class OllamaNewsClassifier : INewsClassifier
 {
-    public const int BodyLimit = 1500;
+    public const int BodyLimit = 600;
 
-    /// <summary>현재 채택된 분류 프롬프트 버전(#171). <see cref="NewsPromptVersions.V2b"/>의 별칭이다.</summary>
-    public const string PromptVersion = NewsPromptVersions.V2b;
+    /// <summary>현재 채택된 분류 프롬프트 버전(#171). <see cref="NewsPromptVersions.V2c"/>의 별칭이다.</summary>
+    public const string PromptVersion = NewsPromptVersions.V2c;
 
-    const string PromptResourceName = "news-classify-v2b.txt";
+    const string PromptResourceName = "news-classify-v2c.txt";
 
-    public static readonly TimeSpan Timeout = TimeSpan.FromSeconds(20);
+    // 번역 제목·언론사·종목별 영향도까지 JSON으로 생성하는 데 7B 모델이 20초를 넘길 수 있다.
+    // 짧은 timeout은 정상 기사를 unclassified로 영구 저장하는 결과를 만들었다.
+    public static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
 
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -44,7 +46,7 @@ public sealed class OllamaNewsClassifier : INewsClassifier
         var url = new Uri(new Uri(_options.OllamaUrl.TrimEnd('/') + "/"), "api/generate");
         var payload = new GenerateRequest(
             _options.Model, BuildPrompt(request), false, "json", _options.KeepAlive,
-            new GenerateOptions(0, 2048, 160));
+            new GenerateOptions(0, 1024, 192));
 
         var stopwatch = Stopwatch.StartNew();
         try
@@ -71,7 +73,7 @@ public sealed class OllamaNewsClassifier : INewsClassifier
         }
     }
 
-    /// <summary>v2b 리소스 템플릿에 기사 원문을 채운다(#171). 종목을 못 고르면 MARKET으로 답하게 한다.</summary>
+    /// <summary>v2c 리소스 템플릿에 기사 원문을 채운다(#171). 종목을 못 고르면 MARKET으로 답하게 한다.</summary>
     public static string BuildPrompt(NewsClassificationRequest request)
     {
         var body = request.Body.Length > BodyLimit ? request.Body[..BodyLimit] : request.Body;

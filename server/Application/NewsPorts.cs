@@ -15,7 +15,9 @@ public sealed record NewsFeedItem(
     IReadOnlyList<string> Tickers,
     string Headline = "",
     bool HeadlineOnly = false,
-    string? GroupId = null);
+    string? GroupId = null,
+    IReadOnlyList<NewsEntity>? Entities = null);
+
 
 /// <summary>기사 상세(#151). AI 요약이 있으면 본문 대신 그것을 분류 입력으로 쓴다.</summary>
 public sealed record NewsDetail(string Summary, string Body);
@@ -39,6 +41,13 @@ public sealed record NewsClassificationRequest(string Title, string Body, IReadO
 /// </summary>
 public sealed record NewsClassificationResult(
     NewsClassification? Classification, string Model, long LatencyMs, bool Available, string PromptVersion = "");
+
+
+/// <summary>기사 제목·출처 번역 포트. 자격증명은 구현체 설정에서만 읽는다.</summary>
+public interface INewsTranslator
+{
+    Task<(string Title, string Source)?> TranslateAsync(string title, string source, CancellationToken ct);
+}
 
 /// <summary>로컬 LLM 분류기 포트(#151 §3).</summary>
 public interface INewsClassifier

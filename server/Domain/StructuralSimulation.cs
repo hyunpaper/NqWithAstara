@@ -1,4 +1,5 @@
 using Astra.Server.Domain.Structure;
+using Astra.Server;
 
 namespace Astra.Server.Domain;
 
@@ -35,7 +36,10 @@ public sealed record StructuralEntryRequest(string Symbol, DateTimeOffset Trigge
     DateTimeOffset EnteredAt, DateTimeOffset SessionEnd, FrozenStructureContext Context,
     IReadOnlyList<DateTimeOffset>? CompletedBarStarts = null, DateTimeOffset? SessionStart = null,
     // #111: 목표 구간의 zone lineage(병합으로 흡수된 ID). 없으면 재진입 태그는 ID 동일 여부만 본다.
-    IReadOnlyList<string>? TargetZoneAliases = null);
+    IReadOnlyList<string>? TargetZoneAliases = null,
+    // 확인봉 체결을 사용한 경우 관측 근거를 SimTrade에 전파한다. null은 기존 실시간 호출의
+    // 미관측 호가 경로로 남겨 하위 호환한다.
+    EntryConfirmation? Confirmation = null);
 
 public sealed record StructuralEntryResult(List<SimTrade> Trades, StructuralEntryOutcome Outcome, SimTrade? Trade);
 
@@ -102,7 +106,8 @@ public static class StructuralSimulation
             return new StructuralEntryResult(trades, StructuralEntryOutcome.BlockedByStopCooldown, null);
 
         var plan = request.Context.PlanSnapshot;
-        var entry = (double)plan.EntryReference;
+        var entry = request.Confirmation is { Decision: PendingEntryDecision.Confirmed, FillPrice: > 0 } confirmation
+            ? confirmation.FillPrice!.Value : (double)plan.EntryReference;
         var stop = (double)plan.Stop;
         var target = (double)plan.Target;
         if (!(stop > 0) || stop >= entry || target <= entry)
@@ -110,21 +115,29 @@ public static class StructuralSimulation
 
         // 결정적 ID: 같은 이벤트의 재시도가 다른 거래처럼 보이지 않게 한다(§16B 재시작 규칙과 같은 방향).
         var id = StructureMath.SourceId("simtrade", request.Symbol, request.Context.EntryEventId)[..8];
-        var context = request.Context with { Reentry = Reentry(trades, request) };
+        var context = request.Context with { PlanSnapshot = plan, Reentry = Reentry(trades, request) };
         var trade = new SimTrade(id, request.Symbol, plan.Kind, request.EnteredAt, entry, target, stop,
             TargetBasis, StopBasis, "OPEN", null, null, null, entry,
             Score: null, ExtSigma: null, RelVolume: null, BuyShare: null, Rsi: null,
             Reasons: [plan.Explanation], Logic: plan.EngineVersion, LastEvaluatedBarAt: null,
             SessionEnd: request.SessionEnd, ExitEstimated: null, LastPriceAt: request.EnteredAt,
             TriggerBarAt: request.TriggerBarStart, Structure: context,
-            Execution: new ExecutionProvenance(
-                new DateTimeOffset(request.EnteredAt.Year, request.EnteredAt.Month, request.EnteredAt.Day,
-                    request.EnteredAt.Hour, request.EnteredAt.Minute, 0, request.EnteredAt.Offset),
-                new DateTimeOffset(request.EnteredAt.Year, request.EnteredAt.Month, request.EnteredAt.Day,
-                    request.EnteredAt.Hour, request.EnteredAt.Minute, 0, request.EnteredAt.Offset).AddMinutes(1),
-                "UNOBSERVED", null));
+            Execution: EntryProvenance(request.EnteredAt, request.Confirmation));
         trades.Add(trade);
         return new StructuralEntryResult(trades, StructuralEntryOutcome.Entered, trade);
+    }
+
+    static ExecutionProvenance EntryProvenance(DateTimeOffset enteredAt, EntryConfirmation? confirmation)
+    {
+        if (confirmation is { Decision: PendingEntryDecision.Confirmed } c)
+            return new ExecutionProvenance(c.Pending.ConfirmationBarStart,
+                c.ObservedAt, "OBSERVED_CONFIRMATION_BAR", c.ObservedAt,
+                FillPrice: c.FillPrice, SpreadCost: c.SpreadCost, PriceSource: c.PriceSource);
+        var start = new DateTimeOffset(enteredAt.Year, enteredAt.Month, enteredAt.Day,
+                    enteredAt.Hour, enteredAt.Minute, 0, enteredAt.Offset);
+        return new ExecutionProvenance(
+                start, start.AddMinutes(1),
+                "UNOBSERVED", null);
     }
 
     /// <summary>

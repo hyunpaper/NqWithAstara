@@ -41,12 +41,17 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
             halfLifeMinutes = options.HalfLifeMinutes,
             market = market is null ? null : Project(market),
             symbols = scores.Where(x => x != market).Select(Project).ToArray(),
+            sectors = recent.SelectMany(x => x.Entities ?? []).Where(x => !string.IsNullOrWhiteSpace(x.Industry))
+                .GroupBy(x => x.Industry, StringComparer.OrdinalIgnoreCase)
+                .Select(g => new { sector = g.Key, count = g.Count(), symbols = g.Select(x => x.Symbol).Where(s => s.Length > 0).Distinct().ToArray() })
+                .OrderByDescending(x => x.count).ToArray(),
         };
     }
 
     public object Health() => new
     {
         enabled = options.Enabled,
+        feed = string.IsNullOrWhiteSpace(options.MarketauxApiKey) ? "saveticker" : "marketaux",
         lastPollAt = state.LastPollAt,
         lastAttemptAt = state.LastAttemptAt,
         lastSuccessAt = state.LastSuccessAt,
@@ -57,14 +62,16 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         classified = state.Classified,
         storageLimited = state.StorageLimited,
         ollama = state.OllamaOk ? "ok" : "down",
-        promptVersion = NewsPromptVersions.V2b,
+        promptVersion = NewsPromptVersions.V2c,
     };
 
     static object Project(NewsRecord record) => new
     {
         id = record.Id,
         title = record.Title,
+        titleKo = record.TitleKo,
         source = record.Source,
+        sourceKo = record.SourceKo,
         createdAt = record.CreatedAt,
         tickers = record.Tickers,
         matchedSymbols = record.MatchedSymbols,
@@ -72,9 +79,11 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         sentiment = record.Sentiment,
         strength = record.Strength,
         reason = record.Reason,
+        impactScores = record.ImpactScores,
         model = record.Model,
         latencyMs = record.LatencyMs,
         classifiedAt = record.ClassifiedAt,
+        entities = record.Entities,
         inputKind = record.InputKind,
         promptVersion = record.PromptVersion,
         classifiedFrom = record.ClassifiedFrom,
