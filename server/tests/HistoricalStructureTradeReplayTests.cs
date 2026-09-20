@@ -49,6 +49,15 @@ public sealed class HistoricalStructureTradeReplayTests
             new Candle(Start.AddMinutes(1), 100, 102, 99, 101, 10), Start.AddMinutes(2), 101);
         Assert.Equal(PendingEntryDecision.Confirmed, exact.Decision);
         Assert.Equal(101, exact.FillPrice);
+
+        var resolution = HistoricalStructureTradeReplay.ResolvePending(pending,
+            new Candle(Start.AddMinutes(2), 100, 102, 99, 101, 10), Start.AddMinutes(3));
+        Assert.True(resolution.Clear);
+        Assert.Equal("MISSING_CONFIRMATION_BAR", resolution.Reason);
+        var consumed = new HashSet<string>([pending.EntryEventId]);
+        Assert.False(HistoricalStructureTradeReplay.ShouldQueuePending(consumed, pending));
+        consumed.Clear();
+        Assert.True(HistoricalStructureTradeReplay.ShouldQueuePending(consumed, pending));
     }
 
     [Fact]
