@@ -45,6 +45,8 @@ public sealed class MarketauxNewsFeed : INewsFeed
                 return XDocument.Parse(await response.Content.ReadAsStringAsync(ct));
             }
             catch (HttpRequestException) { return null; }
+            catch (TaskCanceledException) when (!ct.IsCancellationRequested) { return null; }
+            catch (System.Xml.XmlException) { return null; }
         }));
         return documents.Where(x => x is not null).SelectMany(x => x!.Descendants("item")).Select(item =>
         {

@@ -21,7 +21,8 @@ public sealed class NewsFeedService(
     ILocalStore localStore,
     NewsRuntimeState state,
     IMonitorDiagnostics diagnostics,
-    TimeProvider clock)
+    TimeProvider clock,
+    INewsTranslator? translator = null)
 {
     public const string StateFile = "state.json";
 
@@ -57,6 +58,7 @@ public sealed class NewsFeedService(
         {
             var budget = Math.Max(1, options.MaxFeedRequestsPerMinute);
             await RestoreAsync(ct);
+            QueueMissingReclassifications();
             budget = await CollectAsync(budget, ct);
             await DrainAsync(budget, ct);
             state.QueueDepth(QueueDepth);
@@ -85,10 +87,32 @@ public sealed class NewsFeedService(
             {
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 var record = JsonSerializer.Deserialize<NewsRecord>(line, Json);
-                if (record is not null) state.Add(record, options.RecentCapacity);
+                if (record is null) continue;
+                state.Add(record, options.RecentCapacity);
             }
         }
         catch (Exception exception) { diagnostics.PollFailed("news-restore", exception); }
+    }
+
+    static bool NeedsReclassification(NewsRecord record) => string.Equals(record.Sentiment, NewsSentiments.Unclassified, StringComparison.OrdinalIgnoreCase) || (string.IsNullOrWhiteSpace(record.TitleKo) || string.IsNullOrWhiteSpace(record.SourceKo) || record.ImpactScores is null);
+
+    void QueueMissingReclassifications()
+    {
+        var queued = 0;
+        foreach (var record in state.Recent())
+        {
+            if (queued >= Math.Max(0, options.ReclassifyUnclassifiedPerPoll)) break;
+            if (!NeedsReclassification(record) || IsQueued(record.Id)) continue;
+            var article = new NewsArticle(record.Id, record.Title, "", record.Source, record.CreatedAt,
+                record.Tickers, record.Title, true, null, record.Entities);
+            Enqueue(article, record.MatchedSymbols);
+            queued++;
+        }
+    }
+
+    bool IsQueued(string id)
+    {
+        lock (_queued) return _queued.Contains(id);
     }
 
     async Task<int> CollectAsync(int budget, CancellationToken ct)
@@ -284,6 +308,20 @@ public sealed class NewsFeedService(
 
             state.Ollama(true);
             _classifications.Enqueue(clock.GetUtcNow());
+            if (result.Classification is not null && translator is not null)
+            {
+                try
+                {
+                    var translated = await translator.TranslateAsync(entry.Article.Title, entry.Article.Source, ct);
+                    if (translated is not null)
+                        result = result with { Classification = result.Classification with
+                        {
+                            KoreanTitle = translated.Value.Title,
+                            KoreanSource = translated.Value.Source
+                        }};
+                }
+                catch (Exception exception) { diagnostics.PollFailed("news-translate", exception); }
+            }
             await SaveAsync(Compose(entry, result, inputKind), ct);
             await SaveGroupFollowersAsync(entry.Article.Id, result, ct);
         }

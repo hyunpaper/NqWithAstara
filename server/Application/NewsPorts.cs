@@ -42,6 +42,13 @@ public sealed record NewsClassificationRequest(string Title, string Body, IReadO
 public sealed record NewsClassificationResult(
     NewsClassification? Classification, string Model, long LatencyMs, bool Available, string PromptVersion = "");
 
+
+/// <summary>기사 제목·출처 번역 포트. 자격증명은 구현체 설정에서만 읽는다.</summary>
+public interface INewsTranslator
+{
+    Task<(string Title, string Source)?> TranslateAsync(string title, string source, CancellationToken ct);
+}
+
 /// <summary>로컬 LLM 분류기 포트(#151 §3).</summary>
 public interface INewsClassifier
 {

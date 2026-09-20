@@ -34,6 +34,7 @@ public static class NewsSymbols
 public static class NewsPromptVersions
 {
     public const string V2b = "v2b";
+    public const string V2c = "v2c";
 }
 
 /// <summary>

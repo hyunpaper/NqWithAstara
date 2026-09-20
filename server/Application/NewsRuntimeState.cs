@@ -17,6 +17,8 @@ public sealed class NewsOptions
     public int MaxClassificationsPerMinute { get; set; } = 12;
     public double HalfLifeMinutes { get; set; } = NewsSentimentDecay.DefaultHalfLifeMinutes;
     public string KeepAlive { get; set; } = "30m";
+    public string PapagoClientId { get; set; } = "";
+    public string PapagoClientSecret { get; set; } = "";
 
     /// <summary>목록 확장 상한. 신규가 한 페이지를 넘칠 때만 다음 페이지를 본다.</summary>
     public int MaxPages { get; set; } = 1;
@@ -28,6 +30,9 @@ public sealed class NewsOptions
     public int MaxDailyFeedRequests { get; set; } = 1440;
 
     public int MaxQueue { get; set; } = 100;
+
+    /// <summary>재기동 시 번역·영향도 누락 기사에 대한 분류 재시도 상한.</summary>
+    public int ReclassifyUnclassifiedPerPoll { get; set; } = 3;
 
     /// <summary>일자 파일 상한(바이트). 넘으면 더 쓰지 않되 기존 기록은 지우지 않는다.</summary>
     public long MaxDailyBytes { get; set; } = 5 * 1024 * 1024;

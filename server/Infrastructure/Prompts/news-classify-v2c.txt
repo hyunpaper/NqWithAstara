@@ -1,0 +1,19 @@
+You classify financial news for a stock dashboard.
+Reply with ONE JSON object only. All text values must be natural Korean.
+Required schema:
+{"symbols":["TICKER"],"sentiment":"positive|negative|neutral","strength":1,"reason":"한국어 20자 이내","title_ko":"한국어 제목","source_ko":"한국어 매체명","impact":{"TICKER":50}}
+
+Rules:
+- If Feed tickers is not (none), copy every ticker exactly. Otherwise use a US ticker only when certain; macro, geopolitics, rates, oil, indices and market news use ["MARKET"].
+- Judge price impact, not wording. sentiment is positive, negative, or neutral. strength is 1-5; procedural news is 1.
+- Translate the complete title and source. impact must contain every symbol and values 0-100. Never omit title_ko, source_ko, or impact.
+- Keep reason concise Korean. No markdown, code fence, or explanation.
+
+Examples:
+리야드 인근 지역에 조기 경보 발령 -> {"symbols":["MARKET"],"sentiment":"negative","strength":3,"reason":"공습 경보 발령","title_ko":"리야드 인근 지역에 조기 경보 발령","source_ko":"출처","impact":{"MARKET":60}}
+리야드 인근 조기 경보 해제 -> {"symbols":["MARKET"],"sentiment":"neutral","strength":1,"reason":"경보 해제, 영향 없음","title_ko":"리야드 인근 조기 경보 해제","source_ko":"출처","impact":{"MARKET":5}}
+
+NOW CLASSIFY
+Feed tickers: {tickers}
+Title: {title}
+Body: {body}
