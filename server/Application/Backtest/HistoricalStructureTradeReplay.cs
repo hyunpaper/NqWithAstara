@@ -6,6 +6,15 @@ namespace Astra.Server.Application.Backtest;
 
 public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePolicy policy)
 {
+    /// <summary>replay에서 생성된 후보의 1단계 후보화·2단계 최종 게이트 결과를 보존한다.</summary>
+    public sealed record ReplayCandidateDiagnostic(string Symbol, DateOnly SessionDate,
+        string EventId, DateTimeOffset SignalAt, TradeSide Side, string Regime,
+        CandidateDisposition Disposition, bool FinalApproved,
+        ImmutableArray<string> RejectionReasons, ImmutableArray<string> FeatureContributions);
+
+    public sealed record ReplayRun(ImmutableDictionary<string, ImmutableArray<SimTrade>> Trades,
+        ImmutableArray<ReplayCandidateDiagnostic> Candidates);
+
     public sealed record ReplayPendingResolution(bool Clear, EntryConfirmation? Confirmation, string Reason);
 
     /// <summary>운영 replay loop와 테스트가 공유하는 pending 수명주기 판정이다.</summary>
@@ -32,6 +41,14 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
 
     public async Task<ImmutableDictionary<string, ImmutableArray<SimTrade>>> RunAsync(DateOnly from, DateOnly to,
         IReadOnlyList<string> symbols, CancellationToken ct, double? expectedValueThreshold = null)
+        => (await RunDetailedAsync(from, to, symbols, ct, expectedValueThreshold)).Trades;
+
+    /// <summary>
+    /// 운영 replay와 같은 계산을 실행하면서 후보 생성·최종 게이트의 사유를 함께 반환한다.
+    /// 후보 사유는 EventId별 마지막 관측으로 접어 동일 후보의 반복 관측을 중복 집계하지 않는다.
+    /// </summary>
+    public async Task<ReplayRun> RunDetailedAsync(DateOnly from, DateOnly to,
+        IReadOnlyList<string> symbols, CancellationToken ct, double? expectedValueThreshold = null)
     {
         var replayPolicy = expectedValueThreshold is { } threshold
             ? policy with { ExpectedValueFeatureThreshold = threshold }
@@ -41,6 +58,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
         var result = symbols.ToImmutableDictionary(x => x, _ => new List<SimTrade>(),
             StringComparer.OrdinalIgnoreCase).ToBuilder();
         var daily = symbols.ToDictionary(x => x, _ => new List<Candle>(), StringComparer.OrdinalIgnoreCase);
+        var candidateDiagnostics = new Dictionary<string, ReplayCandidateDiagnostic>(StringComparer.Ordinal);
 
         foreach (var day in days)
             foreach (var symbol in symbols)
@@ -50,6 +68,8 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                     .Select(x => new Candle(x.Start, (double)x.Open, (double)x.High, (double)x.Low,
                         (double)x.Close, (double)x.Volume)).ToImmutableArray();
                 if (bars.Length == 0) continue;
+                var barSpan = bars.Length > 1 ? bars[1].Timestamp - bars[0].Timestamp : TimeSpan.FromMinutes(1);
+                if (barSpan <= TimeSpan.Zero || barSpan > TimeSpan.FromMinutes(30)) barSpan = TimeSpan.FromMinutes(1);
                 var sessionStart = bars[0].Timestamp;
                 var sessionEnd = sessionStart.AddHours(6.5);
                 var market = new MarketSession(true, "과거 replay", null, sessionStart, sessionEnd);
@@ -60,14 +80,14 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                 PendingReplayEntry? pending = null;
                 var pendingEventIds = new HashSet<string>(StringComparer.Ordinal);
 
-                for (var index = 0; index < bars.Length && bars[index].Timestamp.AddMinutes(1) < sessionEnd; index++)
+                for (var index = 0; index < bars.Length && bars[index].Timestamp.Add(barSpan) < sessionEnd; index++)
                 {
                     var current = bars[index];
                     var openBeforeBar = result[symbol].Count(x => x.Status == "OPEN");
                     result[symbol] = SimulationEngine.ReplayBars(result[symbol], symbol, [current]);
                     var exitedThisPoll = result[symbol].Count(x => x.Status == "OPEN") < openBeforeBar;
                     processedBars = index + 1;
-                    var now = current.Timestamp.AddMinutes(1);
+                    var now = current.Timestamp.Add(barSpan);
                     var completedStarts = bars.Take(index + 1).Select(x => x.Timestamp).ToArray();
                     // 이전 신호의 다음 완료 봉에서만 체결을 확인한다. current.Close는
                     // 해당 봉이 닫힌 뒤에만 관측 가능하므로 look-ahead가 없다.
@@ -97,7 +117,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                     }
                     var prefix = bars.Take(index + 1).ToArray();
                     var build = StructureSnapshotFactory.Create(symbol, market, prefix, daily[symbol], current.Close,
-                        now, now, 1, replayPolicy);
+                        now, now, 1, replayPolicy, barDuration: barSpan);
                     if (build.Snapshot is null || build.LastCompletedBarStart is null ||
                         build.Status != StructureAnalysisStatus.Available) continue;
 
@@ -113,7 +133,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                     retired = evaluated.RetiredZoneIds;
                     var trend = TrendEvaluator.Evaluate(TrendRequest.Create(symbol, snapshot.SessionStart,
                         snapshot.AnalysisAsOf, build.Bars.Bars, build.FiveMinuteBars), replayPolicy);
-                    var gate = StructuralLifecycle.Gate(latch, cutoff, cutoff.AddMinutes(1), TimeSpan.FromMinutes(1),
+                    var gate = StructuralLifecycle.Gate(latch, cutoff, cutoff.Add(barSpan), barSpan,
                         now, replayPolicy);
                     var detected = SetupDetector.Detect(SetupDetectionRequest.Create(symbol, snapshot.SessionStart,
                         snapshot.SessionEnd, snapshot.AnalysisAsOf, now, build.Bars.Bars, evaluated.Zones,
@@ -122,11 +142,24 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                     var candidates = StructuralLifecycle.ApplyLive(
                         StructuralLifecycle.ApplyLatch(latch, detected.Candidates, gate.AllowNewTrigger, replayPolicy,
                             evaluated.Zones), snapshot.QuotePrice, now);
+                    foreach (var candidate in candidates)
+                    {
+                        var reasons = candidate.RejectionCodes
+                            .Concat(candidate.Planning.ReasonCodes)
+                            .Concat(candidate.Evidence?.GateReasons ?? ImmutableArray<string>.Empty)
+                            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToImmutableArray();
+                        var contributions = candidate.Evidence?.FeatureContributions ?? ImmutableArray<string>.Empty;
+                        candidateDiagnostics[candidate.EventId] = new ReplayCandidateDiagnostic(
+                            symbol, MarketRules.TradingDate(sessionStart), candidate.EventId,
+                            candidate.TriggerBarStart, candidate.Side, candidate.Regime?.Key ?? "UNCOLLECTED",
+                            candidate.Disposition, candidate.Disposition == CandidateDisposition.Ready,
+                            reasons, contributions);
+                    }
                     var preferred = CandidateSelection.SelectPreferred(candidates);
 
                     if (!exitedThisPoll && pending is null && preferred is { Disposition: CandidateDisposition.Ready, Plan: not null }
                         && ShouldQueuePending(pendingEventIds, new PendingEntry(preferred.EventId, symbol,
-                            preferred.Side, preferred.TriggerBarStart, preferred.TriggerBarStart.AddMinutes(1),
+                            preferred.Side, preferred.TriggerBarStart, preferred.TriggerBarStart.Add(barSpan),
                             preferred.ExpiresAt, (double)preferred.Plan.Stop, (double)preferred.Plan.Target,
                             (double)preferred.Plan.EntryReference, preferred.Plan.PlanId, preferred.Plan.PolicyHash)))
                     {
@@ -134,7 +167,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                             trend.State.ToString(), trend.SignedTrend, preferred.EntryQuality,
                             snapshot.AnalysisAsOf, snapshot.QuoteAt);
                         var pendingEntry = new PendingEntry(preferred.EventId, symbol, preferred.Side,
-                            preferred.TriggerBarStart, preferred.TriggerBarStart.AddMinutes(1), preferred.ExpiresAt,
+                            preferred.TriggerBarStart, preferred.TriggerBarStart.Add(barSpan), preferred.ExpiresAt,
                             (double)preferred.Plan.Stop, (double)preferred.Plan.Target,
                             (double)preferred.Plan.EntryReference, preferred.Plan.PlanId, preferred.Plan.PolicyHash);
                         pending = new PendingReplayEntry(pendingEntry, context, preferred);
@@ -149,8 +182,10 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                 daily[symbol].Add(Daily(bars));
             }
 
-        return result.ToImmutableDictionary(x => x.Key, x => x.Value.ToImmutableArray(),
-            StringComparer.OrdinalIgnoreCase);
+        return new ReplayRun(result.ToImmutableDictionary(x => x.Key, x => x.Value.ToImmutableArray(),
+            StringComparer.OrdinalIgnoreCase), candidateDiagnostics.Values
+            .OrderBy(x => x.SessionDate).ThenBy(x => x.Symbol, StringComparer.Ordinal)
+            .ThenBy(x => x.SignalAt).ThenBy(x => x.EventId, StringComparer.Ordinal).ToImmutableArray());
     }
 
     public static DateTimeOffset EntryTime(DateTimeOffset triggerConfirmedAt, DateTimeOffset analysisAsOf) =>

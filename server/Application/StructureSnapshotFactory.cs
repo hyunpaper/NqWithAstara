@@ -52,7 +52,7 @@ public static class StructureSnapshotFactory
 
     public static StructureSnapshotBuild Create(string symbol, MarketSession session, IEnumerable<Candle>? oneMinute,
         IEnumerable<Candle>? daily, double? quotePrice, DateTimeOffset? quoteAt, DateTimeOffset now, long generation,
-        StructurePolicy policy, StructureLiquidity? liquidity = null)
+        StructurePolicy policy, StructureLiquidity? liquidity = null, TimeSpan? barDuration = null)
     {
         ArgumentNullException.ThrowIfNull(symbol);
         ArgumentNullException.ThrowIfNull(session);
@@ -66,7 +66,7 @@ public static class StructureSnapshotFactory
 
         // 진행 중 1분봉을 완료 봉으로 쓰지 않는다. 정규장 종료 exclusive(§5.1).
         var boundary = FloorToMinute(now < sessionEnd ? now : sessionEnd);
-        var normalized = BarAggregator.Normalize(oneMinute ?? [], sessionStart, sessionEnd, boundary);
+        var normalized = BarAggregator.Normalize(oneMinute ?? [], sessionStart, sessionEnd, boundary, barDuration);
         foreach (var warning in normalized.Warnings) warnings.Add(warning);
 
         var (dailyBars, dailyWarnings) = Daily(daily, sessionStart, policy);

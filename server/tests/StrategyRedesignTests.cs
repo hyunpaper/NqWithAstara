@@ -1,4 +1,5 @@
 using Astra.Server;
+using Astra.Server.Application;
 using Astra.Server.Domain;
 using Astra.Server.Domain.Structure;
 using Xunit;
@@ -108,5 +109,21 @@ public sealed class StrategyRedesignTests
         Assert.Equal(first, second);
         Assert.Equal(StrategyDirection.Range, first.Direction);
         Assert.Equal(VolatilityBand.Low, first.Volatility);
+    }
+
+    [Fact]
+    public void 다섯분봉_원천은_원천주기를_전달하면_거짓_gap으로_차단하지_않는다()
+    {
+        var start = Fx.At(0);
+        var bars = Enumerable.Range(0, 12).Select(i => new Candle(start.AddMinutes(i * 5),
+            100, 100.20, 99.80, 100, 1000)).ToArray();
+        var session = new MarketSession(true, "5분 fixture", null, start, start.AddHours(6.5));
+
+        var result = StructureSnapshotFactory.Create("TEST", session, bars, [], 100,
+            bars[^1].Timestamp.AddMinutes(5), bars[^1].Timestamp.AddMinutes(5), 1,
+            StructurePolicy.Default with { Minimum1mBars = 6 }, barDuration: TimeSpan.FromMinutes(5));
+
+        Assert.DoesNotContain(StructureSnapshotFactory.BlockerBarGap, result.Quality.BlockersForCandidate);
+        Assert.Equal(12, result.Bars.Bars.Length);
     }
 }

@@ -89,6 +89,19 @@ public sealed class HistoricalStructureTradeReplayTests
         Assert.Equal(JsonSerializer.Serialize(first["TSLA"]), JsonSerializer.Serialize(second["TSLA"]));
     }
 
+    [Fact]
+    public async Task 상세Replay는_후보_게이트_사유를_보존하고_결정적이다()
+    {
+        var first = await new HistoricalStructureTradeReplay(new MemoryBars(), StructurePolicy.Default)
+            .RunDetailedAsync(new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 8), ["TSLA"], default);
+        var second = await new HistoricalStructureTradeReplay(new MemoryBars(), StructurePolicy.Default)
+            .RunDetailedAsync(new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 8), ["TSLA"], default);
+
+        Assert.Equal(JsonSerializer.Serialize(first.Candidates), JsonSerializer.Serialize(second.Candidates));
+        Assert.All(first.Candidates, x => Assert.NotNull(x.EventId));
+        Assert.All(first.Candidates, x => Assert.False(string.IsNullOrWhiteSpace(x.Symbol)));
+    }
+
     sealed class MemoryBars : IBarStore
     {
         readonly List<string> _lines = [];
