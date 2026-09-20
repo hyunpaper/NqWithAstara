@@ -522,7 +522,9 @@ public sealed class StructureAnalysisService(
             if (stored is not null)
             {
                 var latest = completedBars.OrderByDescending(x => x.Timestamp).FirstOrDefault();
-                if (latest is null || latest.Timestamp != stored.Pending.ConfirmationBarStart)
+                if (latest is null || latest.Timestamp < stored.Pending.ConfirmationBarStart)
+                    return Blocked(candidates, chosen, "V5_PENDING_CONFIRMATION_WAITING");
+                if (latest.Timestamp > stored.Pending.ConfirmationBarStart)
                 {
                     await pendingEntries.RemoveAsync(snapshot.Symbol);
                     return Blocked(candidates, chosen, "V5_PENDING_CONFIRMATION_MISSED");
@@ -537,6 +539,8 @@ public sealed class StructureAnalysisService(
                     claimed.Pending.SignalBarStart, now, snapshot.SessionEnd, claimed.Context,
                     completedBarStarts, snapshot.SessionStart, null,
                     confirmation), ct);
+                if (confirmed.Outcome is Domain.StructuralEntryOutcome.Entered or Domain.StructuralEntryOutcome.AlreadyEntered)
+                    await pendingEntries.RemoveAsync(snapshot.Symbol);
                 return confirmed.Outcome is Domain.StructuralEntryOutcome.Entered or Domain.StructuralEntryOutcome.AlreadyEntered
                     ? new ActiveEntryResult(candidates.Select(x => x.EventId == claimed.Pending.EntryEventId
                         ? x with { Disposition = CandidateDisposition.Entered }

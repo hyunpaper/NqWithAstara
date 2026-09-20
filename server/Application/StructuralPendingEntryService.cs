@@ -4,7 +4,7 @@ namespace Astra.Server.Application;
 
 /// <summary>v5 확인 대기를 재시작 후에도 보존하는 저장 계약. simtrades와 분리해 미체결 계획을 중복 진입으로 만들지 않는다.</summary>
 public sealed record StoredPendingStructuralEntry(PendingEntry Pending, FrozenStructureContext Context,
-    DateTimeOffset QueuedAt);
+    DateTimeOffset QueuedAt, DateTimeOffset? ProcessingUntil = null);
 
 public sealed class StructuralPendingEntryService(ILocalStore store)
 {
@@ -37,12 +37,15 @@ public sealed class StructuralPendingEntryService(ILocalStore store)
         var index = rows.FindLastIndex(x => string.Equals(x.Pending.Symbol, symbol, StringComparison.OrdinalIgnoreCase));
         if (index < 0) return (rows, (StoredPendingStructuralEntry?)null);
         var item = rows[index];
+        if (item.ProcessingUntil is { } processing && processing > now)
+            return (rows, (StoredPendingStructuralEntry?)null);
         if (now > item.Pending.ExpiresAt)
         {
             rows.RemoveAt(index);
             return (rows, (StoredPendingStructuralEntry?)null);
         }
-        rows.RemoveAt(index);
-        return (rows, item);
+        var claimed = item with { ProcessingUntil = now.AddMinutes(1) };
+        rows[index] = claimed;
+        return (rows, claimed);
     });
 }
