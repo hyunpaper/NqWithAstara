@@ -14,7 +14,7 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
     public object Articles(string? symbol, int? limit)
     {
         var take = Math.Clamp(limit ?? DefaultLimit, 1, MaxLimit);
-        var rows = state.Recent().AsEnumerable();
+        var rows = state.Recent().OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.CollectedAt).AsEnumerable();
         if (!string.IsNullOrWhiteSpace(symbol))
         {
             var wanted = symbol.Trim().TrimStart('$');
@@ -56,6 +56,7 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         lastAttemptAt = state.LastAttemptAt,
         lastSuccessAt = state.LastSuccessAt,
         lastError = state.LastError,
+        feedStatus = state.FeedStatus,
         queue = state.Queue,
         dropped = state.Dropped,
         seen = state.Seen,
@@ -89,6 +90,10 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         inputKind = record.InputKind,
         promptVersion = record.PromptVersion,
         classifiedFrom = record.ClassifiedFrom,
+        url = record.Url,
+        collectedAt = record.CollectedAt,
+        evidenceSource = record.EvidenceSource,
+        translationStatus = record.TranslationStatus,
     };
 
     static object Project(NewsSentimentScore score) => new

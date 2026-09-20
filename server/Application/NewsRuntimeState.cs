@@ -66,7 +66,11 @@ public sealed record NewsRecord(
     string? SourceKo = null,
     IReadOnlyDictionary<string, int>? ImpactScores = null,
     string Summary = "",
-    string Content = "");
+    string Content = "",
+    string? Url = null,
+    DateTimeOffset? CollectedAt = null,
+    string EvidenceSource = "",
+    string TranslationStatus = "not_requested");
 
 /// <summary>health·조회가 함께 보는 뉴스 런타임 상태(#151 §6). 스레드 안전하다.</summary>
 public sealed class NewsRuntimeState
@@ -85,10 +89,11 @@ public sealed class NewsRuntimeState
     public long Classified { get; private set; }
     public bool OllamaOk { get; private set; } = true;
     public bool StorageLimited { get; private set; }
+    public string FeedStatus { get; private set; } = "idle";
 
     public void PollStarted(DateTimeOffset at) { lock (_gate) LastAttemptAt = at; }
-    public void PollCompleted(DateTimeOffset at) { lock (_gate) { LastPollAt = at; LastSuccessAt = at; LastError = null; } }
-    public void PollFailed(DateTimeOffset at, string error) { lock (_gate) { LastPollAt = at; LastError = error; } }
+    public void PollCompleted(DateTimeOffset at) { lock (_gate) { LastPollAt = at; LastSuccessAt = at; LastError = null; FeedStatus = "ok"; } }
+    public void PollFailed(DateTimeOffset at, string error) { lock (_gate) { LastPollAt = at; LastError = error; FeedStatus = "failed"; } }
     public void QueueDepth(int depth) { lock (_gate) Queue = depth; }
     public void Drop(int count) { lock (_gate) Dropped += count; }
     public void SeenArticles(int count) { lock (_gate) Seen += count; }

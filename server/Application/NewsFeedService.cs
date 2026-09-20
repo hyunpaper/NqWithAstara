@@ -105,7 +105,7 @@ public sealed class NewsFeedService(
             if (!NeedsReclassification(record) || IsQueued(record.Id)) continue;
             var headlineOnly = string.Equals(record.InputKind, NewsInputKinds.Headline, StringComparison.OrdinalIgnoreCase);
             var article = new NewsArticle(record.Id, record.Title, record.Summary, record.Source, record.CreatedAt,
-                record.Tickers, headlineOnly ? record.Title : "", headlineOnly, null, record.Entities, record.Content, record.InputKind);
+                record.Tickers, headlineOnly ? record.Title : "", headlineOnly, null, record.Entities, record.Content, record.InputKind, record.Url);
             Enqueue(article, record.MatchedSymbols);
             queued++;
         }
@@ -161,7 +161,7 @@ public sealed class NewsFeedService(
         state.SeenArticles(fresh.Count);
         var articles = fresh.OrderBy(x => ParseId(x.Id))
             .Select(item => new NewsArticle(item.Id, item.Title, item.Summary, item.Source, item.CreatedAt,
-                item.Tickers, item.Headline, item.HeadlineOnly, item.GroupId, item.Entities, item.Content))
+                item.Tickers, item.Headline, item.HeadlineOnly, item.GroupId, item.Entities, item.Content, Url: item.Url))
             .ToArray();
 
         var followerIds = GroupFollowerArticles(articles, watchlist);
@@ -376,7 +376,11 @@ public sealed class NewsFeedService(
             result.PromptVersion,
             classifiedFrom, entry.Article.Entities, classification?.KoreanTitle,
             classification?.KoreanSource, classification?.ImpactScores,
-            entry.Article.Summary, entry.Article.Content);
+            entry.Article.Summary, entry.Article.Content,
+            entry.Article.Url,
+            clock.GetUtcNow(),
+            inputKind == NewsInputKinds.Headline ? "headline" : (string.IsNullOrWhiteSpace(entry.Article.Content) ? "summary" : "body"),
+            classification?.KoreanTitle is null ? "untranslated" : "translated");
     }
 
     async Task SaveAsync(NewsRecord record, CancellationToken ct)

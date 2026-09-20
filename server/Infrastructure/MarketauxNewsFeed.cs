@@ -81,14 +81,15 @@ public sealed class MarketauxNewsFeed : INewsFeed
         var entities = x.Entities?.Where(e => !string.IsNullOrWhiteSpace(e.Symbol) || !string.IsNullOrWhiteSpace(e.Name))
             .Select(e => new NewsEntity((e.Symbol ?? "").ToUpperInvariant(), e.Name ?? "", e.Industry ?? "", e.SentimentScore, e.MatchScore)).ToArray() ?? [];
         var tickers = entities.Where(e => e.Symbol.Length > 0).Select(e => e.Symbol).Distinct(StringComparer.Ordinal).ToArray();
-        return new NewsFeedItem(x.Uuid!, x.Title ?? "", x.Description ?? "", x.Source ?? "", x.PublishedAt ?? DateTimeOffset.UtcNow, tickers, Entities: entities);
+        return new NewsFeedItem(x.Uuid!, x.Title ?? "", x.Description ?? "", x.Source ?? "", x.PublishedAt ?? DateTimeOffset.UtcNow, tickers, Entities: entities, Url: x.Url);
     }
 
     sealed record Payload(List<Item>? Data);
     sealed record Item(
         string? Uuid, string? Title, string? Description, string? Source,
         [property: JsonPropertyName("published_at")] DateTimeOffset? PublishedAt,
-        List<Entity>? Entities);
+        List<Entity>? Entities,
+        string? Url);
     sealed record Entity(string? Symbol, string? Name, string? Industry,
         [property: JsonPropertyName("sentiment_score")] double? SentimentScore,
         [property: JsonPropertyName("match_score")] double? MatchScore);
