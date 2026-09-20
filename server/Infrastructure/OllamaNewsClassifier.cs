@@ -22,7 +22,9 @@ public sealed class OllamaNewsClassifier : INewsClassifier
 
     const string PromptResourceName = "news-classify-v2b.txt";
 
-    public static readonly TimeSpan Timeout = TimeSpan.FromSeconds(20);
+    // 번역 제목·언론사·종목별 영향도까지 JSON으로 생성하는 데 7B 모델이 20초를 넘길 수 있다.
+    // 짧은 timeout은 정상 기사를 unclassified로 영구 저장하는 결과를 만들었다.
+    public static readonly TimeSpan Timeout = TimeSpan.FromSeconds(60);
 
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
