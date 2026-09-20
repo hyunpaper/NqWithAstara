@@ -7,7 +7,8 @@ namespace Astra.Server.Application;
 
 /// <summary>증분 상태(#151 §1). 첫 기동은 기준점만 저장하고 과거 기사를 분류하지 않는다.</summary>
 public sealed record NewsFeedState(long LastId, DateTimeOffset? LastCreatedAt,
-    IReadOnlyList<DateTimeOffset>? FeedRequestTimes = null, string? LastKey = null);
+    IReadOnlyList<DateTimeOffset>? FeedRequestTimes = null, string? LastKey = null,
+    IReadOnlyList<string>? SeenIds = null);
 
 /// <summary>
 /// 뉴스 수집·큐·분류 파이프라인(#151 §1·§3·§5). 호스트 타이머가 <see cref="PollAsync"/>만 호출한다.
@@ -127,13 +128,14 @@ public sealed class NewsFeedService(
         var maxId = known?.LastId ?? 0;
         DateTimeOffset? maxCreatedAt = known?.LastCreatedAt;
         var maxKey = known?.LastKey;
+        var seenIds = new HashSet<string>(known?.SeenIds ?? [], StringComparer.Ordinal);
 
         while (page <= Math.Max(1, options.MaxPages) && budget > 0)
         {
             if (!ReserveFeedRequest(clock.GetUtcNow())) break;
             // 공급자 호출은 빈 응답이나 예외에서도 쿼터를 소비할 수 있다.
             // 호출 직후 시각을 저장해 재기동으로 일일 한도를 우회하지 않게 한다.
-            await SaveStateAsync(new NewsFeedState(maxId, maxCreatedAt, _dailyFeedRequests.ToArray(), maxKey), ct);
+            await SaveStateAsync(new NewsFeedState(maxId, maxCreatedAt, _dailyFeedRequests.ToArray(), maxKey, seenIds.ToArray()), ct);
             IReadOnlyList<NewsFeedItem> items;
             try { items = await feed.ListAsync(page, ct); }
             finally { budget--; }
@@ -141,14 +143,18 @@ public sealed class NewsFeedService(
             if (items.Count == 0) break;
             foreach (var item in items)
             {
+                seenIds.Add(item.Id);
                 var id = ParseId(item.Id);
                 if (IsAfter(item.CreatedAt, id, item.Id, maxCreatedAt, maxId, maxKey))
                 { maxId = id; maxCreatedAt = item.CreatedAt; maxKey = item.Id; }
             }
 
             if (known is null) break;
-            var newer = items.Where(x => IsAfter(x.CreatedAt, ParseId(x.Id), x.Id,
-                known.LastCreatedAt, known.LastId, known.LastKey)).ToArray();
+            // ID inbox is the durable dedup boundary. It also admits late arrivals whose
+            // publication timestamp is older than the latest watermark.
+            var newer = items.Where(x => known.SeenIds is not null
+                ? !known.SeenIds.Contains(x.Id, StringComparer.Ordinal)
+                : IsAfter(x.CreatedAt, ParseId(x.Id), x.Id, known.LastCreatedAt, known.LastId, known.LastKey)).ToArray();
             fresh.AddRange(newer);
             // 신규가 한 페이지를 가득 채웠을 때만 더 과거 페이지를 본다.
             if (newer.Length < items.Count) break;
@@ -156,7 +162,8 @@ public sealed class NewsFeedService(
         }
 
         if (maxId > 0 || maxCreatedAt is not null)
-            await SaveStateAsync(new NewsFeedState(maxId, maxCreatedAt, _dailyFeedRequests.ToArray(), maxKey), ct);
+            await SaveStateAsync(new NewsFeedState(maxId, maxCreatedAt, _dailyFeedRequests.ToArray(), maxKey,
+                seenIds.TakeLast(Math.Max(options.RecentCapacity, 1)).ToArray()), ct);
         if (known is null || fresh.Count == 0) return budget;
 
         state.SeenArticles(fresh.Count);
@@ -435,11 +442,13 @@ public sealed class NewsFeedService(
     {
         var requestsChanged = _state?.FeedRequestTimes is null
             || !_state.FeedRequestTimes.SequenceEqual(next.FeedRequestTimes ?? []);
+        var seenChanged = _state?.SeenIds is null
+            || !(_state.SeenIds ?? []).SequenceEqual(next.SeenIds ?? []);
         if (_state is not null
             && next.LastId <= _state.LastId
             && (next.LastCreatedAt is null || _state.LastCreatedAt is not null && next.LastCreatedAt <= _state.LastCreatedAt)
             && string.Equals(next.LastKey, _state.LastKey, StringComparison.Ordinal)
-            && !requestsChanged) return;
+            && !requestsChanged && !seenChanged) return;
         _state = next;
         await store.WriteTextAsync(StateFile, JsonSerializer.Serialize(next, Json), ct);
     }

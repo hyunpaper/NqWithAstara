@@ -114,6 +114,30 @@ public sealed class NewsFeedServiceTests
     }
 
     [Fact]
+    public async Task LateArticleOlderThanWatermarkIsAcceptedOnceAndSurvivesRestart()
+    {
+        var harness = new Harness();
+        var baseline = NewsBuilder.Item("100", "기준", Start, []);
+        harness.Page(1, baseline);
+        await harness.PollAsync();
+
+        var latest = NewsBuilder.Item("300", "최신", Start.AddMinutes(3), []);
+        harness.Page(1, latest, baseline);
+        await harness.PollAsync();
+
+        var late = NewsBuilder.Item("200", "지연 도착", Start.AddMinutes(1), []);
+        harness.Page(1, late, latest, baseline);
+        await harness.PollAsync();
+        Assert.Contains(harness.Classifier.Requests, x => x.Title == "지연 도착");
+
+        var restarted = new Harness();
+        restarted.Store.Texts[NewsFeedService.StateFile] = harness.Store.Texts[NewsFeedService.StateFile];
+        restarted.Page(1, late, latest, baseline);
+        await restarted.PollAsync();
+        Assert.Empty(restarted.Classifier.Requests);
+    }
+
+    [Fact]
     public async Task FeedRequestMinuteLimitResetsAfterTimeAdvances()
     {
         var harness = new Harness();
