@@ -8,6 +8,21 @@ import {
 } from "./newsTypes";
 
 describe("normalizeArticlesResponse", () => {
+  it("opaque 상세 ID와 실제 번역·snapshot 근거 계약을 보존한다", () => {
+    const res = normalizeArticlesResponse({ enabled: true, articles: [{
+      id: "opaque:save:20260921:abc%2F1", title: "English", titleKo: "한국어 제목", sourceKo: "로이터",
+      summaryKo: "한국어 요약", contentKo: "한국어 본문", classificationText: "본문 기준 긍정",
+      classificationSource: "body", evidence: [{ id: "opaque:e1", title: "Evidence", titleKo: "근거 기사", sourceKo: "블룸버그", sentiment: "positive", contribution: 1.25, weight: 0.8, createdAt: "2026-09-21T00:00:00Z" }],
+      remainingEvidenceCount: 2, remainingContribution: -0.4,
+    }] });
+    const article = res.articles[0];
+    expect(article.id).toBe("opaque:save:20260921:abc%2F1");
+    expect(article.contentKo).toBe("한국어 본문");
+    expect(article.classificationText).toBe("본문 기준 긍정");
+    expect(article.evidence?.[0]).toMatchObject({ id: "opaque:e1", titleKo: "근거 기사", contribution: 1.25 });
+    expect(article.remainingEvidenceCount).toBe(2);
+  });
+
   it("알 수 없는 필드를 무시하고 알려진 필드만 남긴다", () => {
     const res = normalizeArticlesResponse({
       enabled: true,

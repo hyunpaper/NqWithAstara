@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { NewsArticle } from "./newsTypes";
+import { normalizeArticle, type NewsArticle } from "./newsTypes";
 import { absoluteTimeKst, inputKindLabel, sentimentBadge } from "./newsFormat";
 
 export default function NewsDetailPanel({ article, state = "idle", onClose }: { article: NewsArticle; state?: "idle" | "loading" | "error"; onClose: () => void }) {
@@ -19,8 +19,9 @@ export default function NewsDetailPanel({ article, state = "idle", onClose }: { 
     fetch(`/api/news/${encodeURIComponent(article.id)}/evidence`, { signal: controller.signal })
       .then(async (response) => { if (!response.ok) throw new Error("근거 조회 실패"); return response.json(); })
       .then((raw) => { if (!controller.signal.aborted) {
-        const normalized = { ...article, ...raw, body: raw.body ?? raw.content, summaryKo: raw.summaryKo, contentKo: raw.contentKo };
-        setEvidence(normalized); setEvidenceState("idle");
+        const normalized = normalizeArticle({ ...raw, body: raw.body ?? raw.content });
+        if (!normalized) throw new Error("상세 응답 형식이 올바르지 않습니다.");
+        setEvidence({ ...article, ...normalized }); setEvidenceState("idle");
       } })
       .catch((error) => { if (!controller.signal.aborted) setEvidenceState("error"); });
     return () => controller.abort();
