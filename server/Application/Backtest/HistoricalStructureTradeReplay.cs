@@ -40,6 +40,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                 var retired = ImmutableArray<string>.Empty;
                 var latch = StructuralLatch.Empty(symbol, sessionStart, policy.PolicyHash);
                 var processedBars = 0;
+                EntryCandidate? pending = null;
 
                 for (var index = 0; index < bars.Length && bars[index].Timestamp.AddMinutes(1) < sessionEnd; index++)
                 {
@@ -49,6 +50,18 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                     var exitedThisPoll = result[symbol].Count(x => x.Status == "OPEN") < openBeforeBar;
                     processedBars = index + 1;
                     var now = current.Timestamp.AddMinutes(1);
+
+                    if (pending is { Plan: { } pendingPlan } && !exitedThisPoll && current.Open > (double)pendingPlan.Stop)
+                    {
+                        var context = StructuralSimulation.Freeze(pendingPlan, pending.EventId,
+                            "REPLAY_CONFIRMATION", null, pending.EntryQuality, now, now);
+                        var entered = StructuralSimulation.Enter(result[symbol], new StructuralEntryRequest(symbol,
+                            pending.TriggerBarStart, now, sessionEnd, context,
+                            bars.Take(index + 1).Select(x => x.Timestamp).ToArray(), sessionStart,
+                            pendingPlan.TargetZoneSnapshot.Aliases), policy);
+                        result[symbol] = entered.Trades;
+                    }
+                    pending = null;
                     var prefix = bars.Take(index + 1).ToArray();
                     var build = StructureSnapshotFactory.Create(symbol, market, prefix, daily[symbol], current.Close,
                         now, now, 1, policy);
@@ -81,19 +94,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
 
                     if (!exitedThisPoll && preferred is { Disposition: CandidateDisposition.Ready, Plan: not null })
                     {
-                        var context = StructuralSimulation.Freeze(preferred.Plan, preferred.EventId,
-                            trend.State.ToString(), trend.SignedTrend, preferred.EntryQuality,
-                            snapshot.AnalysisAsOf, snapshot.QuoteAt);
-                        var entered = StructuralSimulation.Enter(result[symbol], new StructuralEntryRequest(symbol,
-                            preferred.TriggerBarStart, EntryTime(preferred.TriggerConfirmedAt, snapshot.AnalysisAsOf),
-                            snapshot.SessionEnd, context,
-                            build.Bars.Bars.Select(x => x.Start).ToArray(), snapshot.SessionStart,
-                            preferred.Plan.TargetZoneSnapshot.Aliases), policy);
-                        result[symbol] = entered.Trades;
-                        if (entered.Outcome is StructuralEntryOutcome.Entered or StructuralEntryOutcome.AlreadyEntered)
-                            candidates = candidates.Select(x => x.EventId == preferred.EventId
-                                ? x with { Disposition = CandidateDisposition.Entered }
-                                : x).ToImmutableArray();
+                        pending = preferred;
                     }
                     latch = StructuralLifecycle.Commit(latch, cutoff, candidates, evaluated.RetiredZoneIds,
                         StructuralLifecycle.EventSignature(candidates,

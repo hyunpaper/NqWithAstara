@@ -218,7 +218,7 @@ public static class SetupDetector
         decimal? LiveFloorInclusive);
 
     /// <summary>
-    /// PULLBACK: UP/TRANSITION에서 확인된 support(또는 retest된 flipped-support) 접촉 episode 뒤,
+    /// PULLBACK: UP에서 확인된 support(또는 retest된 flipped-support) 접촉 episode 뒤,
     /// 완료 봉이 직전 봉 High 위에서 마감하고 support Upper 위로 회복한다(§8).
     /// 이슈 #64: 추세 상태 하나로 탈락한 경우 <see cref="NotePullbackTrendState"/>를 관측에 남긴다.
     /// 후보를 만들지는 않는다 — 자격 조건과 임계값은 그대로다.
@@ -233,7 +233,7 @@ public static class SetupDetector
         var episode = TriggerEligibleEpisode(request, policy, zone, bars, structureCutoff);
         if (episode is null) return null;
 
-        if (request.Trend.State is not (TrendState.Up or TrendState.Transition))
+        if (request.Trend.State != TrendState.Up)
         {
             warnings.Add(NotePullbackTrendState);
             return null;
@@ -283,6 +283,8 @@ public static class SetupDetector
         StructureBar trigger, StructureBar previous, ImmutableArray<StructureBar> bars, DateTimeOffset structureCutoff)
     {
         if (!IsUsableSupport(zone)) return null;
+        if (request.Trend.State is not (TrendState.Transition or TrendState.Up)) return null;
+        if (previous.Close <= zone.Upper) return null;
         if (trigger.Close <= previous.High || trigger.Close <= zone.Upper) return null;
         if (trigger.Close <= trigger.Open) return null;          // 양봉 요구
 
