@@ -102,6 +102,18 @@ public sealed class HistoricalStructureTradeReplayTests
         Assert.All(first.Candidates, x => Assert.False(string.IsNullOrWhiteSpace(x.Symbol)));
     }
 
+    [Fact]
+    public async Task 상세Replay는_제공된_과거호가를_비용입력으로_전달한다()
+    {
+        var source = new FixedLiquiditySource();
+        var bars = new MemoryBars();
+        bars.Seed("2026-09-08", "TSLA", 120);
+        await new HistoricalStructureTradeReplay(bars, StructurePolicy.Default, source)
+            .RunDetailedAsync(new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 8), ["TSLA"], default);
+
+        Assert.True(source.Calls > 0);
+    }
+
     sealed class MemoryBars : IBarStore
     {
         readonly List<string> _lines = [];
@@ -136,5 +148,16 @@ public sealed class HistoricalStructureTradeReplayTests
         public Task<IReadOnlyList<string>> ReadLinesAsync(string day, string symbol, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<string>>(_lines);
         public Task DeleteDayAsync(string day, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    sealed class FixedLiquiditySource : IHistoricalLiquiditySource
+    {
+        public int Calls { get; private set; }
+
+        public StructureLiquidity? Get(string symbol, DateTimeOffset observedAt)
+        {
+            Calls++;
+            return new StructureLiquidity(99.99m, 100.01m, observedAt, 100, 100);
+        }
     }
 }

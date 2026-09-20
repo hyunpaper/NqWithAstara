@@ -4,12 +4,13 @@ using Astra.Server.Domain.Structure;
 
 namespace Astra.Server.Application.Backtest;
 
-public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePolicy policy)
+public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePolicy policy,
+    IHistoricalLiquiditySource? liquiditySource = null)
 {
     /// <summary>replay에서 생성된 후보의 1단계 후보화·2단계 최종 게이트 결과를 보존한다.</summary>
     public sealed record ReplayCandidateDiagnostic(string Symbol, DateOnly SessionDate,
         string EventId, DateTimeOffset SignalAt, TradeSide Side, string Regime,
-        CandidateDisposition Disposition, bool FinalApproved,
+        CandidateDisposition Disposition, bool StructuralReady, bool FinalApproved,
         ImmutableArray<string> RejectionReasons, ImmutableArray<string> FeatureContributions);
 
     public sealed record ReplayRun(ImmutableDictionary<string, ImmutableArray<SimTrade>> Trades,
@@ -116,8 +117,9 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                         }
                     }
                     var prefix = bars.Take(index + 1).ToArray();
+                    var liquidity = liquiditySource?.Get(symbol, now);
                     var build = StructureSnapshotFactory.Create(symbol, market, prefix, daily[symbol], current.Close,
-                        now, now, 1, replayPolicy, barDuration: barSpan);
+                        now, now, 1, replayPolicy, liquidity, barSpan);
                     if (build.Snapshot is null || build.LastCompletedBarStart is null ||
                         build.Status != StructureAnalysisStatus.Available) continue;
 
@@ -138,7 +140,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                     var detected = SetupDetector.Detect(SetupDetectionRequest.Create(symbol, snapshot.SessionStart,
                         snapshot.SessionEnd, snapshot.AnalysisAsOf, now, build.Bars.Bars, evaluated.Zones,
                         evaluated.Episodes, trend, built.Atr1mAtCutoff, snapshot.QuotePrice, snapshot.QuoteAt,
-                        null, build.Quality.BlockersForCandidate.Concat(gate.Blockers).ToImmutableArray()), replayPolicy);
+                        snapshot.OptionalLiquidity, build.Quality.BlockersForCandidate.Concat(gate.Blockers).ToImmutableArray()), replayPolicy);
                     var candidates = StructuralLifecycle.ApplyLive(
                         StructuralLifecycle.ApplyLatch(latch, detected.Candidates, gate.AllowNewTrigger, replayPolicy,
                             evaluated.Zones), snapshot.QuotePrice, now);
@@ -149,10 +151,14 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                             .Concat(candidate.Evidence?.GateReasons ?? ImmutableArray<string>.Empty)
                             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToImmutableArray();
                         var contributions = candidate.Evidence?.FeatureContributions ?? ImmutableArray<string>.Empty;
+                        var structuralReady = candidate.Disposition == CandidateDisposition.Ready;
+                        var costComplete = candidate.Evidence?.CostComplete == true;
+                        var expectedValueReady = candidate.Evidence?.ExpectedNetR is > 0;
                         candidateDiagnostics[candidate.EventId] = new ReplayCandidateDiagnostic(
                             symbol, MarketRules.TradingDate(sessionStart), candidate.EventId,
                             candidate.TriggerBarStart, candidate.Side, candidate.Regime?.Key ?? "UNCOLLECTED",
-                            candidate.Disposition, candidate.Disposition == CandidateDisposition.Ready,
+                            candidate.Disposition, structuralReady,
+                            structuralReady && costComplete && expectedValueReady,
                             reasons, contributions);
                     }
                     var preferred = CandidateSelection.SelectPreferred(candidates);
