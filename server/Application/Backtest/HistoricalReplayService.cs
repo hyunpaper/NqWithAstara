@@ -80,7 +80,7 @@ public sealed class HistoricalReplayService
             return new(400, null, $"기간은 오늘 이전의 1~{MaxDays}일 범위여야 합니다.");
 
         var requested = request.Symbols ?? Array.Empty<string>();
-        var watch = (requested.Length > 0 ? requested.Select(x => new WatchItem(x, x))
+        var watch = (requested.Count > 0 ? requested.Select(x => new WatchItem(x, x))
             : await _store.Read("watchlist.json", new List<WatchItem>()))
             .Select(x => x.Symbol.Trim().ToUpperInvariant()).Where(x => x.Length > 0 && x != "QQQ")
             .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToImmutableArray();
