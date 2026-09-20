@@ -31,6 +31,7 @@ public sealed class NewsFeedService(
     readonly LinkedList<QueuedArticle> _other = new();
     readonly HashSet<string> _queued = new(StringComparer.Ordinal);
     readonly Queue<DateTimeOffset> _classifications = new();
+    readonly Queue<DateTimeOffset> _feedRequests = new();
 
     /// <summary>대표 기사 id -> 같은 사건 그룹의 나머지 기사(#171). 대표가 분류되면 함께 저장한다.</summary>
     readonly Dictionary<string, List<QueuedArticle>> _pendingFollowers = new(StringComparer.Ordinal);
@@ -101,6 +102,7 @@ public sealed class NewsFeedService(
 
         while (page <= Math.Max(1, options.MaxPages) && budget > 0)
         {
+            if (!ReserveFeedRequest(clock.GetUtcNow())) break;
             IReadOnlyList<NewsFeedItem> items;
             try { items = await feed.ListAsync(page, ct); }
             finally { budget--; }
@@ -122,7 +124,8 @@ public sealed class NewsFeedService(
             page++;
         }
 
-        if (maxId > 0) await SaveStateAsync(new NewsFeedState(maxId, maxCreatedAt), ct);
+        if (maxId > 0 || maxCreatedAt is not null)
+            await SaveStateAsync(new NewsFeedState(maxId, maxCreatedAt), ct);
         if (known is null || fresh.Count == 0) return budget;
 
         state.SeenArticles(fresh.Count);
@@ -381,4 +384,16 @@ public sealed class NewsFeedService(
 
     static long ParseId(string id)
         => long.TryParse(id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : 0;
+
+    bool ReserveFeedRequest(DateTimeOffset now)
+    {
+        while (_feedRequests.Count > 0 && now - _feedRequests.Peek() >= TimeSpan.FromHours(24))
+            _feedRequests.Dequeue();
+        if (_feedRequests.Count >= Math.Max(1, options.MaxDailyFeedRequests)) return false;
+        while (_feedRequests.Count > 0 && now - _feedRequests.Peek() >= TimeSpan.FromMinutes(1))
+            _feedRequests.Dequeue();
+        if (_feedRequests.Count >= Math.Max(1, options.MaxFeedRequestsPerMinute)) return false;
+        _feedRequests.Enqueue(now);
+        return true;
+    }
 }

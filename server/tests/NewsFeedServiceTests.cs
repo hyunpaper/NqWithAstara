@@ -75,6 +75,28 @@ public sealed class NewsFeedServiceTests
     }
 
     [Fact]
+    public async Task GuidFeedUsesCreatedAtCursorAcrossPolls()
+    {
+        var harness = new Harness();
+        var first = NewsBuilder.Item("uuid-1", "기준", Start, []);
+        harness.Page(1, first);
+        await harness.PollAsync();
+
+        var state = JsonSerializer.Deserialize<NewsFeedState>(harness.Store.Texts[NewsFeedService.StateFile],
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.Equal(0, state.LastId);
+        Assert.Equal(Start, state.LastCreatedAt);
+
+        harness.Page(1, NewsBuilder.Item("uuid-2", "새 기사", Start.AddMinutes(1), []), first);
+        await harness.PollAsync();
+
+        Assert.Equal("새 기사", Assert.Single(harness.Classifier.Requests).Title);
+        state = JsonSerializer.Deserialize<NewsFeedState>(harness.Store.Texts[NewsFeedService.StateFile],
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.Equal(Start.AddMinutes(1), state.LastCreatedAt);
+    }
+
+    [Fact]
     public async Task AlreadyProcessedArticleIsNotClassifiedTwice()
     {
         var harness = new Harness();
