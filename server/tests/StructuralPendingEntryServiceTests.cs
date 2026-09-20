@@ -36,6 +36,22 @@ public sealed class StructuralPendingEntryServiceTests
     }
 
     [Fact]
+    public async Task PersistedConfirmationCanBeReclaimedAfterPendingExpiry()
+    {
+        var store = new MemoryStore();
+        var service = new StructuralPendingEntryService(store);
+        var entry = Entry("crash-retry");
+        await service.QueueAsync(entry);
+        var confirmation = new EntryConfirmation(entry.Pending, PendingEntryDecision.Confirmed,
+            Start.AddMinutes(1), 100.5, .01, "LIVE_CONFIRMATION_BAR_CLOSE", "OBSERVED");
+        await service.SaveConfirmationAsync("SOXL", confirmation, Start.AddMinutes(1));
+
+        var recovered = await service.ClaimAsync("SOXL", Start.AddMinutes(7));
+        Assert.NotNull(recovered);
+        Assert.Equal(100.5, recovered!.Confirmation!.FillPrice);
+    }
+
+    [Fact]
     public void LivePendingStateIsIndependentOfPreferredCandidate()
     {
         var pending = Entry().Pending;

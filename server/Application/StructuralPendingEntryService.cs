@@ -48,7 +48,10 @@ public sealed class StructuralPendingEntryService(ILocalStore store)
         var item = rows[index];
         if (item.ProcessingUntil is { } processing && processing > now)
             return (rows, (StoredPendingStructuralEntry?)null);
-        if (now > item.Pending.ExpiresAt)
+        // 확인 결과를 먼저 영속화한 항목은 원래 pending 만료와 무관하게
+        // 동일한 체결을 멱등 재시도해야 한다. 이 분기를 만료로 삭제하면
+        // 확인봉 직후 프로세스가 죽은 경우 다음 poll에서 진입을 잃는다.
+        if (item.Confirmation is null && now > item.Pending.ExpiresAt)
         {
             rows.RemoveAt(index);
             return (rows, (StoredPendingStructuralEntry?)null);
