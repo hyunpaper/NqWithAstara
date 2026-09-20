@@ -60,4 +60,29 @@ public sealed class StructuralPendingEntryService(ILocalStore store)
         rows[index] = claimed;
         return (rows, claimed);
     });
+
+    /// <summary>확인 계산 결과와 poll 소유권을 한 번의 저장 갱신으로 함께 영속화한다.</summary>
+    public Task<StoredPendingStructuralEntry?> ClaimAndPersistConfirmationAsync(
+        string symbol, EntryConfirmation confirmation, DateTimeOffset now) => store.Update(
+        File, new List<StoredPendingStructuralEntry>(), rows =>
+    {
+        var index = rows.FindLastIndex(x => string.Equals(x.Pending.Symbol, symbol, StringComparison.OrdinalIgnoreCase));
+        if (index < 0) return (rows, (StoredPendingStructuralEntry?)null);
+        var item = rows[index];
+        if (item.ProcessingUntil is { } processing && processing > now)
+            return (rows, (StoredPendingStructuralEntry?)null);
+        if (item.Confirmation is null && now > item.Pending.ExpiresAt)
+        {
+            rows.RemoveAt(index);
+            return (rows, (StoredPendingStructuralEntry?)null);
+        }
+        // 이미 저장된 확인은 재시작 시 동일한 증거를 멱등 재사용한다.
+        var claimed = item with
+        {
+            Confirmation = item.Confirmation ?? confirmation,
+            ProcessingUntil = now.AddMinutes(1)
+        };
+        rows[index] = claimed;
+        return (rows, claimed);
+    });
 }

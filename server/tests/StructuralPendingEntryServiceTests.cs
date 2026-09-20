@@ -52,6 +52,24 @@ public sealed class StructuralPendingEntryServiceTests
     }
 
     [Fact]
+    public async Task ClaimAndPersistConfirmationCommitsEvidenceAndLeaseTogether()
+    {
+        var store = new MemoryStore();
+        var service = new StructuralPendingEntryService(store);
+        var entry = Entry("atomic");
+        await service.QueueAsync(entry);
+        var confirmation = new EntryConfirmation(entry.Pending, PendingEntryDecision.Confirmed,
+            Start.AddMinutes(1), 100.5, .01, "LIVE_CONFIRMATION_BAR_CLOSE", "OBSERVED");
+
+        var claimed = await service.ClaimAndPersistConfirmationAsync("SOXL", confirmation, Start.AddMinutes(1));
+
+        Assert.NotNull(claimed);
+        Assert.Equal(100.5, claimed!.Confirmation!.FillPrice);
+        Assert.NotNull(claimed.ProcessingUntil);
+        Assert.Null(await service.ClaimAndPersistConfirmationAsync("SOXL", confirmation, Start.AddMinutes(1)));
+    }
+
+    [Fact]
     public void LivePendingStateIsIndependentOfPreferredCandidate()
     {
         var pending = Entry().Pending;

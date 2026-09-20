@@ -523,6 +523,14 @@ public sealed class StructureAnalysisService(
             var stored = await pendingEntries.GetAsync(snapshot.Symbol);
             if (stored is not null)
             {
+                if (stored.Confirmation is { } persisted && completedBars.Any(x =>
+                        x.Timestamp > persisted.Pending.ConfirmationBarStart))
+                {
+                    // 재시작 중 확인봉 이후 봉을 놓친 경우 과거 체결가로 현재 시각에
+                    // 새 OPEN을 만들면 손절/익절 봉을 누락한 허위 손익이 된다.
+                    await pendingEntries.RemoveAsync(snapshot.Symbol);
+                    return new ActiveEntryResult(candidates, false, "V5_PENDING_CONFIRMATION_STALE");
+                }
                 var state = stored.Confirmation is not null
                     ? new LivePendingResolution(LivePendingDecision.Confirm, null, "PERSISTED_CONFIRMATION")
                     : ResolvePendingState(stored.Pending, completedBars);
@@ -533,16 +541,15 @@ public sealed class StructureAnalysisService(
                     await pendingEntries.RemoveAsync(snapshot.Symbol);
                     return new ActiveEntryResult(candidates, false, "V5_PENDING_CONFIRMATION_MISSED");
                 }
-                var claimed = await pendingEntries.ClaimAsync(snapshot.Symbol, now);
-                if (claimed is null) return new ActiveEntryResult(candidates, false, "V5_PENDING_ALREADY_CLAIMED");
                 var bar = state.ConfirmationBar;
-                var pendingContext = claimed.Context;
-                var confirmation = stored.Confirmation ?? PendingEntryPolicy.Confirm(claimed.Pending, bar!, now, bar!.Close,
+                var confirmation = stored.Confirmation ?? PendingEntryPolicy.Confirm(stored.Pending, bar!, now, bar!.Close,
                     "LIVE_CONFIRMATION_BAR_CLOSE");
-                if (stored.Confirmation is null && confirmation.Decision == PendingEntryDecision.Confirmed)
-                    await pendingEntries.SaveConfirmationAsync(snapshot.Symbol, confirmation, now);
                 if (confirmation.Decision != PendingEntryDecision.Confirmed)
                     return new ActiveEntryResult(candidates, false, "V5_PENDING_CONFIRMATION_REJECTED");
+                var claimed = await pendingEntries.ClaimAndPersistConfirmationAsync(snapshot.Symbol, confirmation, now);
+                if (claimed is null) return new ActiveEntryResult(candidates, false, "V5_PENDING_ALREADY_CLAIMED");
+                var pendingContext = claimed.Context;
+                confirmation = claimed.Confirmation!;
                 var pendingResult = await tradeEntries.TryEnterAsync(new Domain.StructuralEntryRequest(snapshot.Symbol,
                     claimed.Pending.SignalBarStart, now, snapshot.SessionEnd, pendingContext,
                     completedBarStarts, snapshot.SessionStart, null, confirmation), ct);
@@ -577,6 +584,12 @@ public sealed class StructureAnalysisService(
             var stored = await pendingEntries.GetAsync(snapshot.Symbol);
             if (stored is not null)
             {
+                if (stored.Confirmation is { } persisted && completedBars.Any(x =>
+                        x.Timestamp > persisted.Pending.ConfirmationBarStart))
+                {
+                    await pendingEntries.RemoveAsync(snapshot.Symbol);
+                    return Blocked(candidates, chosen, "V5_PENDING_CONFIRMATION_STALE");
+                }
                 var pendingState = ResolvePendingState(stored.Pending, completedBars);
                 if (pendingState.Decision == LivePendingDecision.Wait)
                     return Blocked(candidates, chosen, "V5_PENDING_CONFIRMATION_WAITING");
@@ -585,13 +598,14 @@ public sealed class StructureAnalysisService(
                     await pendingEntries.RemoveAsync(snapshot.Symbol);
                     return Blocked(candidates, chosen, "V5_PENDING_CONFIRMATION_MISSED");
                 }
-                var claimed = await pendingEntries.ClaimAsync(snapshot.Symbol, now);
-                if (claimed is null) return Blocked(candidates, chosen, "V5_PENDING_ALREADY_CLAIMED");
                 var confirmationBar = pendingState.ConfirmationBar!;
-                var confirmation = PendingEntryPolicy.Confirm(claimed.Pending, confirmationBar, now,
+                var confirmation = PendingEntryPolicy.Confirm(stored.Pending, confirmationBar, now,
                     confirmationBar.Close, "LIVE_CONFIRMATION_BAR_CLOSE");
                 if (confirmation.Decision != PendingEntryDecision.Confirmed)
                     return Blocked(candidates, chosen, "V5_PENDING_CONFIRMATION_REJECTED");
+                var claimed = await pendingEntries.ClaimAndPersistConfirmationAsync(snapshot.Symbol, confirmation, now);
+                if (claimed is null) return Blocked(candidates, chosen, "V5_PENDING_ALREADY_CLAIMED");
+                confirmation = claimed.Confirmation!;
                 var confirmed = await tradeEntries.TryEnterAsync(new Domain.StructuralEntryRequest(snapshot.Symbol,
                     claimed.Pending.SignalBarStart, now, snapshot.SessionEnd, claimed.Context,
                     completedBarStarts, snapshot.SessionStart, null,
