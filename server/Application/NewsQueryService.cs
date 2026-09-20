@@ -14,7 +14,7 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
     public object Articles(string? symbol, int? limit)
     {
         var take = Math.Clamp(limit ?? DefaultLimit, 1, MaxLimit);
-        var rows = state.Recent().OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.CollectedAt).AsEnumerable();
+        var rows = state.Recent().OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id, StringComparer.Ordinal).AsEnumerable();
         if (!string.IsNullOrWhiteSpace(symbol))
         {
             var wanted = symbol.Trim().TrimStart('$');
@@ -51,7 +51,7 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
     public object Health() => new
     {
         enabled = options.Enabled,
-        feed = string.IsNullOrWhiteSpace(options.MarketauxApiKey) ? "saveticker" : "marketaux",
+        feed = options.UseSaveTicker ? "saveticker" : (string.IsNullOrWhiteSpace(options.MarketauxApiKey) ? "rss" : "marketaux"),
         lastPollAt = state.LastPollAt,
         lastAttemptAt = state.LastAttemptAt,
         lastSuccessAt = state.LastSuccessAt,
@@ -78,6 +78,16 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
     {
         var record = state.Find(id);
         if (record is null) return null;
+        var now = clock.GetUtcNow();
+        var evidence = state.Recent()
+            .Where(x => x.Symbols.Any(s => record.Symbols.Contains(s, StringComparer.OrdinalIgnoreCase)) && NewsSentiments.IsKnown(x.Sentiment))
+            .Select(x => new {
+                id = x.Id, title = x.Title, titleKo = x.TitleKo, source = x.Source, sourceKo = x.SourceKo,
+                sentiment = x.Sentiment, strength = x.Strength,
+                weight = NewsSentimentDecay.DecayWeight(now - x.CreatedAt, options.HalfLifeMinutes),
+                contribution = NewsSentiments.Sign(x.Sentiment) * x.Strength * NewsSentimentDecay.DecayWeight(now - x.CreatedAt, options.HalfLifeMinutes),
+                createdAt = x.CreatedAt
+            }).OrderByDescending(x => Math.Abs(x.contribution)).ToArray();
         return new
         {
             id = record.Id, title = record.Title, titleKo = record.TitleKo,
@@ -94,6 +104,8 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
             evidenceArticleId = record.EvidenceArticleId,
             summaryKo = record.SummaryKo, contentKo = record.ContentKo,
             publishedAtStatus = record.PublishedAtStatus
+            , evidence = evidence.Take(5), remainingEvidenceCount = Math.Max(0, evidence.Length - 5),
+            remainingContribution = evidence.Skip(5).Sum(x => x.contribution)
         };
     }
 

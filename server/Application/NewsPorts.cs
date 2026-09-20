@@ -49,6 +49,9 @@ public sealed record NewsClassificationResult(
 public interface INewsTranslator
 {
     Task<(string Title, string Source)?> TranslateAsync(string title, string source, CancellationToken ct);
+
+    /// <summary>본문/요약 번역. 기존 구현체와 호환되는 선택적 확장이다.</summary>
+    Task<string?> TranslateTextAsync(string text, CancellationToken ct) => Task.FromResult<string?>(null);
 }
 
 /// <summary>로컬 LLM 분류기 포트(#151 §3).</summary>

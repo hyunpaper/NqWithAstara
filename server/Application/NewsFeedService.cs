@@ -312,6 +312,8 @@ public sealed class NewsFeedService(
 
             state.Ollama(true);
             _classifications.Enqueue(clock.GetUtcNow());
+            string? summaryKo = null;
+            string? contentKo = null;
             if (result.Classification is not null && translator is not null)
             {
                 try
@@ -323,10 +325,12 @@ public sealed class NewsFeedService(
                             KoreanTitle = translated.Value.Title,
                             KoreanSource = translated.Value.Source
                         }};
+                    summaryKo = await translator.TranslateTextAsync(entry.Article.Summary, ct);
+                    contentKo = await translator.TranslateTextAsync(entry.Article.Content, ct);
                 }
                 catch (Exception exception) { diagnostics.PollFailed("news-translate", exception); }
             }
-            await SaveAsync(Compose(entry, result, inputKind, body), ct);
+            await SaveAsync(Compose(entry, result, inputKind, body, null, summaryKo, contentKo), ct);
             await SaveGroupFollowersAsync(entry.Article.Id, result, ct);
         }
         state.QueueDepth(QueueDepth);
@@ -349,7 +353,7 @@ public sealed class NewsFeedService(
         }
     }
 
-    NewsRecord Compose(QueuedArticle entry, NewsClassificationResult result, string inputKind, string classificationText = "", string? classifiedFrom = null)
+    NewsRecord Compose(QueuedArticle entry, NewsClassificationResult result, string inputKind, string classificationText = "", string? classifiedFrom = null, string? summaryKo = null, string? contentKo = null)
     {
         var classification = result.Classification;
         // 피드 `tickers` 태그가 있으면 그것을 심볼로 쓰고, 없을 때만 LLM 판정을 쓴다.
@@ -380,9 +384,9 @@ public sealed class NewsFeedService(
             entry.Article.Url,
             clock.GetUtcNow(),
             inputKind == NewsInputKinds.Headline ? "headline" : (string.IsNullOrWhiteSpace(entry.Article.Content) ? "summary" : "body"),
-            classification?.KoreanTitle is null ? "untranslated" : "translated",
+            summaryKo is not null || contentKo is not null ? "partial" : classification?.KoreanTitle is null ? "untranslated" : "title_translated",
             classificationText, inputKind, classifiedFrom ?? entry.Article.Id,
-            null, null, entry.Article.CreatedAt == DateTimeOffset.MinValue ? "unknown" : "known");
+            summaryKo, contentKo, entry.Article.CreatedAt == DateTimeOffset.MinValue ? "unknown" : "known");
     }
 
     async Task SaveAsync(NewsRecord record, CancellationToken ct)
