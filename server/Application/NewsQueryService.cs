@@ -51,7 +51,7 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
     public object Health() => new
     {
         enabled = options.Enabled,
-        feed = string.IsNullOrWhiteSpace(options.MarketauxApiKey) ? "notConfigured" : "marketaux",
+        feed = string.IsNullOrWhiteSpace(options.MarketauxApiKey) ? "saveticker" : "marketaux",
         lastPollAt = state.LastPollAt,
         lastAttemptAt = state.LastAttemptAt,
         lastSuccessAt = state.LastSuccessAt,
