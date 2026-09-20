@@ -18,14 +18,17 @@ export default function NewsDetailPanel({ article, state = "idle", onClose }: { 
     const controller = new AbortController();
     fetch(`/api/news/${encodeURIComponent(article.id)}/evidence`, { signal: controller.signal })
       .then(async (response) => { if (!response.ok) throw new Error("근거 조회 실패"); return response.json(); })
-      .then((raw) => { if (!controller.signal.aborted) { setEvidence({ ...article, ...raw, body: raw.body ?? raw.content }); setEvidenceState("idle"); } })
+      .then((raw) => { if (!controller.signal.aborted) {
+        const normalized = { ...article, ...raw, body: raw.body ?? raw.content, summaryKo: raw.summaryKo, contentKo: raw.contentKo };
+        setEvidence(normalized); setEvidenceState("idle");
+      } })
       .catch((error) => { if (!controller.signal.aborted) setEvidenceState("error"); });
     return () => controller.abort();
   }, [article]);
   article = evidence;
   const badge = sentimentBadge(article.sentiment);
   const korean = article.translationStatus === "translated"
-    ? (article.body ?? article.summary ?? article.titleKo ?? "번역된 본문이 없습니다.")
+    ? (article.contentKo ?? article.summaryKo ?? article.titleKo ?? "번역된 본문이 없습니다.")
     : (article.titleKo ?? "번역된 본문이 없습니다.");
   const original = article.body ?? article.summary ?? article.title;
   const originalUrl = (() => { try { const u = new URL(article.url ?? ""); return u.protocol === "https:" || u.protocol === "http:" ? u.toString() : null; } catch { return null; } })();
@@ -36,7 +39,9 @@ export default function NewsDetailPanel({ article, state = "idle", onClose }: { 
     {state === "loading" && <p className="news-state">기사를 불러오는 중…</p>}
     {state === "error" && <p className="news-state news-error">기사 상세를 불러오지 못했습니다. 목록에 저장된 내용만 표시합니다.</p>}
     <p className="news-detail-body">{translated ? korean : original}</p>
+    {article.translationStatus !== "translated" && translated && <p className="news-state">한국어 번역이 없어 원문을 표시합니다.</p>}
     {evidenceState === "error" && <p className="news-state news-error">감성 근거를 불러오지 못했습니다.</p>}
-    <dl className="news-detail-meta"><div><dt>분석 입력</dt><dd>{inputKindLabel(article.inputKind) ?? "알 수 없음"}</dd></div><div><dt>출처</dt><dd>{article.provenance ?? article.source ?? "알 수 없음"}</dd></div><div><dt>번역</dt><dd>{article.translationStatus === "translated" ? "번역 완료" : article.translationStatus === "pending" ? "번역 대기" : "원문"}</dd></div></dl>
+    {article.evidence && article.evidence.length > 0 && <section className="news-detail-evidence"><h4>동일 시점 감성 근거</h4><ul>{article.evidence.map((item) => <li key={item.id}>{item.titleKo ?? item.title} · {item.contribution == null ? "영향도 없음" : `영향도 ${item.contribution >= 0 ? "+" : ""}${item.contribution.toFixed(1)}`}</li>)}</ul></section>}
+    <dl className="news-detail-meta"><div><dt>분석 입력</dt><dd>{inputKindLabel(article.inputKind) ?? "알 수 없음"}</dd></div><div><dt>출처</dt><dd>{article.provenance ?? article.classificationSource ?? article.source ?? "알 수 없음"}</dd></div><div><dt>번역</dt><dd>{article.translationStatus === "translated" ? "본문 번역 완료" : article.translationStatus === "pending" ? "번역 대기" : "원문만 제공"}</dd></div></dl>
   </aside>;
 }

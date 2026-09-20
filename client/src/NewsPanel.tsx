@@ -17,20 +17,9 @@ export default function NewsPanel({ symbol }: { symbol: string }) {
   const openDetail = async (article: NewsArticle) => {
     openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     detailRequest.current?.abort();
-    const controller = new AbortController();
-    detailRequest.current = controller;
     setSelected(article);
     setDetail(article);
     setDetailState("loading");
-    try {
-      const response = await fetch(`/api/news/detail?id=${encodeURIComponent(article.id)}`, { signal: controller.signal });
-      if (!response.ok) throw new Error(`상세 조회 실패 (${response.status})`);
-      const normalized = normalizeArticlesResponse({ articles: [await response.json()] }).articles[0];
-      if (!normalized) throw new Error("기사 상세 형식이 올바르지 않습니다.");
-      if (!controller.signal.aborted) { setDetail(normalized); setDetailState("idle"); }
-    } catch (error) {
-      if (!controller.signal.aborted) setDetailState("error");
-    }
   };
 
   useEffect(() => {
@@ -114,10 +103,10 @@ export default function NewsPanel({ symbol }: { symbol: string }) {
                     >
                       {relativeTimeKo(a.createdAt)}
                     </span>
-                    {a.source && <span className="news-source">{a.source}</span>}
+                    {(a.sourceKo ?? a.source) && <span className="news-source">{a.sourceKo ?? a.source}</span>}
                     {badge && <span className="news-badge-wrap"><span className={badge.className}>{badge.label}</span><NewsEvidenceTooltip article={a} /></span>}
                   </div>
-                  <div className="news-title">{a.title}</div>
+                  <div className="news-title">{a.titleKo ?? a.title}</div>
                   {a.reason && <div className="news-reason">{a.reason}</div>}
                   {kind && <span className="news-kind">{kind}</span>}
                 </button>

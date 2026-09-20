@@ -26,6 +26,14 @@ export type NewsArticle = {
   url?: string | null;
   summary?: string | null;
   body?: string | null;
+  summaryKo?: string | null;
+  contentKo?: string | null;
+  classificationText?: string | null;
+  classificationSource?: string | null;
+  publishedAtStatus?: string | null;
+  evidence?: NewsEvidenceItem[];
+  remainingEvidenceCount?: number | null;
+  remainingContribution?: number | null;
   provenance?: string | null;
   translationStatus?: "translated" | "untranslated" | "pending" | null;
   collectedAt?: string | null;
@@ -33,6 +41,18 @@ export type NewsArticle = {
   promptVersion?: string | null;
   classifiedFrom?: string | null;
   evidenceArticleId?: string | null;
+};
+export type NewsEvidenceItem = {
+  id: string;
+  title: string;
+  titleKo?: string | null;
+  source?: string | null;
+  sourceKo?: string | null;
+  sentiment: NewsSentimentLabel;
+  strength: number | null;
+  weight: number | null;
+  contribution: number | null;
+  createdAt: string | null;
 };
 export type NewsEntity = { symbol: string; name: string; industry: string; sentimentScore: number | null; matchScore: number | null };
 
@@ -114,6 +134,11 @@ export const normalizeArticle = (raw: unknown): NewsArticle | null => {
     url: str(r.url) ?? str(r.link),
     summary: str(r.summary),
     body: str(r.body) ?? str(r.content),
+    summaryKo: str(r.summaryKo),
+    contentKo: str(r.contentKo),
+    classificationText: str(r.classificationText),
+    classificationSource: str(r.classificationSource),
+    publishedAtStatus: str(r.publishedAtStatus),
     provenance: str(r.provenance) ?? str(r.sourceType),
     translationStatus: r.translationStatus === "translated" || r.translationStatus === "untranslated" || r.translationStatus === "pending" ? r.translationStatus : null,
     collectedAt: str(r.collectedAt),
@@ -121,6 +146,14 @@ export const normalizeArticle = (raw: unknown): NewsArticle | null => {
     promptVersion: str(r.promptVersion),
     classifiedFrom: str(r.classifiedFrom),
     evidenceArticleId: str(r.evidenceArticleId),
+    evidence: Array.isArray(r.evidence) ? r.evidence.flatMap((item) => {
+      if (typeof item !== "object" || item === null) return [];
+      const e = item as Record<string, unknown>;
+      const id = str(e.id); if (!id) return [];
+      return [{ id, title: str(e.title) ?? "(제목 없음)", titleKo: str(e.titleKo), source: str(e.source), sourceKo: str(e.sourceKo), sentiment: sentimentOf(e.sentiment), strength: num(e.strength), weight: num(e.weight), contribution: num(e.contribution), createdAt: str(e.createdAt) }];
+    }) : [],
+    remainingEvidenceCount: num(r.remainingEvidenceCount),
+    remainingContribution: num(r.remainingContribution),
   };
 };
 
