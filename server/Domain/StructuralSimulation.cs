@@ -36,7 +36,10 @@ public sealed record StructuralEntryRequest(string Symbol, DateTimeOffset Trigge
     DateTimeOffset EnteredAt, DateTimeOffset SessionEnd, FrozenStructureContext Context,
     IReadOnlyList<DateTimeOffset>? CompletedBarStarts = null, DateTimeOffset? SessionStart = null,
     // #111: 목표 구간의 zone lineage(병합으로 흡수된 ID). 없으면 재진입 태그는 ID 동일 여부만 본다.
-    IReadOnlyList<string>? TargetZoneAliases = null);
+    IReadOnlyList<string>? TargetZoneAliases = null,
+    // 확인봉 체결을 사용한 경우 관측 근거를 SimTrade에 전파한다. null은 기존 실시간 호출의
+    // 미관측 호가 경로로 남겨 하위 호환한다.
+    EntryConfirmation? Confirmation = null);
 
 public sealed record StructuralEntryResult(List<SimTrade> Trades, StructuralEntryOutcome Outcome, SimTrade? Trade);
 
@@ -118,14 +121,21 @@ public static class StructuralSimulation
             Reasons: [plan.Explanation], Logic: plan.EngineVersion, LastEvaluatedBarAt: null,
             SessionEnd: request.SessionEnd, ExitEstimated: null, LastPriceAt: request.EnteredAt,
             TriggerBarAt: request.TriggerBarStart, Structure: context,
-            Execution: new ExecutionProvenance(
-                new DateTimeOffset(request.EnteredAt.Year, request.EnteredAt.Month, request.EnteredAt.Day,
-                    request.EnteredAt.Hour, request.EnteredAt.Minute, 0, request.EnteredAt.Offset),
-                new DateTimeOffset(request.EnteredAt.Year, request.EnteredAt.Month, request.EnteredAt.Day,
-                    request.EnteredAt.Hour, request.EnteredAt.Minute, 0, request.EnteredAt.Offset).AddMinutes(1),
-                "UNOBSERVED", null));
+            Execution: EntryProvenance(request.EnteredAt, request.Confirmation));
         trades.Add(trade);
         return new StructuralEntryResult(trades, StructuralEntryOutcome.Entered, trade);
+    }
+
+    static ExecutionProvenance EntryProvenance(DateTimeOffset enteredAt, EntryConfirmation? confirmation)
+    {
+        if (confirmation is { Decision: PendingEntryDecision.Confirmed } c)
+            return new ExecutionProvenance(c.Pending.ConfirmationBarStart,
+                c.ObservedAt, "OBSERVED_CONFIRMATION_BAR", c.ObservedAt);
+        var start = new DateTimeOffset(enteredAt.Year, enteredAt.Month, enteredAt.Day,
+                    enteredAt.Hour, enteredAt.Minute, 0, enteredAt.Offset);
+        return new ExecutionProvenance(
+                start, start.AddMinutes(1),
+                "UNOBSERVED", null);
     }
 
     /// <summary>

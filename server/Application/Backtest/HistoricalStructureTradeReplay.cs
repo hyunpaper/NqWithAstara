@@ -55,7 +55,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                         {
                             var entered = StructuralSimulation.Enter(result[symbol], new StructuralEntryRequest(symbol,
                                 queued.Candidate.TriggerBarStart, now, sessionEnd, queued.Context,
-                                null, sessionStart), policy);
+                                null, sessionStart, queued.Candidate.Plan?.TargetZoneSnapshot.Aliases, confirmation), policy);
                             result[symbol] = entered.Trades;
                         }
                         pending = null;
