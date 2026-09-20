@@ -75,6 +75,68 @@ public sealed class NewsFeedServiceTests
     }
 
     [Fact]
+    public async Task GuidFeedUsesCreatedAtCursorAcrossPolls()
+    {
+        var harness = new Harness();
+        var first = NewsBuilder.Item("uuid-1", "기준", Start, []);
+        harness.Page(1, first);
+        await harness.PollAsync();
+
+        var state = JsonSerializer.Deserialize<NewsFeedState>(harness.Store.Texts[NewsFeedService.StateFile],
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.Equal(0, state.LastId);
+        Assert.Equal(Start, state.LastCreatedAt);
+
+        harness.Page(1, NewsBuilder.Item("uuid-2", "새 기사", Start.AddMinutes(1), []), first);
+        await harness.PollAsync();
+
+        Assert.Equal("새 기사", Assert.Single(harness.Classifier.Requests).Title);
+        state = JsonSerializer.Deserialize<NewsFeedState>(harness.Store.Texts[NewsFeedService.StateFile],
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.Equal(Start.AddMinutes(1), state.LastCreatedAt);
+    }
+
+    [Fact]
+    public async Task FeedRequestMinuteLimitResetsAfterTimeAdvances()
+    {
+        var harness = new Harness();
+        harness.Options.MaxFeedRequestsPerMinute = 2;
+        harness.Options.MaxDailyFeedRequests = 10;
+        harness.Page(1, Item("100", "기준"));
+        await harness.PollAsync();
+        harness.Page(1, Item("101", "첫 기사"), Item("100", "기준"));
+        await harness.PollAsync();
+        harness.Page(1, Item("102", "차단 기사"), Item("101", "첫 기사"));
+        await harness.PollAsync();
+        Assert.Equal(2, harness.Feed.ListCalls.Count);
+        harness.Clock.Now = harness.Clock.Now.AddMinutes(1).AddSeconds(1);
+        await harness.PollAsync();
+        Assert.Equal(3, harness.Feed.ListCalls.Count);
+    }
+
+    [Fact]
+    public async Task FeedRequestDailyLimitSurvivesServiceRestart()
+    {
+        var harness = new Harness();
+        harness.Options.MaxFeedRequestsPerMinute = 10;
+        harness.Options.MaxDailyFeedRequests = 2;
+        harness.Page(1, Item("100", "기준"));
+        await harness.PollAsync();
+        harness.Page(1, Item("101", "새 기사"), Item("100", "기준"));
+        await harness.PollAsync();
+        harness.Clock.Now = harness.Clock.Now.AddMinutes(2);
+
+        var restarted = new Harness();
+        restarted.Options.MaxFeedRequestsPerMinute = 10;
+        restarted.Options.MaxDailyFeedRequests = 2;
+        restarted.Store.Texts[NewsFeedService.StateFile] = harness.Store.Texts[NewsFeedService.StateFile];
+        restarted.Page(1, Item("102", "재기동 후 기사"), Item("101", "새 기사"));
+        await restarted.PollAsync();
+
+        Assert.Empty(restarted.Feed.ListCalls);
+    }
+
+    [Fact]
     public async Task AlreadyProcessedArticleIsNotClassifiedTwice()
     {
         var harness = new Harness();
@@ -334,7 +396,7 @@ public sealed class NewsFeedServiceTests
     }
 
     [Fact]
-    public async Task FeedFailureIsReportedAndLeavesStateUntouched()
+    public async Task FeedFailureIsReportedAndPersistsConsumedRequest()
     {
         var harness = new Harness();
         harness.Feed.ListError = new HttpRequestException("429");
@@ -342,7 +404,8 @@ public sealed class NewsFeedServiceTests
         await harness.PollAsync();
 
         Assert.Equal("news-feed", Assert.Single(harness.Diagnostics.Failures).Scope);
-        Assert.Empty(harness.Store.Texts);
+        var state = Assert.Single(harness.Store.Texts);
+        Assert.Contains("feedRequestTimes", state.Value);
         Assert.NotNull(harness.State.LastPollAt);
     }
 

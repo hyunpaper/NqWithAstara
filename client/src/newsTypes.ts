@@ -19,7 +19,9 @@ export type NewsArticle = {
   latencyMs: number | null;
   classifiedAt: string | null;
   inputKind: NewsInputKind | null;
+  entities: NewsEntity[];
 };
+export type NewsEntity = { symbol: string; name: string; industry: string; sentimentScore: number | null; matchScore: number | null };
 
 export type NewsArticlesResponse = {
   enabled: boolean;
@@ -90,6 +92,7 @@ export const normalizeArticle = (raw: unknown): NewsArticle | null => {
     latencyMs: num(r.latencyMs),
     classifiedAt: str(r.classifiedAt),
     inputKind: inputKindOf(r.inputKind),
+    entities: Array.isArray(r.entities) ? r.entities.filter((e): e is Record<string, unknown> => typeof e === "object" && e !== null).map((e) => ({ symbol: str(e.symbol) ?? "", name: str(e.name) ?? "", industry: str(e.industry) ?? "", sentimentScore: num(e.sentimentScore), matchScore: num(e.matchScore) })).filter((e) => e.industry.length > 0) : [],
   };
 };
 

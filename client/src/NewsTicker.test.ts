@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { aggregateTickerArticles } from "./NewsTicker";
 import type { NewsArticle } from "./newsTypes";
 
-const article = (id: string, sentiment: NewsArticle["sentiment"], createdAt: string): NewsArticle => ({ id, title: id, source: "test", createdAt, tickers: [], matchedSymbols: [], symbols: [], sentiment, strength: 1, reason: "", model: "", latencyMs: 0, classifiedAt: createdAt, inputKind: "headline" });
+const article = (id: string, sentiment: NewsArticle["sentiment"], createdAt: string): NewsArticle => ({ id, title: id, source: "test", createdAt, tickers: [], matchedSymbols: [], symbols: [], sentiment, strength: 1, reason: "", model: "", latencyMs: 0, classifiedAt: createdAt, inputKind: "headline", entities: [] });
 
 describe("NewsTicker", () => {
   it("최근 24시간 기사만 감성별로 집계한다", () => {

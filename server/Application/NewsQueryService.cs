@@ -41,12 +41,17 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
             halfLifeMinutes = options.HalfLifeMinutes,
             market = market is null ? null : Project(market),
             symbols = scores.Where(x => x != market).Select(Project).ToArray(),
+            sectors = recent.SelectMany(x => x.Entities ?? []).Where(x => !string.IsNullOrWhiteSpace(x.Industry))
+                .GroupBy(x => x.Industry, StringComparer.OrdinalIgnoreCase)
+                .Select(g => new { sector = g.Key, count = g.Count(), symbols = g.Select(x => x.Symbol).Where(s => s.Length > 0).Distinct().ToArray() })
+                .OrderByDescending(x => x.count).ToArray(),
         };
     }
 
     public object Health() => new
     {
         enabled = options.Enabled,
+        feed = string.IsNullOrWhiteSpace(options.MarketauxApiKey) ? "notConfigured" : "marketaux",
         lastPollAt = state.LastPollAt,
         lastAttemptAt = state.LastAttemptAt,
         lastSuccessAt = state.LastSuccessAt,
@@ -75,6 +80,7 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         model = record.Model,
         latencyMs = record.LatencyMs,
         classifiedAt = record.ClassifiedAt,
+        entities = record.Entities,
         inputKind = record.InputKind,
         promptVersion = record.PromptVersion,
         classifiedFrom = record.ClassifiedFrom,
