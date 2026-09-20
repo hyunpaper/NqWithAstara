@@ -41,6 +41,33 @@ public sealed class MarketauxNewsFeedTests
         Assert.Empty(row.Entities!);
     }
 
+    [Fact]
+    public async Task RSS_description_summary_content를_각각_보존한다()
+    {
+        var handler = new FixtureHandler("<rss xmlns:content=\"http://purl.org/rss/1.0/modules/content/\"><channel><item><title>제목</title><description>설명 근거</description><summary>요약 근거</summary><content:encoded>본문 근거</content:encoded><link>id-body</link></item></channel></rss>");
+        var feed = new MarketauxNewsFeed(new NewsOptions { GoogleNewsUrl = "https://google.test/rss", YahooNewsUrl = "https://google.test/rss" }, new HttpClient(handler));
+
+        var row = Assert.Single(await feed.ListAsync(1, CancellationToken.None));
+
+        Assert.Contains("설명 근거", row.Summary);
+        Assert.Contains("요약 근거", row.Summary);
+        Assert.Equal("본문 근거", row.Content);
+    }
+
+    [Fact]
+    public async Task RSS_HTML을_평문화하고_본문을_제한한다()
+    {
+        var longText = new string('가', MarketauxNewsFeed.RssTextLimit + 20);
+        var handler = new FixtureHandler($"<rss xmlns:content=\"http://purl.org/rss/1.0/modules/content/\"><channel><item><title>제목</title><description>&lt;p&gt;설명 &amp;amp; 근거&lt;/p&gt;</description><content:encoded><![CDATA[<p>{longText}</p>]]></content:encoded><link>id-html</link></item></channel></rss>");
+        var feed = new MarketauxNewsFeed(new NewsOptions { GoogleNewsUrl = "https://google.test/rss", YahooNewsUrl = "https://google.test/rss" }, new HttpClient(handler));
+
+        var row = Assert.Single(await feed.ListAsync(1, CancellationToken.None));
+
+        Assert.Equal("설명 & 근거", row.Summary);
+        Assert.Equal(MarketauxNewsFeed.RssTextLimit, row.Content.Length);
+        Assert.DoesNotContain("<p>", row.Content);
+    }
+
 
 
     [Fact]

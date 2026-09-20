@@ -60,4 +60,13 @@ public sealed class OllamaNewsClassifierTests
         Assert.Contains("strength is 1-5", prompt);
     }
 
+    [Fact]
+    public void PromptPrioritizesBodyEvidenceWhenItConflictsWithTitle()
+    {
+        var prompt = OllamaNewsClassifier.BuildPrompt(new NewsClassificationRequest("제목은 인수 성사", "본문은 인수가 무산됐다고 명시", []));
+
+        Assert.Contains("제목과 본문이 충돌하면 본문에 명시된 사실을 우선", prompt);
+        Assert.Contains("본문은 인수가 무산됐다고 명시", prompt);
+    }
+
 }
