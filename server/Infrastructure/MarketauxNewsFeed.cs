@@ -20,7 +20,8 @@ public sealed class MarketauxNewsFeed : INewsFeed
     public async Task<IReadOnlyList<NewsFeedItem>> ListAsync(int page, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(_options.MarketauxApiKey)) return [];
-        var uri = $"{_options.MarketauxUrl}?api_token={Uri.EscapeDataString(_options.MarketauxApiKey)}&language=en&must_have_entities=true&limit=50&page={page.ToString(CultureInfo.InvariantCulture)}";
+        // 엔터티 없는 거시·시장 기사도 MARKET으로 분류해야 하므로 전체 피드를 유지한다.
+        var uri = $"{_options.MarketauxUrl}?api_token={Uri.EscapeDataString(_options.MarketauxApiKey)}&language=en&limit=100&page={page.ToString(CultureInfo.InvariantCulture)}";
         var payload = await _http.GetFromJsonAsync<Payload>(uri, Json, ct);
         return payload?.Data?.Where(x => !string.IsNullOrWhiteSpace(x.Uuid)).Select(Map).ToArray() ?? [];
     }

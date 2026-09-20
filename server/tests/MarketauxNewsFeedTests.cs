@@ -27,7 +27,18 @@ public sealed class MarketauxNewsFeedTests
         var row = Assert.Single(await feed.ListAsync(1, CancellationToken.None));
         Assert.Equal("NVDA", Assert.Single(row.Tickers));
         Assert.Equal("Semiconductors", Assert.Single(row.Entities!).Industry);
-        Assert.Contains("must_have_entities=true", handler.Request!.QueryAndPath);
+        Assert.Contains("limit=100", handler.Request!.QueryAndPath);
+    }
+
+    [Fact]
+    public async Task 엔터티없는_거시기사를_버리지않는다()
+    {
+        var handler = new FixtureHandler("""{"data":[{"uuid":"macro-1","title":"금리 동결","description":"시장 전체 영향","source":"Reuters","published_at":"2026-09-20T01:00:00Z","entities":[]}]}""");
+        var feed = new MarketauxNewsFeed(new NewsOptions { MarketauxApiKey = "fixture" }, new HttpClient(handler));
+        var row = Assert.Single(await feed.ListAsync(1, CancellationToken.None));
+        Assert.Equal("macro-1", row.Id);
+        Assert.Empty(row.Tickers);
+        Assert.Empty(row.Entities!);
     }
 
     sealed class FixtureHandler(string body) : HttpMessageHandler
