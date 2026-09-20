@@ -29,4 +29,20 @@ public sealed class StructuralPendingEntryService(ILocalStore store)
         rows.RemoveAll(x => string.Equals(x.Pending.Symbol, symbol, StringComparison.OrdinalIgnoreCase));
         return (rows, 0);
     });
+
+    /// <summary>한 poll만 확인을 소유하도록 원자적으로 꺼낸다. 재시작·중복 poll은 null을 받는다.</summary>
+    public Task<StoredPendingStructuralEntry?> ClaimAsync(string symbol, DateTimeOffset now) => store.Update(
+        File, new List<StoredPendingStructuralEntry>(), rows =>
+    {
+        var index = rows.FindLastIndex(x => string.Equals(x.Pending.Symbol, symbol, StringComparison.OrdinalIgnoreCase));
+        if (index < 0) return (rows, (StoredPendingStructuralEntry?)null);
+        var item = rows[index];
+        if (now > item.Pending.ExpiresAt)
+        {
+            rows.RemoveAt(index);
+            return (rows, (StoredPendingStructuralEntry?)null);
+        }
+        rows.RemoveAt(index);
+        return (rows, item);
+    });
 }
