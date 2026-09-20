@@ -7,6 +7,8 @@ public sealed class NewsOptions
 {
     public bool Enabled { get; set; }
     public string FeedUrl { get; set; } = "https://www.saveticker.com";
+    /// <summary>구형 SAVE 피드는 명시적으로 켠 경우에만 사용한다. 기본은 Marketaux/RSS 경로다.</summary>
+    public bool UseSaveTicker { get; set; }
     public string MarketauxApiKey { get; set; } = "";
     public string MarketauxUrl { get; set; } = "https://api.marketaux.com/v1/news/all";
     public string GoogleNewsUrl { get; set; } = "https://news.google.com/rss/search?q=stock%20market%20OR%20semiconductor%20OR%20earnings&hl=en-US&gl=US&ceid=US:en";
@@ -120,5 +122,10 @@ public sealed class NewsRuntimeState
     public IReadOnlyList<NewsRecord> Recent()
     {
         lock (_gate) return _recent.ToArray();
+    }
+
+    public NewsRecord? Find(string id)
+    {
+        lock (_gate) return _index.TryGetValue(id, out var node) ? node.Value : null;
     }
 }

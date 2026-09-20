@@ -16,6 +16,8 @@ public static class ApiEndpoints
             return Results.Ok(new { app = "Astra", status = "ready", connection = s.ConnectionStatus, credentialsRequired = s.ConnectionStatus is "idle" or "error", guideUrl = s.ConnectionMessage.Contains("허용 IP") ? "https://developers.tossinvest.com/docs" : null, warnings = feeCheck?.Warnings ?? Array.Empty<string>(), news = news?.Health(), bars = barsHealth });
         });
         app.MapGet("/api/news", (string? symbol, int? limit, NewsQueryService q) => Results.Ok(q.Articles(symbol, limit)));
+        app.MapGet("/api/news/{id}", (string id, NewsQueryService q) => q.Detail(id) is { } value ? Results.Ok(value) : Results.NotFound());
+        app.MapGet("/api/news/{id}/evidence", (string id, NewsQueryService q) => q.Evidence(id) is { } value ? Results.Ok(value) : Results.NotFound());
         app.MapGet("/api/news/sentiment", (NewsQueryService q) => Results.Ok(q.Sentiment()));
         app.MapGet("/api/state", async (StateQueryService q) => Results.Ok(await q.GetAsync())); app.MapGet("/api/search", SearchAsync);
         app.MapPost("/api/watchlist", AddWatchAsync);

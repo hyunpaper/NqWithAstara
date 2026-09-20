@@ -50,9 +50,13 @@ public sealed class MarketauxNewsFeed : INewsFeed
             }
             catch (HttpRequestException) { return null; }
             catch (TaskCanceledException) when (!ct.IsCancellationRequested) { return null; }
-            catch (System.Xml.XmlException) { return null; }
+            // HTTP 요청 자체는 성공했지만 공급자가 비XML을 보낸 경우는 빈 결과로 기록한다.
+            // 모든 요청이 네트워크/HTTP 실패한 경우에만 아래에서 예외를 올려 다음 주기 재시도를 보장한다.
+            catch (System.Xml.XmlException) { return new XDocument(new XElement("rss")); }
         }));
-        return documents.Where(x => x is not null).SelectMany(x => x!.Descendants("item")).Select(item =>
+        var validDocuments = documents.Where(x => x is not null).ToArray();
+        if (validDocuments.Length == 0) throw new HttpRequestException("RSS 피드가 모두 실패했습니다.");
+        return validDocuments.SelectMany(x => x!.Descendants("item")).Select(item =>
         {
             var link = item.Element("link")?.Value?.Trim() ?? "";
             var title = item.Element("title")?.Value?.Trim() ?? "";
@@ -62,9 +66,11 @@ public sealed class MarketauxNewsFeed : INewsFeed
             var content = NormalizeRssText(item.Elements().FirstOrDefault(x => x.Name.LocalName.Equals("encoded", StringComparison.OrdinalIgnoreCase))?.Value);
             var source = item.Element("source")?.Value?.Trim() ?? "Google News";
             var published = DateTimeOffset.TryParse(item.Element("pubDate")?.Value, out var at)
-                ? at : DateTimeOffset.UtcNow;
-            return new NewsFeedItem(link.Length == 0 ? title : link, title, listedEvidence, source, published, [], Content: content);
-        }).Where(x => x.Id.Length > 0).GroupBy(x => x.Id, StringComparer.Ordinal).Select(x => x.First()).Take(100).ToArray();
+                ? at : DateTimeOffset.MinValue;
+            return new NewsFeedItem(link.Length == 0 ? title : link, title, listedEvidence, source, published, [], Content: content, Url: ValidUrl(link));
+        }).Where(x => x.Id.Length > 0)
+          .GroupBy(x => x.Id, StringComparer.Ordinal).Select(x => x.First())
+          .OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id, StringComparer.Ordinal).Take(100).ToArray();
     }
 
     static string NormalizeRssText(string? value)
@@ -81,8 +87,11 @@ public sealed class MarketauxNewsFeed : INewsFeed
         var entities = x.Entities?.Where(e => !string.IsNullOrWhiteSpace(e.Symbol) || !string.IsNullOrWhiteSpace(e.Name))
             .Select(e => new NewsEntity((e.Symbol ?? "").ToUpperInvariant(), e.Name ?? "", e.Industry ?? "", e.SentimentScore, e.MatchScore)).ToArray() ?? [];
         var tickers = entities.Where(e => e.Symbol.Length > 0).Select(e => e.Symbol).Distinct(StringComparer.Ordinal).ToArray();
-        return new NewsFeedItem(x.Uuid!, x.Title ?? "", x.Description ?? "", x.Source ?? "", x.PublishedAt ?? DateTimeOffset.UtcNow, tickers, Entities: entities, Url: x.Url);
+        return new NewsFeedItem(x.Uuid!, x.Title ?? "", x.Description ?? "", x.Source ?? "", x.PublishedAt ?? DateTimeOffset.MinValue, tickers, Entities: entities, Url: ValidUrl(x.Url));
     }
+
+    static string? ValidUrl(string? value)
+        => Uri.TryCreate(value, UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) ? uri.ToString() : null;
 
     sealed record Payload(List<Item>? Data);
     sealed record Item(

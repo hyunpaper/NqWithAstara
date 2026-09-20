@@ -66,6 +66,30 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         promptVersion = NewsPromptVersions.V2c,
     };
 
+    public object? Detail(string id)
+    {
+        var record = state.Find(id);
+        return record is null ? null : Project(record);
+    }
+
+    public object? Evidence(string id)
+    {
+        var record = state.Find(id);
+        if (record is null) return null;
+        return new
+        {
+            id = record.Id, title = record.Title, titleKo = record.TitleKo,
+            source = record.Source, sourceKo = record.SourceKo, url = record.Url,
+            createdAt = record.CreatedAt, collectedAt = record.CollectedAt,
+            inputKind = record.InputKind, evidenceSource = record.EvidenceSource,
+            translationStatus = record.TranslationStatus, summary = record.Summary,
+            content = record.Content, sentiment = record.Sentiment,
+            strength = record.Strength, reason = record.Reason,
+            impactScores = record.ImpactScores, model = record.Model,
+            promptVersion = record.PromptVersion, classifiedAt = record.ClassifiedAt
+        };
+    }
+
     static object Project(NewsRecord record) => new
     {
         id = record.Id,

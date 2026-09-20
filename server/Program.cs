@@ -93,7 +93,7 @@ builder.Services.AddSingleton<INewsStore, NewsStore>();
 builder.Services.AddSingleton<INewsFeed>(x =>
 {
     var options = x.GetRequiredService<NewsOptions>();
-    return string.IsNullOrWhiteSpace(options.MarketauxApiKey)
+    return options.UseSaveTicker
         ? new SaveTickerNewsFeed(options)
         : new MarketauxNewsFeed(options);
 });
