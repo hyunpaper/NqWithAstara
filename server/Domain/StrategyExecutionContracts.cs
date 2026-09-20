@@ -1,4 +1,4 @@
-namespace Astra.Server.Domain;
+namespace Astra.Server;
 
 /// <summary>구조 엔진이 판단한 거래 방향. 기존 저장 행은 기본값 Long으로 읽어 하위 호환한다.</summary>
 public enum TradeSide

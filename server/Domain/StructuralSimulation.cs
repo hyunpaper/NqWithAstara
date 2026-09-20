@@ -1,4 +1,5 @@
 using Astra.Server.Domain.Structure;
+using Astra.Server;
 
 namespace Astra.Server.Domain;
 

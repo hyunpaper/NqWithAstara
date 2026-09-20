@@ -1,4 +1,6 @@
 using Astra.Server.Domain;
+using Astra.Server;
+using Xunit;
 
 namespace Astra.Server.Tests;
 
