@@ -49,6 +49,7 @@ builder.Services.AddSingleton<RejectedPlanResearchService>(sp => {
     return new RejectedPlanResearchService(sp.GetRequiredService<ILocalStore>(), new RejectedPlanResearchOptions(cfg.GetValue("Enabled", false), Math.Clamp(cfg.GetValue("Limit", 500), 1, 5000)));
 });
 builder.Services.AddSingleton<StructureAnalysisService>();
+builder.Services.AddSingleton<StructuralPendingEntryService>();
 // 이슈 #41: 폴링 → 구조 엔진 호가 배선. 새 게이트웨이가 아니라 LiquidityQueryService 캐시를 공유한다.
 builder.Services.AddSingleton<StructureLiquidityFeed>();
 builder.Services.AddSingleton<MonitorRuntimeState>(); builder.Services.AddSingleton<MonitorPollingService>(); builder.Services.AddSingleton<MonitorService>(); builder.Services.AddSingleton<IMonitorSignals>(x => x.GetRequiredService<MonitorPollingService>());
