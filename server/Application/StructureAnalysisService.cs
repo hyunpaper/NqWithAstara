@@ -130,6 +130,7 @@ public sealed class StructureAnalysisService(
     public const string NoteEntryCommitted = "V5_ENTRY_COMMITTED";
     public const string NoteEntryBlockedByOpenTrade = "V5_ENTRY_BLOCKED_BY_OPEN_TRADE";
     public const string NoteEntryPlanInvalid = "V5_ENTRY_PLAN_INVALID";
+    public const string NoteEntryBlockedByMissingLiquidity = "V5_ENTRY_BLOCKED_BY_MISSING_LIQUIDITY_COST";
 
     /// <summary>#117 §10: 같은 심볼의 직전 손절 이후 완료 봉이 정책 개수만큼 쌓이지 않았다.</summary>
     public const string NoteEntryBlockedByStopCooldown = Domain.Validation.EntryBlockCodes.BlockedByStopCooldown;
@@ -499,6 +500,9 @@ public sealed class StructureAnalysisService(
         if (_options.Mode != StructureEngineMode.Active || preferredId is null) return null;
         var chosen = candidates.FirstOrDefault(x => x.EventId == preferredId);
         if (chosen is null || chosen.Disposition != CandidateDisposition.Ready || chosen.Plan is null) return null;
+
+        if (_policy.RequireObservedLiquidityForEntry && chosen.Plan.Costs.MissingLiquidity)
+            return Blocked(candidates, chosen, NoteEntryBlockedByMissingLiquidity);
 
         // #106: 청산이 발생한 poll의 틱으로는 새로 진입하지 않는다. 후보는 READY로 남고 가드 키·쿨다운 표식은
         // 소비하지 않는다(#107 — 같은 봉 재시도는 watermark로 막히고 다음 트리거 봉부터 가능하다).

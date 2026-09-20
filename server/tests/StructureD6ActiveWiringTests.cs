@@ -532,7 +532,8 @@ static class D6
     /// 배선 검증용 정책. 이 fixture는 signedTrend -57의 하락 국면이라 #208 REBOUND 추세 하한에 걸리고,
     /// 계획 netR이 약 3.7이라 #209 MaxNetR 상한에도 걸린다. 둘 다 이 파일들의 검증 대상이 아니므로 함께 푼다.
     /// </summary>
-    public static StructurePolicy WiringPolicy { get; } = D2.WideNetR with { TrendStateThreshold = 1000 };
+    public static StructurePolicy WiringPolicy { get; } = D2.WideNetR with { TrendStateThreshold = 1000,
+        RequireObservedLiquidityForEntry = false };
 
     public static MarketSession Session => new(true, "정규장", null, Fx.SessionStart, Fx.SessionEnd);
 
