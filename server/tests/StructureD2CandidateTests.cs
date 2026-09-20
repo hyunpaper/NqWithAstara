@@ -125,21 +125,18 @@ public sealed class StructureD2CandidateTests
     }
 
     [Fact]
-    public void PullbackRequiresUpOrTransitionAndProducesNoCandidateInRange()
+    public void PullbackRequiresUpTrendAndRejectsTransition()
     {
-        foreach (var state in new[] { TrendState.Range, TrendState.Down, TrendState.Unknown })
+        foreach (var state in new[] { TrendState.Range, TrendState.Down, TrendState.Unknown, TrendState.Transition })
         {
             var result = SetupDetector.Detect(Request(PullbackBars(), PullbackZones(), PullbackEpisodes(),
                 D2.Trend(state, state == TrendState.Unknown ? null : 10)), P);
             Assert.DoesNotContain(result.Candidates, x => x.Kind == SetupKind.Pullback);
         }
 
-        foreach (var state in new[] { TrendState.Up, TrendState.Transition })
-        {
-            var result = SetupDetector.Detect(Request(PullbackBars(), PullbackZones(), PullbackEpisodes(),
-                D2.Trend(state, 10)), P);
-            Assert.Contains(result.Candidates, x => x.Kind == SetupKind.Pullback);
-        }
+        var result = SetupDetector.Detect(Request(PullbackBars(), PullbackZones(), PullbackEpisodes(),
+            D2.Trend(TrendState.Up, 10)), P);
+        Assert.Contains(result.Candidates, x => x.Kind == SetupKind.Pullback);
     }
 
     /// <summary>히스테리시스로 UP이 유지되는 efficiency 1봉 딥에서는 PULLBACK 가설이 그대로 생성된다(§7, #148).</summary>
@@ -476,12 +473,12 @@ public sealed class StructureD2CandidateTests
 
     /// <summary>실패한 하향 이탈(꼬리로만 이탈) 후 회복. 추세 상태를 요구하지 않는다(§8).</summary>
     [Fact]
-    public void ReboundFiresOnAFailedBreakdownWithoutRequiringAnUptrend()
+    public void ReboundRequiresTransitionAfterAFailedBreakdown()
     {
         // episode 저점이 지지 하단(99.20) 아래지만 완료 종가는 하단 위에서 마감했다.
         var bars = PullbackBars(episodeLow: 99.10m);
         var result = SetupDetector.Detect(Request(bars, PullbackZones(), PullbackEpisodes(),
-            D2.Trend(TrendState.Range, -20)), P);
+            D2.Trend(TrendState.Transition, -20)), P);
         var candidate = result.Candidates.Single(x => x.Kind == SetupKind.Rebound);
 
         Assert.Equal(CandidateDisposition.Ready, candidate.Disposition);
@@ -607,7 +604,7 @@ public sealed class StructureD2CandidateTests
         Assert.Equal(CandidateDisposition.Rejected, candidate.Disposition);
         Assert.Contains(TrendEvaluator.BlockerMissing5mStructure, candidate.RejectionCodes);
 
-        var reboundResult = Detect(TrendState.Range);
+        var reboundResult = Detect(TrendState.Transition);
         var rebound = reboundResult.Candidates.Single(x => x.Kind == SetupKind.Rebound);
         Assert.Equal(CandidateDisposition.Ready, rebound.Disposition);
         Assert.Contains(SetupDetector.NoteReadyWithout5mStructure, rebound.Notes);
