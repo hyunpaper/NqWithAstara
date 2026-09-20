@@ -85,7 +85,11 @@ public sealed class StructureD6StructuralSimulationTests
         Assert.Equal(fill, trade.EntryPrice, 10);
         Assert.Equal("OBSERVED_CONFIRMATION_BAR", trade.Execution!.EntryMinuteCoverage);
         Assert.Equal(Fx.At(41), trade.Execution.EntryMinuteEvidenceAt);
+        Assert.Equal(fill, trade.Execution.FillPrice);
+        Assert.Equal(0.01, trade.Execution.SpreadCost);
+        Assert.Equal("REPLAY_CONFIRMATION_BAR_CLOSE", trade.Execution.PriceSource);
         Assert.Equal((double)plan.Stop, trade.Stop, 10);
+        Assert.Equal(plan.EntryReference, trade.Structure!.PlanSnapshot.EntryReference);
         var closed = Assert.Single(SimulationEngine.ReplayBars(result.Trades, Fx.Symbol,
             [new Candle(Fx.At(42), fill, (double)plan.Target + 0.01, fill, fill, 100)]));
         Assert.Equal("TARGET", closed.Status);

@@ -68,6 +68,12 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                         pendingEventIds.Add(expired.Pending.EntryEventId);
                         pending = null;
                     }
+                    else if (pending is { } missing && current.Timestamp > missing.Pending.ConfirmationBarStart)
+                    {
+                        // exact confirmation 봉을 놓치면 추후 봉으로 소급 체결하지 않는다.
+                        pendingEventIds.Add(missing.Pending.EntryEventId);
+                        pending = null;
+                    }
                     var prefix = bars.Take(index + 1).ToArray();
                     var build = StructureSnapshotFactory.Create(symbol, market, prefix, daily[symbol], current.Close,
                         now, now, 1, policy);

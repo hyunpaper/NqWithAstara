@@ -108,8 +108,6 @@ public static class StructuralSimulation
         var plan = request.Context.PlanSnapshot;
         var entry = request.Confirmation is { Decision: PendingEntryDecision.Confirmed, FillPrice: > 0 } confirmation
             ? confirmation.FillPrice!.Value : (double)plan.EntryReference;
-        if (request.Confirmation is { Decision: PendingEntryDecision.Confirmed, FillPrice: > 0 })
-            plan = plan with { EntryReference = (decimal)entry };
         var stop = (double)plan.Stop;
         var target = (double)plan.Target;
         if (!(stop > 0) || stop >= entry || target <= entry)
@@ -133,7 +131,8 @@ public static class StructuralSimulation
     {
         if (confirmation is { Decision: PendingEntryDecision.Confirmed } c)
             return new ExecutionProvenance(c.Pending.ConfirmationBarStart,
-                c.ObservedAt, "OBSERVED_CONFIRMATION_BAR", c.ObservedAt);
+                c.ObservedAt, "OBSERVED_CONFIRMATION_BAR", c.ObservedAt,
+                FillPrice: c.FillPrice, SpreadCost: c.SpreadCost, PriceSource: c.PriceSource);
         var start = new DateTimeOffset(enteredAt.Year, enteredAt.Month, enteredAt.Day,
                     enteredAt.Hour, enteredAt.Minute, 0, enteredAt.Offset);
         return new ExecutionProvenance(
