@@ -11,7 +11,7 @@ public sealed class StrategyExecutionContractTests
     {
         var pending = Pending();
         var bar = new Candle(pending.ConfirmationBarStart.AddMinutes(-1), 101, 102, 100, 101, 1000);
-        var result = PendingEntryPolicy.Confirm(pending, bar, bar.Timestamp, 101);
+        var result = PendingEntryPolicy.Confirm(pending, bar, bar.Timestamp.AddMinutes(1), 101);
         Assert.Equal(PendingEntryDecision.RejectedUnobservedFill, result.Decision);
         Assert.Null(result.FillPrice);
     }
@@ -33,6 +33,46 @@ public sealed class StrategyExecutionContractTests
         var result = PendingEntryPolicy.Confirm(pending, bar, bar.Timestamp.AddMinutes(1), 99);
         Assert.Equal(PendingEntryDecision.Confirmed, result.Decision);
         Assert.Equal(99, result.FillPrice);
+    }
+
+    [Fact]
+    public void 확인봉_종료_직전은_관측으로_인정하지_않는다()
+    {
+        var pending = Pending();
+        var bar = new Candle(pending.ConfirmationBarStart, 100, 103, 99, 102, 1000);
+        var result = PendingEntryPolicy.Confirm(pending, bar, bar.Timestamp.AddSeconds(59), 101);
+        Assert.Equal(PendingEntryDecision.RejectedUnobservedFill, result.Decision);
+    }
+
+    [Fact]
+    public void 확인봉_범위_밖_체결가는_관측하지_않는다()
+    {
+        var pending = Pending();
+        var bar = new Candle(pending.ConfirmationBarStart, 100, 103, 99, 102, 1000);
+        var result = PendingEntryPolicy.Confirm(pending, bar, bar.Timestamp.AddMinutes(1), 104);
+        Assert.Equal(PendingEntryDecision.RejectedUnobservedFill, result.Decision);
+    }
+
+    [Fact]
+    public void 숏은_갭과_잘못된_가격순서를_거부한다()
+    {
+        var pending = Pending() with { Side = TradeSide.Short, PlannedStop = 105, PlannedTarget = 95 };
+        var gap = new Candle(pending.ConfirmationBarStart, 106, 107, 104, 105, 1000);
+        Assert.Equal(PendingEntryDecision.RejectedGap,
+            PendingEntryPolicy.Confirm(pending, gap, gap.Timestamp.AddMinutes(1), 106).Decision);
+        var invalid = pending with { PlannedTarget = 106 };
+        var bar = new Candle(invalid.ConfirmationBarStart, 100, 103, 96, 99, 1000);
+        Assert.Equal(PendingEntryDecision.RejectedInvalidPlan,
+            PendingEntryPolicy.Confirm(invalid, bar, bar.Timestamp.AddMinutes(1), 99).Decision);
+    }
+
+    [Fact]
+    public void 만료된_대기는_확인하지_않는다()
+    {
+        var pending = Pending();
+        var bar = new Candle(pending.ConfirmationBarStart, 100, 103, 99, 102, 1000);
+        Assert.Equal(PendingEntryDecision.Expired,
+            PendingEntryPolicy.Confirm(pending, bar, pending.ExpiresAt.AddSeconds(1), 101).Decision);
     }
 
     static PendingEntry Pending() => new("event-1", "TEST", TradeSide.Long,

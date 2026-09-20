@@ -49,7 +49,8 @@ public static class PendingEntryPolicy
     public static EntryConfirmation Confirm(PendingEntry pending, Candle confirmationBar, DateTimeOffset observedAt,
         double? observedFill, string priceSource = "CONFIRMATION_BAR")
     {
-        if (confirmationBar.Timestamp < pending.ConfirmationBarStart)
+        var confirmationClose = confirmationBar.Timestamp.AddMinutes(1);
+        if (confirmationBar.Timestamp < pending.ConfirmationBarStart || observedAt < confirmationClose)
             return new(pending, PendingEntryDecision.RejectedUnobservedFill, observedAt, null, null, priceSource, "UNOBSERVED");
         if (observedAt > pending.ExpiresAt)
             return new(pending, PendingEntryDecision.Expired, observedAt, null, null, priceSource, "OBSERVED");
@@ -57,6 +58,8 @@ public static class PendingEntryPolicy
             pending.Side == TradeSide.Short && confirmationBar.Open >= pending.PlannedStop)
             return new(pending, PendingEntryDecision.RejectedGap, observedAt, null, null, priceSource, "OBSERVED");
         if (observedFill is not { } fill || !double.IsFinite(fill) || fill <= 0)
+            return new(pending, PendingEntryDecision.RejectedUnobservedFill, observedAt, null, null, priceSource, "UNOBSERVED");
+        if (fill < confirmationBar.Low || fill > confirmationBar.High)
             return new(pending, PendingEntryDecision.RejectedUnobservedFill, observedAt, null, null, priceSource, "UNOBSERVED");
         var valid = pending.Side == TradeSide.Long
             ? pending.PlannedStop < fill && pending.PlannedTarget > fill
