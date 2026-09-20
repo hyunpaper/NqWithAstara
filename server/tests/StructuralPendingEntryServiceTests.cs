@@ -1,6 +1,9 @@
 using System.Text.Json;
+using System.Collections.Immutable;
 using Astra.Server;
 using Astra.Server.Application;
+using Astra.Server.Domain;
+using Astra.Server.Domain.Structure;
 using Xunit;
 
 public sealed class StructuralPendingEntryServiceTests
@@ -42,6 +45,85 @@ public sealed class StructuralPendingEntryServiceTests
             StructureAnalysisService.ResolvePendingState(pending, [new Candle(Start.AddMinutes(1), 100, 101, 99, 100, 1)]).Decision);
         Assert.Equal(StructureAnalysisService.LivePendingDecision.Missed,
             StructureAnalysisService.ResolvePendingState(pending, [new Candle(Start.AddMinutes(2), 100, 101, 99, 100, 1)]).Decision);
+    }
+
+    [Fact]
+    public async Task ProductionPendingPathConfirmsWithoutPreferredCandidateAndIsIdempotent()
+    {
+        var store = new MemoryStore();
+        var pending = new StructuralPendingEntryService(store);
+        var context = StructuralSimulation.Freeze(
+            StructuralPlanner.Evaluate(D2.ExampleA(), D6.WiringPolicy).Plan!,
+            "pending-production", "UP", 12, 55, Start, Start);
+        await pending.QueueAsync(new StoredPendingStructuralEntry(
+            new PendingEntry("pending-production", "SOXL", TradeSide.Long, Start,
+                Start.AddMinutes(1), Start.AddMinutes(5), (double)context.PlanSnapshot.Stop,
+                (double)context.PlanSnapshot.Target, (double)context.PlanSnapshot.EntryReference,
+                context.PlanSnapshot.PlanId, context.PlanSnapshot.PolicyHash), context, Start));
+
+        var entries = new CountingEntryPort(new StructuralTradeEntryService(store, D6.WiringPolicy));
+        var service = BuildPendingService(store, pending, entries);
+        var snapshot = new StructureSnapshot("SOXL", Start, Start.AddHours(6), Start.AddMinutes(1),
+            100, Start.AddMinutes(1), ImmutableArray<Candle>.Empty, ImmutableArray<Candle>.Empty,
+            null, null, 1);
+        var request = new StructureObservationRequest("SOXL", 1, D6.Session, [], [], 100, Start.AddMinutes(1));
+
+        var result = await service.TryEnterPreferredAsync(request, [], null, snapshot, null,
+            Start.AddMinutes(2), [new Candle(Start.AddMinutes(1), 100, 101, 99, 100.5, 1)], default);
+
+        Assert.True(result!.Entered, result.Note);
+        Assert.Equal(1, entries.Calls);
+        var trade = Assert.Single(await store.Read("simtrades.json", new List<SimTrade>()));
+        Assert.Equal("OBSERVED_CONFIRMATION_BAR", trade.Execution!.EntryMinuteCoverage);
+        Assert.Equal("pending-production", trade.Structure!.EntryEventId);
+
+        var retry = await service.TryEnterPreferredAsync(request, [], null, snapshot, null,
+            Start.AddMinutes(2), [new Candle(Start.AddMinutes(1), 100, 101, 99, 100.5, 1)], default);
+        Assert.Null(retry);
+        Assert.Equal(1, entries.Calls);
+    }
+
+    [Fact]
+    public async Task ProductionPendingPathWaitsBeforeConfirmationAndMissesAfterIt()
+    {
+        var store = new MemoryStore();
+        var pending = new StructuralPendingEntryService(store);
+        await pending.QueueAsync(Entry("pending-state") with { Pending = Entry("pending-state").Pending with { Symbol = "SOXL" } });
+        var entries = new CountingEntryPort(new StructuralTradeEntryService(store, D6.WiringPolicy));
+        var service = BuildPendingService(store, pending, entries);
+        var snapshot = new StructureSnapshot("SOXL", Start, Start.AddHours(6), Start, 100, Start,
+            ImmutableArray<Candle>.Empty, ImmutableArray<Candle>.Empty, null, null, 1);
+        var request = new StructureObservationRequest("SOXL", 1, D6.Session, [], [], 100, Start);
+
+        var waiting = await service.TryEnterPreferredAsync(request, [], null, snapshot, null, Start,
+            [new Candle(Start, 100, 101, 99, 100, 1)], default);
+        Assert.False(waiting!.Entered);
+        Assert.Contains("WAITING", waiting.Note);
+        Assert.Equal(0, entries.Calls);
+
+        var missed = await service.TryEnterPreferredAsync(request, [], null, snapshot, null, Start.AddMinutes(2),
+            [new Candle(Start.AddMinutes(2), 100, 101, 99, 100, 1)], default);
+        Assert.False(missed!.Entered);
+        Assert.Contains("MISSED", missed.Note);
+        Assert.Equal(0, entries.Calls);
+        Assert.Null(await pending.GetAsync("SOXL"));
+    }
+
+    static StructureAnalysisService BuildPendingService(MemoryStore store,
+        StructuralPendingEntryService pending, CountingEntryPort entries) =>
+        new(store, new StructureObservationWriter(new MemoryObservationStore(), D6.WiringPolicy),
+            new MonitorRuntimeState(), TimeProvider.System, new SilentDiagnostics(),
+            new StructureEngineOptions(StructureEngineMode.Active), D6.WiringPolicy, entries,
+            pendingEntries: pending);
+
+    sealed class CountingEntryPort(IStructuralTradeEntries inner) : IStructuralTradeEntries
+    {
+        public int Calls { get; private set; }
+        public async Task<StructuralEntryResult> TryEnterAsync(StructuralEntryRequest request, CancellationToken ct)
+        {
+            Calls++;
+            return await inner.TryEnterAsync(request, ct);
+        }
     }
 
     sealed class MemoryStore : ILocalStore
