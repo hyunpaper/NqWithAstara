@@ -419,11 +419,11 @@ public static class SetupDetector
             !policy.AllowTransitionBreakout)
             rejections.Add(CodeTransitionBreakoutBlocked);
 
-        var expectedNetR = planning.NetR is { } netR
-            ? (double)netR * policy.ExpectedWinRatePrior - (1 - policy.ExpectedWinRatePrior)
-            : (double?)null;
+        var expectedNetR = planning.NetR is { } netR ? (double)netR : (double?)null;
         if (expectedNetR is { } expected && expected <= policy.MinimumExpectedNetR)
             rejections.Add("EXPECTED_NET_R_NON_POSITIVE");
+        if (expectedNetR is { } feature && !WalkForwardExpectedValue.Allows(policy, feature))
+            rejections.Add("EXPECTED_VALUE_TRAINED_THRESHOLD");
 
         // null은 TREND_UNAVAILABLE이 이미 막으므로 중복 사유를 만들지 않는다(#42).
         if (RequiresTrendAlignment(hypothesis.Kind) && request.Trend.SignedTrend is { } signedTrend

@@ -59,6 +59,43 @@ public sealed class StrategyRedesignTests
     }
 
     [Fact]
+    public void 숏동결계획은_손절이_진입가보다_높아도_진입한다()
+    {
+        var resistance = D2.Resistance(100.60m, 100.80m, id: "short-enter-resistance");
+        var support = D2.Support(97.00m, 97.50m, id: "short-enter-support");
+        var plan = StructuralPlanner.Evaluate(new PlanRequest("TEST", "short-enter", "BREAKOUT", 100m,
+            100.80m, resistance, [support, resistance], .20, .02m, Fx.At(40), Fx.At(45), true,
+            TradeSide.Short), D2.WideNetR with { ShortBorrowCostPercent = .10 }).Plan!;
+        var context = StructuralSimulation.Freeze(plan, "short-enter", "DOWN", -40, 70, Fx.At(40), Fx.At(40));
+
+        var result = StructuralSimulation.Enter([], new StructuralEntryRequest("TEST", Fx.At(40), Fx.At(41),
+            Fx.At(100), context, RequireCompleteLiquidityCost: true));
+
+        Assert.Equal(StructuralEntryOutcome.Entered, result.Outcome);
+        Assert.Equal(TradeSide.Short, result.Trade!.Side);
+        Assert.True(result.Trade.Stop > result.Trade.EntryPrice);
+        Assert.True(result.Trade.Target < result.Trade.EntryPrice);
+    }
+
+    [Fact]
+    public void 비용결측_계획은_운영진입에서_차단하고_사유를_남긴다()
+    {
+        var result = StructuralPlanner.Evaluate(D2.ExampleA(), D2.WideNetR);
+        var missingPlan = result.Plan! with
+        {
+            Costs = result.Plan.Costs with { MissingLiquidity = true, ValidSpread = null },
+            ReasonCodes = result.Plan.ReasonCodes.Add(StructuralPlanner.MissingLiquidityCost)
+        };
+        var context = StructuralSimulation.Freeze(missingPlan, "missing-cost", "UP", 40, 70, Fx.At(40), Fx.At(40));
+
+        var entered = StructuralSimulation.Enter([], new StructuralEntryRequest("TEST", Fx.At(40), Fx.At(41),
+            Fx.At(100), context, RequireCompleteLiquidityCost: true));
+
+        Assert.Equal(StructuralEntryOutcome.BlockedByMissingLiquidityCost, entered.Outcome);
+        Assert.Contains(StructuralPlanner.MissingLiquidityCost, missingPlan.ReasonCodes);
+    }
+
+    [Fact]
     public void 동일한_완료봉에서_분류한_regime은_결정적이다()
     {
         var trend = D2.Trend(TrendState.Range, 5);

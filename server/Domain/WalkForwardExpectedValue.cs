@@ -1,3 +1,5 @@
+using Astra.Server.Domain.Structure;
+
 namespace Astra.Server.Domain;
 
 /// <summary>시간순 feature와 결과. 관측 시각 이후의 결과를 학습 구간에서만 사용한다.</summary>
@@ -10,6 +12,15 @@ public sealed record ExpectedValueThreshold(double Value, int TrainingRows, doub
 /// <summary>train 결과로 임계값을 하나 고정한 뒤 이후 validation에는 재선택하지 않는다.</summary>
 public static class WalkForwardExpectedValue
 {
+    public static StructurePolicy ApplyToPolicy(StructurePolicy policy, ExpectedValueThreshold selected)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        return policy with { ExpectedValueFeatureThreshold = selected.Value };
+    }
+
+    public static bool Allows(StructurePolicy policy, double featureScore) =>
+        policy.ExpectedValueFeatureThreshold is not { } threshold || featureScore >= threshold;
+
     public static ExpectedValueThreshold Select(IReadOnlyList<ExpectedValueObservation> training,
         IReadOnlyList<double> candidates, int minimumRows = 1)
     {

@@ -143,15 +143,20 @@ public static class SimulationEngine
 
     static SimTrade Close(SimTrade trade, string status, double exitPrice, DateTimeOffset exitAt, double lastPrice, bool estimated,
         string source, string decision, Candle? bar = null)
-        => trade with
+    {
+        var gross = (trade.Side == TradeSide.Long
+            ? exitPrice / trade.EntryPrice - 1
+            : 1 - exitPrice / trade.EntryPrice) * 100;
+        var borrow = trade.Side == TradeSide.Short && trade.Structure?.PlanSnapshot.BorrowCostPerShare is { } cost
+            ? cost / (decimal)trade.EntryPrice * 100 : 0;
+        return trade with
         {
             Status = status, ExitPrice = exitPrice, ExitAt = exitAt,
-            PnlPercent = Math.Round((trade.Side == TradeSide.Long
-                ? exitPrice / trade.EntryPrice - 1
-                : 1 - exitPrice / trade.EntryPrice) * 100 - MarketRules.RoundTripFeePercent, 2),
+            PnlPercent = Math.Round(gross - MarketRules.RoundTripFeePercent - (double)borrow, 2),
             LastPrice = lastPrice, LastPriceAt = estimated ? trade.LastPriceAt : bar is null ? exitAt : BarCloseAt(bar), ExitEstimated = estimated,
             Execution = WithExitEvidence(trade.Execution, source, estimated ? trade.LastPriceAt : bar is null ? exitAt : BarCloseAt(bar), decision, bar)
         };
+    }
 
     static ExecutionProvenance EntryProvenance(DateTimeOffset enteredAt)
     {

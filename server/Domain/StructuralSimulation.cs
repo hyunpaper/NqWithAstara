@@ -25,7 +25,9 @@ public enum StructuralEntryOutcome
     /// 같은 심볼·같은 세션의 최신 STOP 청산 이후 완료 봉이 <see cref="StructurePolicy.StopReentryCooldownBars"/>개에
     /// 못 미친다(§10 손절 후 재진입 제한). 거래를 만들지 않는다.
     /// </summary>
-    BlockedByStopCooldown
+    BlockedByStopCooldown,
+    /// <summary>호가 비용이 결측인 계획은 실제 진입으로 승격하지 않는다.</summary>
+    BlockedByMissingLiquidityCost
 }
 
 /// <summary>
@@ -39,7 +41,7 @@ public sealed record StructuralEntryRequest(string Symbol, DateTimeOffset Trigge
     IReadOnlyList<string>? TargetZoneAliases = null,
     // 확인봉 체결을 사용한 경우 관측 근거를 SimTrade에 전파한다. null은 기존 실시간 호출의
     // 미관측 호가 경로로 남겨 하위 호환한다.
-    EntryConfirmation? Confirmation = null);
+    EntryConfirmation? Confirmation = null, bool RequireCompleteLiquidityCost = false);
 
 public sealed record StructuralEntryResult(List<SimTrade> Trades, StructuralEntryOutcome Outcome, SimTrade? Trade);
 
@@ -79,7 +81,7 @@ public static class StructuralSimulation
             plan.Costs.ValidSpread, plan.Costs.MissingLiquidity, plan.Costs.EligibilityCostModelVersion,
             plan.Costs.RealizedFillCostModelVersion, plan.CreatedAt, plan.ExpiresAt, plan.EngineVersion,
             plan.PolicyHash, plan.ReasonCodes.ToArray(), plan.HumanExplanation, plan.Atr1mAtPlan,
-            plan.Side, plan.Regime, plan.Evidence);
+            plan.Side, plan.Regime, plan.Evidence, plan.Costs.BorrowCostPerShare, plan.Costs.BorrowCostMissing);
         return new FrozenStructureContext(entryEventId, snapshot, trendAtEntry, signedTrendAtEntry,
             entryQualityAtEntry, analysisAsOf, quoteAt, ExitPolicyVersion, null, plan.Regime, plan.Evidence);
     }
@@ -111,8 +113,13 @@ public static class StructuralSimulation
             ? confirmation.FillPrice!.Value : (double)plan.EntryReference;
         var stop = (double)plan.Stop;
         var target = (double)plan.Target;
-        if (!(stop > 0) || stop >= entry || target <= entry)
+        var ordered = plan.Side == TradeSide.Long
+            ? stop > 0 && stop < entry && target > entry
+            : stop > entry && target > 0 && target < entry;
+        if (!ordered)
             return new StructuralEntryResult(trades, StructuralEntryOutcome.InvalidPlan, null);
+        if (request.RequireCompleteLiquidityCost && plan.MissingLiquidity)
+            return new StructuralEntryResult(trades, StructuralEntryOutcome.BlockedByMissingLiquidityCost, null);
 
         // 결정적 ID: 같은 이벤트의 재시도가 다른 거래처럼 보이지 않게 한다(§16B 재시작 규칙과 같은 방향).
         var id = StructureMath.SourceId("simtrade", request.Symbol, request.Context.EntryEventId)[..8];

@@ -71,7 +71,8 @@ public sealed record FrozenPlanSnapshot(string PlanId, string Kind, decimal Entr
     // 이 값이 있어야 거래 기록만으로 "손절폭이 ATR 대비 얼마였나"를 사후 재구성할 수 있다(#28 분석 입력).
     // 과거에 저장된 행은 null로 복원되며 결측을 0으로 대체하지 않는다(§16A).
     double? Atr1mAtPlan = null, TradeSide Side = TradeSide.Long,
-    StrategyRegime? Regime = null, EntryEvidence? EntryEvidence = null);
+    StrategyRegime? Regime = null, EntryEvidence? EntryEvidence = null,
+    decimal? BorrowCostPerShare = null, bool BorrowCostMissing = false);
 public sealed record IndicatorSnapshot(double Rsi, double EmaFast, double EmaSlow, double Vwap, double Atr, double RelativeVolume, double BollingerLower, double BollingerUpper, double VwapSd = 0);
 public sealed record SignalResult(int Score, string Action, string[] Reasons, IndicatorSnapshot Indicators);
 public sealed record SignalView(string Symbol, string Name, double Price, double ChangePercent, int Score, string Action, string[] Reasons, DateTimeOffset UpdatedAt, bool Stale, object Indicators, IEnumerable<object> Bars, object? Position, double Atr, string? Setup = null, DateTimeOffset? SetupAt = null, string? Breakout = null, DateTimeOffset? BreakoutAt = null);

@@ -245,9 +245,9 @@ public sealed class HistoricalReplayService
         var closed = trades.Where(x => x.Status != "OPEN" && x.ExitAt.HasValue).ToArray();
         var exits = new HistoricalReplayExitCounts(closed.Count(x => x.Status == "STOP"),
             closed.Count(x => x.Status == "TARGET"), closed.Count(x => x.Status == "EOD"));
-        var gross = closed.Sum(x => x.ExitPrice.HasValue ? (x.ExitPrice.Value / x.EntryPrice - 1) * 100 : 0);
+        var gross = closed.Sum(x => x.ExitPrice.HasValue ? Gross(x) : 0);
         var fees = closed.Sum(x => x.PnlPercent.HasValue && x.ExitPrice.HasValue
-            ? (x.ExitPrice.Value / x.EntryPrice - 1) * 100 - x.PnlPercent.Value
+            ? Gross(x) - x.PnlPercent.Value
             : 0);
         return new HistoricalReplaySymbolResult(symbol, signals, trades.Length,
             closed.Count(x => x.PnlPercent > 0), closed.Count(x => x.PnlPercent <= 0),
@@ -276,13 +276,17 @@ public sealed class HistoricalReplayService
         var rows = trades.OrderBy(x => x.EnteredAt).ThenBy(x => x.Symbol, StringComparer.Ordinal)
             .ThenBy(x => x.Id, StringComparer.Ordinal).Select(x =>
             {
-                var gross = x.ExitPrice.HasValue ? Math.Round((x.ExitPrice.Value / x.EntryPrice - 1) * 100, 6) : (double?)null;
+                var gross = x.ExitPrice.HasValue ? Math.Round(Gross(x), 6) : (double?)null;
                 var fee = gross.HasValue && x.PnlPercent.HasValue ? Math.Round(gross.Value - x.PnlPercent.Value, 6) : 0;
                 return System.Text.Json.JsonSerializer.Serialize(new HistoricalReplayTradeResult(
                     x, gross, fee, null, x.PnlPercent));
             });
         await File.WriteAllLinesAsync(Path.Combine(replayRoot, "trades.jsonl"), rows, ct);
     }
+
+    static double Gross(SimTrade trade) => trade.Side == TradeSide.Long
+        ? (trade.ExitPrice!.Value / trade.EntryPrice - 1) * 100
+        : (1 - trade.ExitPrice!.Value / trade.EntryPrice) * 100;
 
     async Task SaveAsync(HistoricalReplayRun run)
     {

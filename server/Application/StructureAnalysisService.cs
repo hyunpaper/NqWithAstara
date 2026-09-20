@@ -145,6 +145,7 @@ public sealed class StructureAnalysisService(
     public const string NoteEntryCommitted = "V5_ENTRY_COMMITTED";
     public const string NoteEntryBlockedByOpenTrade = "V5_ENTRY_BLOCKED_BY_OPEN_TRADE";
     public const string NoteEntryPlanInvalid = "V5_ENTRY_PLAN_INVALID";
+    public const string NoteEntryBlockedByMissingLiquidity = StructuralPlanner.MissingLiquidityCost;
 
     /// <summary>#117 §10: 같은 심볼의 직전 손절 이후 완료 봉이 정책 개수만큼 쌓이지 않았다.</summary>
     public const string NoteEntryBlockedByStopCooldown = Domain.Validation.EntryBlockCodes.BlockedByStopCooldown;
@@ -552,7 +553,8 @@ public sealed class StructureAnalysisService(
                 confirmation = claimed.Confirmation!;
                 var pendingResult = await tradeEntries.TryEnterAsync(new Domain.StructuralEntryRequest(snapshot.Symbol,
                     claimed.Pending.SignalBarStart, now, snapshot.SessionEnd, pendingContext,
-                    completedBarStarts, snapshot.SessionStart, null, confirmation), ct);
+                    completedBarStarts, snapshot.SessionStart, null, confirmation,
+                    RequireCompleteLiquidityCost: _policy.RequireCompleteLiquidityCost), ct);
                 if (pendingResult.Outcome is Domain.StructuralEntryOutcome.Entered or Domain.StructuralEntryOutcome.AlreadyEntered)
                 {
                     await pendingEntries.RemoveAsync(snapshot.Symbol);
@@ -560,7 +562,9 @@ public sealed class StructureAnalysisService(
                         ? x with { Disposition = CandidateDisposition.Entered } : x).ToImmutableArray(), true,
                         NoteEntryCommitted);
                 }
-                return new ActiveEntryResult(candidates, false, NoteEntryPlanInvalid);
+                return new ActiveEntryResult(candidates, false,
+                    pendingResult.Outcome == Domain.StructuralEntryOutcome.BlockedByMissingLiquidityCost
+                        ? NoteEntryBlockedByMissingLiquidity : NoteEntryPlanInvalid);
             }
         }
         if (preferredId is null || chosen is null || chosen.Disposition != CandidateDisposition.Ready || chosen.Plan is null) return null;
@@ -609,14 +613,16 @@ public sealed class StructureAnalysisService(
                 var confirmed = await tradeEntries.TryEnterAsync(new Domain.StructuralEntryRequest(snapshot.Symbol,
                     claimed.Pending.SignalBarStart, now, snapshot.SessionEnd, claimed.Context,
                     completedBarStarts, snapshot.SessionStart, null,
-                    confirmation), ct);
+                    confirmation, RequireCompleteLiquidityCost: _policy.RequireCompleteLiquidityCost), ct);
                 if (confirmed.Outcome is Domain.StructuralEntryOutcome.Entered or Domain.StructuralEntryOutcome.AlreadyEntered)
                     await pendingEntries.RemoveAsync(snapshot.Symbol);
                 return confirmed.Outcome is Domain.StructuralEntryOutcome.Entered or Domain.StructuralEntryOutcome.AlreadyEntered
                     ? new ActiveEntryResult(candidates.Select(x => x.EventId == claimed.Pending.EntryEventId
                         ? x with { Disposition = CandidateDisposition.Entered }
                         : x).ToImmutableArray(), true, NoteEntryCommitted)
-                    : Blocked(candidates, chosen, NoteEntryPlanInvalid);
+                    : Blocked(candidates, chosen,
+                        confirmed.Outcome == Domain.StructuralEntryOutcome.BlockedByMissingLiquidityCost
+                            ? NoteEntryBlockedByMissingLiquidity : NoteEntryPlanInvalid);
             }
         }
 
@@ -635,7 +641,8 @@ public sealed class StructureAnalysisService(
         }
         var result = await tradeEntries.TryEnterAsync(new Domain.StructuralEntryRequest(snapshot.Symbol,
             chosen.TriggerBarStart, now, snapshot.SessionEnd, context, completedBarStarts, snapshot.SessionStart,
-            chosen.Plan.TargetZoneSnapshot.Aliases), ct);
+            chosen.Plan.TargetZoneSnapshot.Aliases,
+            RequireCompleteLiquidityCost: _policy.RequireCompleteLiquidityCost), ct);
 
         return result.Outcome switch
         {
@@ -660,6 +667,8 @@ public sealed class StructureAnalysisService(
             // #117: 같은 심볼의 직전 손절 이후 완료 봉이 부족하다. 후보는 READY로 남고 가드 키를 소비하지 않는다.
             Domain.StructuralEntryOutcome.BlockedByStopCooldown =>
                 Blocked(candidates, chosen, NoteEntryBlockedByStopCooldown),
+            Domain.StructuralEntryOutcome.BlockedByMissingLiquidityCost =>
+                Blocked(candidates, chosen, NoteEntryBlockedByMissingLiquidity),
             _ => Blocked(candidates, chosen, NoteEntryPlanInvalid)
         };
     }

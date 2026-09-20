@@ -31,8 +31,11 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
         EntryCandidate Candidate);
 
     public async Task<ImmutableDictionary<string, ImmutableArray<SimTrade>>> RunAsync(DateOnly from, DateOnly to,
-        IReadOnlyList<string> symbols, CancellationToken ct)
+        IReadOnlyList<string> symbols, CancellationToken ct, double? expectedValueThreshold = null)
     {
+        var replayPolicy = expectedValueThreshold is { } threshold
+            ? policy with { ExpectedValueFeatureThreshold = threshold }
+            : policy;
         var days = (await store.ListDaysAsync(ct)).Where(x => DateOnly.TryParseExact(x, "yyyy-MM-dd", out var day)
             && day >= from && day <= to).Order().ToArray();
         var result = symbols.ToImmutableDictionary(x => x, _ => new List<SimTrade>(),
@@ -52,7 +55,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                 var market = new MarketSession(true, "과거 replay", null, sessionStart, sessionEnd);
                 var previousZones = ImmutableArray<PriceZone>.Empty;
                 var retired = ImmutableArray<string>.Empty;
-                var latch = StructuralLatch.Empty(symbol, sessionStart, policy.PolicyHash);
+                var latch = StructuralLatch.Empty(symbol, sessionStart, replayPolicy.PolicyHash);
                 var processedBars = 0;
                 PendingReplayEntry? pending = null;
                 var pendingEventIds = new HashSet<string>(StringComparer.Ordinal);
@@ -75,7 +78,8 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                         {
                             var entered = StructuralSimulation.Enter(result[symbol], new StructuralEntryRequest(symbol,
                                 queued.Candidate.TriggerBarStart, now, sessionEnd, queued.Context,
-                                completedStarts, sessionStart, queued.Candidate.Plan?.TargetZoneSnapshot.Aliases, confirmation), policy);
+                                completedStarts, sessionStart, queued.Candidate.Plan?.TargetZoneSnapshot.Aliases, confirmation,
+                                RequireCompleteLiquidityCost: replayPolicy.RequireCompleteLiquidityCost), replayPolicy);
                             result[symbol] = entered.Trades;
                         }
                         pendingEventIds.Add(queued.Pending.EntryEventId);
@@ -93,30 +97,30 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                     }
                     var prefix = bars.Take(index + 1).ToArray();
                     var build = StructureSnapshotFactory.Create(symbol, market, prefix, daily[symbol], current.Close,
-                        now, now, 1, policy);
+                        now, now, 1, replayPolicy);
                     if (build.Snapshot is null || build.LastCompletedBarStart is null ||
                         build.Status != StructureAnalysisStatus.Available) continue;
 
                     var snapshot = build.Snapshot;
                     var cutoff = build.LastCompletedBarStart.Value;
-                    var candidateFive = BarAggregator.Aggregate(build.Bars.Bars, snapshot.SessionStart, cutoff, policy);
+                    var candidateFive = BarAggregator.Aggregate(build.Bars.Bars, snapshot.SessionStart, cutoff, replayPolicy);
                     var built = ZoneBuilder.Build(new ZoneBuildRequest(symbol, snapshot.SessionStart,
                         snapshot.SessionEnd, cutoff, build.Bars.Bars, candidateFive, build.DailyBars, previousZones,
-                        retired), policy);
+                        retired), replayPolicy);
                     var evaluated = ZoneEvaluator.Evaluate(built.Zones, new ZoneEvaluationRequest(snapshot.SessionStart,
-                        cutoff, build.Bars.Bars, previousZones, built.RetiredZoneIds), policy);
+                        cutoff, build.Bars.Bars, previousZones, built.RetiredZoneIds), replayPolicy);
                     previousZones = evaluated.Zones;
                     retired = evaluated.RetiredZoneIds;
                     var trend = TrendEvaluator.Evaluate(TrendRequest.Create(symbol, snapshot.SessionStart,
-                        snapshot.AnalysisAsOf, build.Bars.Bars, build.FiveMinuteBars), policy);
+                        snapshot.AnalysisAsOf, build.Bars.Bars, build.FiveMinuteBars), replayPolicy);
                     var gate = StructuralLifecycle.Gate(latch, cutoff, cutoff.AddMinutes(1), TimeSpan.FromMinutes(1),
-                        now, policy);
+                        now, replayPolicy);
                     var detected = SetupDetector.Detect(SetupDetectionRequest.Create(symbol, snapshot.SessionStart,
                         snapshot.SessionEnd, snapshot.AnalysisAsOf, now, build.Bars.Bars, evaluated.Zones,
                         evaluated.Episodes, trend, built.Atr1mAtCutoff, snapshot.QuotePrice, snapshot.QuoteAt,
-                        null, build.Quality.BlockersForCandidate.Concat(gate.Blockers).ToImmutableArray()), policy);
+                        null, build.Quality.BlockersForCandidate.Concat(gate.Blockers).ToImmutableArray()), replayPolicy);
                     var candidates = StructuralLifecycle.ApplyLive(
-                        StructuralLifecycle.ApplyLatch(latch, detected.Candidates, gate.AllowNewTrigger, policy,
+                        StructuralLifecycle.ApplyLatch(latch, detected.Candidates, gate.AllowNewTrigger, replayPolicy,
                             evaluated.Zones), snapshot.QuotePrice, now);
                     var preferred = CandidateSelection.SelectPreferred(candidates);
 

@@ -126,8 +126,10 @@ public sealed record StructurePolicy
     public int RegimeVolatilityLookbackBars { get; init; } = 20;
     public double LowVolatilityRatio { get; init; } = .75;
     public double HighVolatilityRatio { get; init; } = 1.25;
-    public double ExpectedWinRatePrior { get; init; } = .50;
+    /// <summary>시간순 학습으로 고정한 계획 feature 임계값. null이면 학습 프로필이 아직 배선되지 않은 상태다.</summary>
+    public double? ExpectedValueFeatureThreshold { get; init; }
     public double MinimumExpectedNetR { get; init; } = 0.0;
+    public bool RequireCompleteLiquidityCost { get; init; } = true;
     public bool AllowTransitionPullback { get; init; }
     public bool AllowTransitionBreakout { get; init; }
 
