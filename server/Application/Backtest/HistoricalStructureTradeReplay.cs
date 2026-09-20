@@ -36,6 +36,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                 var latch = StructuralLatch.Empty(symbol, sessionStart, policy.PolicyHash);
                 var processedBars = 0;
                 PendingReplayEntry? pending = null;
+                var pendingEventIds = new HashSet<string>(StringComparer.Ordinal);
 
                 for (var index = 0; index < bars.Length && bars[index].Timestamp.AddMinutes(1) < sessionEnd; index++)
                 {
@@ -45,6 +46,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                     var exitedThisPoll = result[symbol].Count(x => x.Status == "OPEN") < openBeforeBar;
                     processedBars = index + 1;
                     var now = current.Timestamp.AddMinutes(1);
+                    var completedStarts = bars.Take(index + 1).Select(x => x.Timestamp).ToArray();
                     // 이전 신호의 다음 완료 봉에서만 체결을 확인한다. current.Close는
                     // 해당 봉이 닫힌 뒤에만 관측 가능하므로 look-ahead가 없다.
                     if (pending is { } queued && current.Timestamp == queued.Pending.ConfirmationBarStart)
@@ -55,9 +57,15 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                         {
                             var entered = StructuralSimulation.Enter(result[symbol], new StructuralEntryRequest(symbol,
                                 queued.Candidate.TriggerBarStart, now, sessionEnd, queued.Context,
-                                null, sessionStart, queued.Candidate.Plan?.TargetZoneSnapshot.Aliases, confirmation), policy);
+                                completedStarts, sessionStart, queued.Candidate.Plan?.TargetZoneSnapshot.Aliases, confirmation), policy);
                             result[symbol] = entered.Trades;
                         }
+                        pendingEventIds.Add(queued.Pending.EntryEventId);
+                        pending = null;
+                    }
+                    else if (pending is { } expired && now >= expired.Pending.ExpiresAt)
+                    {
+                        pendingEventIds.Add(expired.Pending.EntryEventId);
                         pending = null;
                     }
                     var prefix = bars.Take(index + 1).ToArray();
@@ -89,7 +97,8 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                             evaluated.Zones), snapshot.QuotePrice, now);
                     var preferred = CandidateSelection.SelectPreferred(candidates);
 
-                    if (!exitedThisPoll && pending is null && preferred is { Disposition: CandidateDisposition.Ready, Plan: not null })
+                    if (!exitedThisPoll && pending is null && preferred is { Disposition: CandidateDisposition.Ready, Plan: not null }
+                        && !pendingEventIds.Contains(preferred.EventId))
                     {
                         var context = StructuralSimulation.Freeze(preferred.Plan, preferred.EventId,
                             trend.State.ToString(), trend.SignedTrend, preferred.EntryQuality,

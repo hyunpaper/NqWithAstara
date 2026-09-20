@@ -106,7 +106,10 @@ public static class StructuralSimulation
             return new StructuralEntryResult(trades, StructuralEntryOutcome.BlockedByStopCooldown, null);
 
         var plan = request.Context.PlanSnapshot;
-        var entry = (double)plan.EntryReference;
+        var entry = request.Confirmation is { Decision: PendingEntryDecision.Confirmed, FillPrice: > 0 } confirmation
+            ? confirmation.FillPrice!.Value : (double)plan.EntryReference;
+        if (request.Confirmation is { Decision: PendingEntryDecision.Confirmed, FillPrice: > 0 })
+            plan = plan with { EntryReference = (decimal)entry };
         var stop = (double)plan.Stop;
         var target = (double)plan.Target;
         if (!(stop > 0) || stop >= entry || target <= entry)
@@ -114,7 +117,7 @@ public static class StructuralSimulation
 
         // 결정적 ID: 같은 이벤트의 재시도가 다른 거래처럼 보이지 않게 한다(§16B 재시작 규칙과 같은 방향).
         var id = StructureMath.SourceId("simtrade", request.Symbol, request.Context.EntryEventId)[..8];
-        var context = request.Context with { Reentry = Reentry(trades, request) };
+        var context = request.Context with { PlanSnapshot = plan, Reentry = Reentry(trades, request) };
         var trade = new SimTrade(id, request.Symbol, plan.Kind, request.EnteredAt, entry, target, stop,
             TargetBasis, StopBasis, "OPEN", null, null, null, entry,
             Score: null, ExtSigma: null, RelVolume: null, BuyShare: null, Rsi: null,

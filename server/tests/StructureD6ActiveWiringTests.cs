@@ -66,6 +66,32 @@ public sealed class StructureD6StructuralSimulationTests
         Assert.Equal([plan.HumanExplanation], trade.Reasons ?? []);
     }
 
+    [Fact]
+    public void ConfirmedFillOverridesPlannedReferenceAndKeepsObservationProvenance()
+    {
+        var plan = PlanA();
+        var fill = (double)plan.EntryReference + 0.05;
+        var pending = new PendingEntry("TEST|event-fill", Fx.Symbol, TradeSide.Long,
+            Fx.At(39), Fx.At(40), Fx.At(42), (double)plan.Stop, (double)plan.Target,
+            (double)plan.EntryReference, plan.PlanId, plan.PolicyHash);
+        var confirmation = new EntryConfirmation(pending, PendingEntryDecision.Confirmed,
+            Fx.At(41), fill, 0.01, "REPLAY_CONFIRMATION_BAR_CLOSE", "OBSERVED");
+
+        var result = StructuralSimulation.Enter([], new StructuralEntryRequest(
+            Fx.Symbol, Fx.At(39), Fx.At(41), Fx.SessionEnd, ContextA(plan),
+            [Fx.At(39), Fx.At(40), Fx.At(41)], Fx.At(0), null, confirmation));
+
+        var trade = Assert.Single(result.Trades);
+        Assert.Equal(fill, trade.EntryPrice, 10);
+        Assert.Equal("OBSERVED_CONFIRMATION_BAR", trade.Execution!.EntryMinuteCoverage);
+        Assert.Equal(Fx.At(41), trade.Execution.EntryMinuteEvidenceAt);
+        Assert.Equal((double)plan.Stop, trade.Stop, 10);
+        var closed = Assert.Single(SimulationEngine.ReplayBars(result.Trades, Fx.Symbol,
+            [new Candle(Fx.At(42), fill, (double)plan.Target + 0.01, fill, fill, 100)]));
+        Assert.Equal("TARGET", closed.Status);
+        Assert.Equal(Math.Round(((double)plan.Target / fill - 1) * 100 - MarketRules.RoundTripFeePercent, 2), closed.PnlPercent);
+    }
+
     /// <summary>§10 "트리거 1개로 여러 번 진입하지 않는다" — 같은 EntryEventId는 재시도돼도 거래가 1개다.</summary>
     [Fact]
     public void TheSameEntryEventIdIsIdempotent()
