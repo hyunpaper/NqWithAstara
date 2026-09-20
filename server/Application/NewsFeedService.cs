@@ -103,8 +103,9 @@ public sealed class NewsFeedService(
         {
             if (queued >= Math.Max(0, options.ReclassifyUnclassifiedPerPoll)) break;
             if (!NeedsReclassification(record) || IsQueued(record.Id)) continue;
-            var article = new NewsArticle(record.Id, record.Title, "", record.Source, record.CreatedAt,
-                record.Tickers, record.Title, true, null, record.Entities);
+            var headlineOnly = string.Equals(record.InputKind, NewsInputKinds.Headline, StringComparison.OrdinalIgnoreCase);
+            var article = new NewsArticle(record.Id, record.Title, record.Summary, record.Source, record.CreatedAt,
+                record.Tickers, headlineOnly ? record.Title : "", headlineOnly, null, record.Entities, record.Content, record.InputKind);
             Enqueue(article, record.MatchedSymbols);
             queued++;
         }
@@ -160,7 +161,7 @@ public sealed class NewsFeedService(
         state.SeenArticles(fresh.Count);
         var articles = fresh.OrderBy(x => ParseId(x.Id))
             .Select(item => new NewsArticle(item.Id, item.Title, item.Summary, item.Source, item.CreatedAt,
-                item.Tickers, item.Headline, item.HeadlineOnly, item.GroupId, item.Entities))
+                item.Tickers, item.Headline, item.HeadlineOnly, item.GroupId, item.Entities, item.Content))
             .ToArray();
 
         var followerIds = GroupFollowerArticles(articles, watchlist);
@@ -256,8 +257,10 @@ public sealed class NewsFeedService(
             var entry = Dequeue();
             if (entry is null) break;
 
-            var body = entry.Article.Summary;
-            var inputKind = NewsInputKinds.Body;
+            var body = JoinEvidence(entry.Article.Summary, entry.Article.Content);
+            var inputKind = string.IsNullOrWhiteSpace(entry.Article.InputKind)
+                ? NewsInputKinds.Body
+                : entry.Article.InputKind;
             // 상세는 관심종목 매칭 기사에만, 남은 피드 요청 예산 안에서 받는다(#151 §1).
             if (entry.MatchedSymbols.Count > 0 && feedBudget > 0)
             {
@@ -265,7 +268,8 @@ public sealed class NewsFeedService(
                 try
                 {
                     var detail = await feed.DetailAsync(entry.Article.Id, ct);
-                    // 사용자 요구: AI 요약이 있으면 본문 대신 요약만 쓴다.
+                    // AI 요약 계약은 유지한다. 요약이 없을 때 상세 본문이 제목보다 우선하고,
+                    // 상세가 없으면 피드의 description/content/summary를 함께 사용한다.
                     if (!string.IsNullOrWhiteSpace(detail?.Summary)) { body = detail!.Summary; inputKind = NewsInputKinds.Summary; }
                     else if (!string.IsNullOrWhiteSpace(detail?.Body)) body = detail!.Body;
                 }
@@ -328,6 +332,9 @@ public sealed class NewsFeedService(
         state.QueueDepth(QueueDepth);
     }
 
+    static string JoinEvidence(params string?[] values)
+        => string.Join("\n", values.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!.Trim()));
+
     /// <summary>대표가 분류되면 같은 그룹의 나머지 기사에 결과를 복사해 저장한다(#171 §3).</summary>
     async Task SaveGroupFollowersAsync(string representativeId, NewsClassificationResult result, CancellationToken ct)
     {
@@ -368,7 +375,8 @@ public sealed class NewsFeedService(
             inputKind,
             result.PromptVersion,
             classifiedFrom, entry.Article.Entities, classification?.KoreanTitle,
-            classification?.KoreanSource, classification?.ImpactScores);
+            classification?.KoreanSource, classification?.ImpactScores,
+            entry.Article.Summary, entry.Article.Content);
     }
 
     async Task SaveAsync(NewsRecord record, CancellationToken ct)

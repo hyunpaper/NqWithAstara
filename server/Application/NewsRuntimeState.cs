@@ -64,7 +64,9 @@ public sealed record NewsRecord(
     IReadOnlyList<NewsEntity>? Entities = null,
     string? TitleKo = null,
     string? SourceKo = null,
-    IReadOnlyDictionary<string, int>? ImpactScores = null);
+    IReadOnlyDictionary<string, int>? ImpactScores = null,
+    string Summary = "",
+    string Content = "");
 
 /// <summary>health·조회가 함께 보는 뉴스 런타임 상태(#151 §6). 스레드 안전하다.</summary>
 public sealed class NewsRuntimeState

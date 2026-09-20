@@ -51,7 +51,9 @@ public sealed record NewsArticle(
     string Headline = "",
     bool HeadlineOnly = false,
     string? GroupId = null,
-    IReadOnlyList<NewsEntity>? Entities = null);
+    IReadOnlyList<NewsEntity>? Entities = null,
+    string Content = "",
+    string InputKind = "");
 
 /// <summary>분류 입력으로 무엇을 썼는지(#151). 판정 근거를 사후에 되짚기 위해 레코드에 남긴다.</summary>
 public static class NewsInputKinds
@@ -92,7 +94,7 @@ public static class NewsMatcher
         }
         if (tagged.Count > 0) return new NewsMatch(Distinct(tagged));
 
-        var text = article.Title + "\n" + article.Headline + "\n" + article.Summary;
+        var text = article.Title + "\n" + article.Headline + "\n" + article.Summary + "\n" + article.Content;
         if (string.IsNullOrWhiteSpace(text)) return new NewsMatch([]);
 
         var found = new List<string>();

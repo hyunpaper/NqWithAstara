@@ -288,7 +288,25 @@ public sealed class NewsFeedServiceTests
         await harness.PollAsync();
 
         Assert.Equal("- 요약 첫 줄\n- 요약 둘째 줄", Assert.Single(harness.Classifier.Requests).Body);
-        Assert.Equal(NewsInputKinds.Summary, Assert.Single(harness.Saved()).InputKind);
+        Assert.Equal(NewsInputKinds.Summary, harness.Saved().Last().InputKind);
+    }
+
+    [Fact]
+    public async Task 피드본문과_상세본문을_분류입력에_포함한다()
+    {
+        var harness = new Harness(new WatchItem("NVDA", "NVIDIA"));
+        harness.Page(1, Item("100", "기준"));
+        await harness.PollAsync();
+        harness.Page(1, new NewsFeedItem("101", "제목", "목록 요약", "Reuters", Start.AddMinutes(1), ["NVDA"], Content: "RSS 본문"), Item("100", "기준"));
+
+        await harness.PollAsync();
+
+        var body = Assert.Single(harness.Classifier.Requests).Body;
+        Assert.Contains("RSS 본문", body);
+        Assert.Contains("목록 요약", body);
+        var saved = Assert.Single(harness.Saved());
+        Assert.Equal("목록 요약", saved.Summary);
+        Assert.Equal("RSS 본문", saved.Content);
     }
 
     [Fact]
@@ -560,6 +578,44 @@ public sealed class NewsFeedServiceTests
         Assert.Equal("시장 주요 기업 기사", harness.Saved().Last().TitleKo);
         Assert.Equal("야후 파이낸스", harness.Saved().Last().SourceKo);
         Assert.Equal(10, harness.Saved().Last().ImpactScores!["MARKET"]);
+    }
+
+    [Fact]
+    public async Task 재분류가_저장된_요약과_본문을_복원한다()
+    {
+        var harness = new Harness();
+        harness.Classifier.Respond = _ => new NewsClassificationResult(
+            new NewsClassification(["MARKET"], NewsSentiments.Neutral, 1, "본문 확인", "제목", "출처", new Dictionary<string, int> { ["MARKET"] = 1 }),
+            "qwen", 10, true, "v2c");
+        var record = new NewsRecord("90", "저장 제목", "출처", Start, [], [], ["MARKET"], NewsSentiments.Unclassified, 0, "", "qwen", 10, Start,
+            NewsInputKinds.Body, "v2c", null, null, null, null, null, "저장 요약", "저장 본문");
+        harness.Store.Files["2026-09-12.jsonl"] = [JsonSerializer.Serialize(record, new JsonSerializerOptions(JsonSerializerDefaults.Web))];
+        harness.Page(1, Item("100", "기준"));
+
+        await harness.PollAsync();
+
+        var request = Assert.Single(harness.Classifier.Requests);
+        Assert.Contains("저장 요약", request.Body);
+        Assert.Contains("저장 본문", request.Body);
+        var saved = harness.Saved().Last();
+        Assert.Equal("저장 요약", saved.Summary);
+        Assert.Equal("저장 본문", saved.Content);
+    }
+
+    [Fact]
+    public async Task 재분류가_저장된_InputKind를_유지한다()
+    {
+        var harness = new Harness();
+        harness.Classifier.Respond = _ => new NewsClassificationResult(
+            new NewsClassification(["MARKET"], NewsSentiments.Neutral, 1, "요약 확인"), "qwen", 10, true, "v2c");
+        var record = new NewsRecord("91", "저장 제목", "출처", Start, [], [], ["MARKET"], NewsSentiments.Unclassified, 0, "", "qwen", 10, Start,
+            NewsInputKinds.Summary, "v2c", null, null, null, null, null, "저장 요약", "");
+        harness.Store.Files["2026-09-12.jsonl"] = [JsonSerializer.Serialize(record, new JsonSerializerOptions(JsonSerializerDefaults.Web))];
+        harness.Page(1, Item("100", "기준"));
+
+        await harness.PollAsync();
+
+        Assert.Equal(NewsInputKinds.Summary, harness.Saved().Last().InputKind);
     }
 
     [Fact]

@@ -69,6 +69,8 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
     {
         id = record.Id,
         title = record.Title,
+        summary = record.Summary,
+        content = record.Content,
         titleKo = record.TitleKo,
         source = record.Source,
         sourceKo = record.SourceKo,
