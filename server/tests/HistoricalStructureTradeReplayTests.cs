@@ -114,6 +114,17 @@ public sealed class HistoricalStructureTradeReplayTests
         Assert.True(source.Calls > 0);
     }
 
+    [Fact]
+    public void 과거검증_비용모델은_운영호가와_구분된다()
+    {
+        var source = new ModeledHistoricalLiquiditySource(HistoricalReplayCostModel.ConservativeDefault);
+        var liquidity = source.Get("TSLA", Start, 100m);
+
+        Assert.True(source.IsModeled);
+        Assert.Equal("historical.ohlcv-spread-model.v1", source.SourceName);
+        Assert.Equal(.10m, (liquidity!.BestAsk!.Value - liquidity.BestBid!.Value));
+    }
+
     sealed class MemoryBars : IBarStore
     {
         readonly List<string> _lines = [];
@@ -154,7 +165,7 @@ public sealed class HistoricalStructureTradeReplayTests
     {
         public int Calls { get; private set; }
 
-        public StructureLiquidity? Get(string symbol, DateTimeOffset observedAt)
+        public StructureLiquidity? Get(string symbol, DateTimeOffset observedAt, decimal referencePrice)
         {
             Calls++;
             return new StructureLiquidity(99.99m, 100.01m, observedAt, 100, 100);

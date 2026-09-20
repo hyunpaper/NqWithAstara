@@ -11,6 +11,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
     public sealed record ReplayCandidateDiagnostic(string Symbol, DateOnly SessionDate,
         string EventId, DateTimeOffset SignalAt, TradeSide Side, string Regime,
         CandidateDisposition Disposition, bool StructuralReady, bool FinalApproved,
+        bool CostComplete, bool CostModeled, string CostSource,
         ImmutableArray<string> RejectionReasons, ImmutableArray<string> FeatureContributions);
 
     public sealed record ReplayRun(ImmutableDictionary<string, ImmutableArray<SimTrade>> Trades,
@@ -117,7 +118,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                         }
                     }
                     var prefix = bars.Take(index + 1).ToArray();
-                    var liquidity = liquiditySource?.Get(symbol, now);
+                    var liquidity = liquiditySource?.Get(symbol, now, (decimal)current.Close);
                     var build = StructureSnapshotFactory.Create(symbol, market, prefix, daily[symbol], current.Close,
                         now, now, 1, replayPolicy, liquidity, barSpan);
                     if (build.Snapshot is null || build.LastCompletedBarStart is null ||
@@ -159,6 +160,8 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                             candidate.TriggerBarStart, candidate.Side, candidate.Regime?.Key ?? "UNCOLLECTED",
                             candidate.Disposition, structuralReady,
                             structuralReady && costComplete && expectedValueReady,
+                            costComplete, liquiditySource?.IsModeled == true,
+                            liquiditySource?.SourceName ?? "MISSING",
                             reasons, contributions);
                     }
                     var preferred = CandidateSelection.SelectPreferred(candidates);
@@ -188,10 +191,28 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                 daily[symbol].Add(Daily(bars));
             }
 
-        return new ReplayRun(result.ToImmutableDictionary(x => x.Key, x => x.Value.ToImmutableArray(),
-            StringComparer.OrdinalIgnoreCase), candidateDiagnostics.Values
+        var trades = result.ToImmutableDictionary(x => x.Key, x => x.Value.ToImmutableArray(),
+            StringComparer.OrdinalIgnoreCase);
+        var diagnostics = candidateDiagnostics.Values
             .OrderBy(x => x.SessionDate).ThenBy(x => x.Symbol, StringComparer.Ordinal)
-            .ThenBy(x => x.SignalAt).ThenBy(x => x.EventId, StringComparer.Ordinal).ToImmutableArray());
+            .ThenBy(x => x.SignalAt).ThenBy(x => x.EventId, StringComparer.Ordinal).ToImmutableArray();
+        if (liquiditySource?.IsModeled == true)
+            trades = trades.ToImmutableDictionary(x => x.Key,
+                x => x.Value.Select(ApplyModeledRealizedSpread).ToImmutableArray(),
+                StringComparer.OrdinalIgnoreCase);
+        return new ReplayRun(trades, diagnostics);
+    }
+
+    static SimTrade ApplyModeledRealizedSpread(SimTrade trade)
+    {
+        if (trade.PnlPercent is not { } pnl || trade.Structure?.PlanSnapshot is not { } plan || trade.EntryPrice <= 0)
+            return trade;
+        var borrow = plan.BorrowCostPerShare ?? 0m;
+        var spread = Math.Max(0m, plan.ExtraCostPerShare - borrow);
+        return spread <= 0 ? trade : trade with
+        {
+            PnlPercent = Math.Round(pnl - (double)(spread / (decimal)trade.EntryPrice * 100m), 2)
+        };
     }
 
     public static DateTimeOffset EntryTime(DateTimeOffset triggerConfirmedAt, DateTimeOffset analysisAsOf) =>
