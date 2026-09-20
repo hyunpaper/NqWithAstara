@@ -69,17 +69,7 @@ import HistoricalReplayPanel from "./HistoricalReplayPanel";
 import { WatchList } from "./WatchRowContent";
 import type { WatchListItem } from "./WatchRowContent";
 import { WATCH_ORDER_URL, watchOrderRequest } from "./watchReorder";
-
-type Bar = { time: string; open?: number; high?: number; low?: number; close: number; volume?: number; ema?: number; vwap?: number };
-const normalizeChartBars = (bars: Bar[], limit = 60): Bar[] => {
-  const byTime = new Map<number, Bar>();
-  for (const bar of bars) {
-    const timestamp = Date.parse(bar.time);
-    if (!Number.isFinite(timestamp) || ![bar.open, bar.high, bar.low, bar.close].every((v) => Number.isFinite(v))) continue;
-    byTime.set(timestamp, { ...bar, time: new Date(timestamp).toISOString() });
-  }
-  return [...byTime.entries()].sort(([a], [b]) => a - b).slice(-limit).map(([, bar]) => bar);
-};
+import { normalizeChartBars, type ChartBar as Bar } from "./chartData";
 type Indicators = {
   rsi: number | null;
   emaFast: number | null;
