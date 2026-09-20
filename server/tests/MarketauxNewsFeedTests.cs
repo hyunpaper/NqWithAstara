@@ -9,13 +9,13 @@ namespace Astra.Server.Tests;
 public sealed class MarketauxNewsFeedTests
 {
     [Fact]
-    public async Task 키가_없으면_외부호출없이_빈피드를_반환한다()
+    public async Task 키가_없으면_RSS를호출하고_비XML이면_빈피드를_반환한다()
     {
         var handler = new FixtureHandler("{}");
         var feed = new MarketauxNewsFeed(new NewsOptions(), new HttpClient(handler));
         var rows = await feed.ListAsync(1, CancellationToken.None);
         Assert.Empty(rows);
-        Assert.False(handler.Called);
+        Assert.True(handler.Called);
     }
 
     [Fact]
@@ -39,6 +39,76 @@ public sealed class MarketauxNewsFeedTests
         Assert.Equal("macro-1", row.Id);
         Assert.Empty(row.Tickers);
         Assert.Empty(row.Entities!);
+    }
+
+
+
+    [Fact]
+    public async Task OneBrokenRssSourceDoesNotHideAnotherHealthySource()
+    {
+        var handler = new MixedRssHandler();
+        var feed = new MarketauxNewsFeed(new NewsOptions
+        {
+            GoogleNewsUrl = "https://google.test/rss",
+            YahooNewsUrl = "https://yahoo.test/rss"
+        }, new HttpClient(handler));
+        var rows = await feed.ListAsync(1, CancellationToken.None);
+        var row = Assert.Single(rows);
+        Assert.Equal("정상 기사", row.Title);
+    }
+
+
+
+
+
+    [Fact]
+    public async Task OneTimedOutRssSourceDoesNotHideAnotherHealthySource()
+    {
+        var feed = new MarketauxNewsFeed(new NewsOptions
+        {
+            GoogleNewsUrl = "https://google.test/rss",
+            YahooNewsUrl = "https://yahoo.test/rss"
+        }, new HttpClient(new MixedTimeoutRssHandler()));
+        var rows = await feed.ListAsync(1, CancellationToken.None);
+        Assert.Equal("정상 기사", Assert.Single(rows).Title);
+    }
+    [Fact]
+    public async Task CallerCancellationIsNotSwallowedByRssFallback()
+    {
+        var feed = new MarketauxNewsFeed(new NewsOptions(), new HttpClient(new CancelHandler()));
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => feed.ListAsync(1, cts.Token));
+    }
+
+    sealed class MixedTimeoutRssHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.RequestUri!.Host.StartsWith("google", StringComparison.Ordinal))
+                return Task.FromException<HttpResponseMessage>(new TaskCanceledException("provider timeout"));
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("<rss><channel><item><title>정상 기사</title><link>id-2</link><source>Yahoo</source><pubDate>Sun, 20 Sep 2026 01:00:00 GMT</pubDate></item></channel></rss>")
+            });
+        }
+    }
+
+    sealed class CancelHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromException<HttpResponseMessage>(new TaskCanceledException("timeout"));
+    }
+
+    sealed class MixedRssHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var content = request.RequestUri!.Host.StartsWith("google", StringComparison.Ordinal)
+                ? "not xml"
+                : "<rss><channel><item><title>정상 기사</title><link>id-1</link><source>Yahoo</source><pubDate>Sun, 20 Sep 2026 01:00:00 GMT</pubDate></item></channel></rss>";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(content) });
+        }
     }
 
     sealed class FixtureHandler(string body) : HttpMessageHandler

@@ -62,7 +62,7 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         classified = state.Classified,
         storageLimited = state.StorageLimited,
         ollama = state.OllamaOk ? "ok" : "down",
-        promptVersion = NewsPromptVersions.V2b,
+        promptVersion = NewsPromptVersions.V2c,
     };
 
     static object Project(NewsRecord record) => new

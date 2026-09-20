@@ -23,10 +23,12 @@ public sealed class NewsFeedServiceTests
         public NewsDiagnostics Diagnostics { get; } = new();
         public NewsFeedService Service { get; }
 
-        public Harness(params WatchItem[] watchlist)
+        public Harness(params WatchItem[] watchlist) : this(null, watchlist) { }
+
+        public Harness(INewsTranslator? translator, params WatchItem[] watchlist)
         {
             Local = new NewsLocalStore(watchlist);
-            Service = NewsBuilder.Service(Options, Feed, Classifier, Store, Local, State, Clock, Diagnostics);
+            Service = NewsBuilder.Service(Options, Feed, Classifier, Store, Local, State, Clock, Diagnostics, translator);
         }
 
         public Task PollAsync() => Service.PollAsync(CancellationToken.None);
@@ -455,14 +457,14 @@ public sealed class NewsFeedServiceTests
     {
         var harness = new Harness();
         harness.Classifier.Respond = _ => new NewsClassificationResult(
-            new NewsClassification(["NVDA"], NewsSentiments.Positive, 3, "회복"), "qwen", 10, true, "v2b");
+            new NewsClassification(["NVDA"], NewsSentiments.Positive, 3, "회복"), "qwen", 10, true, "v2c");
         harness.Page(1, Item("100", "기준"));
         await harness.PollAsync();
 
         harness.Page(1, Item("101", "가"), Item("100", "기준"));
         await harness.PollAsync();
 
-        Assert.Equal("v2b", Assert.Single(harness.Saved()).PromptVersion);
+        Assert.Equal("v2c", Assert.Single(harness.Saved()).PromptVersion);
     }
 
     [Fact]
@@ -488,7 +490,7 @@ public sealed class NewsFeedServiceTests
     {
         var harness = new Harness();
         harness.Classifier.Respond = _ => new NewsClassificationResult(
-            new NewsClassification(["MARKET"], NewsSentiments.Negative, 3, "경보 발령"), "qwen", 850, true, "v2b");
+            new NewsClassification(["MARKET"], NewsSentiments.Negative, 3, "경보 발령"), "qwen", 850, true, "v2c");
         harness.Page(1, Item("100", "기준"));
         await harness.PollAsync();
 
@@ -511,7 +513,7 @@ public sealed class NewsFeedServiceTests
     {
         var harness = new Harness();
         harness.Classifier.Respond = _ => new NewsClassificationResult(
-            new NewsClassification(["MARKET"], NewsSentiments.Negative, 3, "경보 발령"), "qwen", 10, true, "v2b");
+            new NewsClassification(["MARKET"], NewsSentiments.Negative, 3, "경보 발령"), "qwen", 10, true, "v2c");
         harness.Page(1, Item("100", "기준"));
         await harness.PollAsync();
 
@@ -538,4 +540,60 @@ public sealed class NewsFeedServiceTests
         Assert.Equal(2, harness.Classifier.Requests.Count);
         Assert.All(harness.Saved(), x => Assert.Null(x.ClassifiedFrom));
     }
+    [Fact]
+    public async Task RestoreRequeuesOnlyLimitedArticlesMissingClassificationFields()
+    {
+        var harness = new Harness();
+        harness.Classifier.Respond = _ => new NewsClassificationResult(
+            new NewsClassification(["MARKET"], NewsSentiments.Neutral, 1, "영향 제한", "시장 주요 기업 기사", "야후 파이낸스", new Dictionary<string, int> { ["MARKET"] = 10 }),
+            "qwen", 10, true, "v2c");
+        var record = new NewsRecord("90", "영문 기사", "Yahoo Finance", Start, [], [], ["MARKET"],
+            NewsSentiments.Unclassified, 0, "", "qwen", 60000, Start);
+        harness.Store.Files["2026-09-12.jsonl"] =
+            [JsonSerializer.Serialize(record, new JsonSerializerOptions(JsonSerializerDefaults.Web))];
+        harness.Page(1, Item("100", "기준"));
+
+        await harness.PollAsync();
+
+        Assert.Single(harness.Classifier.Requests);
+        Assert.Equal(NewsSentiments.Neutral, harness.Saved().Last().Sentiment);
+        Assert.Equal("시장 주요 기업 기사", harness.Saved().Last().TitleKo);
+        Assert.Equal("야후 파이낸스", harness.Saved().Last().SourceKo);
+        Assert.Equal(10, harness.Saved().Last().ImpactScores!["MARKET"]);
+    }
+
+    [Fact]
+    public async Task ReclassificationContinuesOnLaterPollsAfterPerPollLimit()
+    {
+        var harness = new Harness();
+        harness.Options.ReclassifyUnclassifiedPerPoll = 3;
+        harness.Classifier.Respond = _ => new NewsClassificationResult(
+            new NewsClassification(["MARKET"], NewsSentiments.Neutral, 1, "영향 제한", "한국어 제목", "한국어 출처", new Dictionary<string, int> { ["MARKET"] = 5 }),
+            "qwen", 10, true, "v2c");
+        var records = Enumerable.Range(90, 5).Select(id => new NewsRecord(id.ToString(), $"기사 {id}", "Yahoo Finance", Start, [], [], ["MARKET"], NewsSentiments.Unclassified, 0, "", "qwen", 60000, Start));
+        harness.Store.Files["2026-09-12.jsonl"] = records.Select(x => JsonSerializer.Serialize(x, new JsonSerializerOptions(JsonSerializerDefaults.Web))).ToList();
+        harness.Page(1, Item("100", "기준"));
+
+        await harness.PollAsync();
+        await harness.PollAsync();
+
+        Assert.Equal(5, harness.Classifier.Requests.Count);
+    }
+
+
+    [Fact]
+    public async Task PapagoFailureKeepsOllamaTranslationFields()
+    {
+        var harness = new Harness(new FakeNewsTranslator());
+        harness.Classifier.Respond = _ => new NewsClassificationResult(
+            new NewsClassification(["MARKET"], NewsSentiments.Neutral, 1, "영향 제한", "Ollama 번역", "Ollama 출처", new Dictionary<string, int> { ["MARKET"] = 4 }),
+            "qwen", 10, true, "v2c");
+        harness.Page(1, Item("100", "기준"));
+        await harness.PollAsync();
+        harness.Page(1, Item("101", "영문 기사"), Item("100", "기준"));
+        await harness.PollAsync();
+        Assert.Equal("Ollama 번역", harness.Saved().Single().TitleKo);
+        Assert.Equal("Ollama 출처", harness.Saved().Single().SourceKo);
+    }
+
 }

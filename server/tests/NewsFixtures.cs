@@ -46,13 +46,20 @@ sealed class FakeNewsClassifier : INewsClassifier
     public List<NewsClassificationRequest> Requests { get; } = [];
     public Func<NewsClassificationRequest, NewsClassificationResult> Respond { get; set; } =
         _ => new NewsClassificationResult(
-            new Astra.Server.Domain.News.NewsClassification(["AAPL"], "positive", 3, "테스트"), "fake", 10, true);
+            new Astra.Server.Domain.News.NewsClassification(["AAPL"], "positive", 3, "테스트", "테스트 기사", "테스트 출처", new Dictionary<string, int> { ["AAPL"] = 10 }), "fake", 10, true, "v2c");
 
     public Task<NewsClassificationResult> ClassifyAsync(NewsClassificationRequest request, CancellationToken ct)
     {
         Requests.Add(request);
         return Task.FromResult(Respond(request));
     }
+}
+
+sealed class FakeNewsTranslator : INewsTranslator
+{
+    public Func<string, string, (string Title, string Source)?> Respond { get; set; } = (_, _) => null;
+    public Task<(string Title, string Source)?> TranslateAsync(string title, string source, CancellationToken ct)
+        => Task.FromResult(Respond(title, source));
 }
 
 sealed class MemoryNewsStore : INewsStore
@@ -122,6 +129,7 @@ static class NewsBuilder
 
     public static NewsFeedService Service(
         NewsOptions options, FakeNewsFeed feed, FakeNewsClassifier classifier, MemoryNewsStore store,
-        NewsLocalStore local, NewsRuntimeState state, NewsClock clock, NewsDiagnostics diagnostics)
-        => new(options, feed, classifier, store, local, state, diagnostics, clock);
+        NewsLocalStore local, NewsRuntimeState state, NewsClock clock, NewsDiagnostics diagnostics,
+        INewsTranslator? translator = null)
+        => new(options, feed, classifier, store, local, state, diagnostics, clock, translator);
 }

@@ -1,4 +1,4 @@
-﻿using Astra.Server;
+using Astra.Server;
 using Astra.Server.Api;
 using Astra.Server.Application;
 using Astra.Server.Application.Backtest;
@@ -98,6 +98,7 @@ builder.Services.AddSingleton<INewsFeed>(x =>
         : new MarketauxNewsFeed(options);
 });
 builder.Services.AddSingleton<INewsClassifier>(x => new OllamaNewsClassifier(x.GetRequiredService<NewsOptions>()));
+builder.Services.AddSingleton<INewsTranslator>(x => new PapagoNewsTranslator(x.GetRequiredService<NewsOptions>()));
 builder.Services.AddSingleton<NewsRuntimeState>(); builder.Services.AddSingleton<NewsFeedService>(); builder.Services.AddSingleton<NewsQueryService>();
 builder.Services.AddHostedService(x => x.GetRequiredService<MonitorService>());
 builder.Services.AddHostedService<NewsService>();
