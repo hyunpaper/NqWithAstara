@@ -512,9 +512,47 @@ public sealed class StructureAnalysisService(
         TrendAssessment? trend, DateTimeOffset now, IReadOnlyList<Candle> completedBars,
         CancellationToken ct)
     {
-        if (_options.Mode != StructureEngineMode.Active || preferredId is null) return null;
+        if (_options.Mode != StructureEngineMode.Active) return null;
         var chosen = candidates.FirstOrDefault(x => x.EventId == preferredId);
-        if (chosen is null || chosen.Disposition != CandidateDisposition.Ready || chosen.Plan is null) return null;
+        var completedBarStarts = completedBars.Select(x => x.Timestamp).ToImmutableArray();
+
+        // Pending은 현재 poll의 preferred 후보와 독립적으로 먼저 처리한다. 재시작 후
+        // 후보가 READY로 재구성되지 않아도 exact confirmation을 놓치지 않는다.
+        if (pendingEntries is not null && tradeEntries is not null)
+        {
+            var stored = await pendingEntries.GetAsync(snapshot.Symbol);
+            if (stored is not null)
+            {
+                var state = ResolvePendingState(stored.Pending, completedBars);
+                if (state.Decision == LivePendingDecision.Wait)
+                    return new ActiveEntryResult(candidates, false, "V5_PENDING_CONFIRMATION_WAITING");
+                if (state.Decision == LivePendingDecision.Missed)
+                {
+                    await pendingEntries.RemoveAsync(snapshot.Symbol);
+                    return new ActiveEntryResult(candidates, false, "V5_PENDING_CONFIRMATION_MISSED");
+                }
+                var claimed = await pendingEntries.ClaimAsync(snapshot.Symbol, now);
+                if (claimed is null) return new ActiveEntryResult(candidates, false, "V5_PENDING_ALREADY_CLAIMED");
+                var bar = state.ConfirmationBar!;
+                var context = claimed.Context;
+                var confirmation = PendingEntryPolicy.Confirm(claimed.Pending, bar, now, bar.Close,
+                    "LIVE_CONFIRMATION_BAR_CLOSE");
+                if (confirmation.Decision != PendingEntryDecision.Confirmed)
+                    return new ActiveEntryResult(candidates, false, "V5_PENDING_CONFIRMATION_REJECTED");
+                var result = await tradeEntries.TryEnterAsync(new Domain.StructuralEntryRequest(snapshot.Symbol,
+                    claimed.Pending.SignalBarStart, now, snapshot.SessionEnd, context,
+                    completedBarStarts, snapshot.SessionStart, null, confirmation), ct);
+                if (result.Outcome is Domain.StructuralEntryOutcome.Entered or Domain.StructuralEntryOutcome.AlreadyEntered)
+                {
+                    await pendingEntries.RemoveAsync(snapshot.Symbol);
+                    return new ActiveEntryResult(candidates.Select(x => x.EventId == claimed.Pending.EntryEventId
+                        ? x with { Disposition = CandidateDisposition.Entered } : x).ToImmutableArray(), true,
+                        NoteEntryCommitted);
+                }
+                return new ActiveEntryResult(candidates, false, NoteEntryPlanInvalid);
+            }
+        }
+        if (preferredId is null || chosen is null || chosen.Disposition != CandidateDisposition.Ready || chosen.Plan is null) return null;
 
         // #106: 청산이 발생한 poll의 틱으로는 새로 진입하지 않는다. 후보는 READY로 남고 가드 키·쿨다운 표식은
         // 소비하지 않는다(#107 — 같은 봉 재시도는 watermark로 막히고 다음 트리거 봉부터 가능하다).
@@ -529,7 +567,7 @@ public sealed class StructureAnalysisService(
 
         if (tradeEntries is null) return Blocked(candidates, chosen, NoteEntryUnavailable);
 
-        var completedBarStarts = completedBars.Select(x => x.Timestamp).ToImmutableArray();
+        
         if (pendingEntries is not null)
         {
             var stored = await pendingEntries.GetAsync(snapshot.Symbol);
