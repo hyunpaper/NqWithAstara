@@ -12,8 +12,10 @@ export default function NewsPanel({ symbol }: { symbol: string }) {
   const [detail, setDetail] = useState<NewsArticle | null>(null);
   const [detailState, setDetailState] = useState<"idle" | "loading" | "error">("idle");
   const detailRequest = useRef<AbortController | null>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
 
   const openDetail = async (article: NewsArticle) => {
+    openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     detailRequest.current?.abort();
     const controller = new AbortController();
     detailRequest.current = controller;
@@ -21,7 +23,7 @@ export default function NewsPanel({ symbol }: { symbol: string }) {
     setDetail(article);
     setDetailState("loading");
     try {
-      const response = await fetch(`/api/news/${encodeURIComponent(article.id)}`, { signal: controller.signal });
+      const response = await fetch(`/api/news/detail?id=${encodeURIComponent(article.id)}`, { signal: controller.signal });
       if (!response.ok) throw new Error(`상세 조회 실패 (${response.status})`);
       const normalized = normalizeArticlesResponse({ articles: [await response.json()] }).articles[0];
       if (!normalized) throw new Error("기사 상세 형식이 올바르지 않습니다.");
@@ -104,7 +106,7 @@ export default function NewsPanel({ symbol }: { symbol: string }) {
             const kind = inputKindLabel(a.inputKind);
             return (
               <li key={a.id}>
-                <button type="button" className="news-row-button" onClick={() => void openDetail(a)} aria-label={`${a.titleKo ?? a.title} 상세 보기`}>
+                  <button type="button" className="news-row-button" onClick={() => void openDetail(a)} aria-label={`${a.titleKo ?? a.title} 상세 보기`}>
                   <div className="news-row-head">
                     <span
                       className="news-time"
@@ -124,7 +126,7 @@ export default function NewsPanel({ symbol }: { symbol: string }) {
           })}
         </ul>
       )}
-      {selected && <NewsDetailPanel article={detail ?? selected} state={detailState} onClose={() => { detailRequest.current?.abort(); setSelected(null); setDetail(null); }} />}
+      {selected && <NewsDetailPanel article={detail ?? selected} state={detailState} onClose={() => { detailRequest.current?.abort(); setSelected(null); setDetail(null); requestAnimationFrame(() => openerRef.current?.focus()); }} />}
     </section>
   );
 }

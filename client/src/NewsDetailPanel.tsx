@@ -24,12 +24,15 @@ export default function NewsDetailPanel({ article, state = "idle", onClose }: { 
   }, [article]);
   article = evidence;
   const badge = sentimentBadge(article.sentiment);
-  const korean = article.body ?? article.summary ?? article.titleKo ?? article.title;
+  const korean = article.translationStatus === "translated"
+    ? (article.body ?? article.summary ?? article.titleKo ?? "번역된 본문이 없습니다.")
+    : (article.titleKo ?? "번역된 본문이 없습니다.");
   const original = article.body ?? article.summary ?? article.title;
+  const originalUrl = (() => { try { const u = new URL(article.url ?? ""); return u.protocol === "https:" || u.protocol === "http:" ? u.toString() : null; } catch { return null; } })();
   return <aside className="news-detail-panel" role="dialog" aria-modal="false" aria-label="뉴스 상세">
     <div className="news-detail-head"><div><span className="news-kicker">뉴스 상세</span><h3>{translated ? article.titleKo ?? article.title : article.title}</h3></div><button ref={closeRef} type="button" onClick={onClose} aria-label="뉴스 상세 닫기">×</button></div>
     <div className="news-row-head">{badge && <span className={badge.className}>{badge.label}</span>} {article.sourceKo ?? article.source ?? "출처 미상"} {article.createdAt && <time>{absoluteTimeKst(article.createdAt)}</time>}</div>
-    <div className="news-detail-actions"><button type="button" aria-pressed={translated} onClick={() => setTranslated(true)}>한국어</button><button type="button" aria-pressed={!translated} onClick={() => setTranslated(false)}>원문</button>{article.url && <a href={article.url} target="_blank" rel="noreferrer">원문 열기</a>}</div>
+    <div className="news-detail-actions"><button type="button" aria-pressed={translated} onClick={() => setTranslated(true)}>한국어</button><button type="button" aria-pressed={!translated} onClick={() => setTranslated(false)}>원문</button>{originalUrl && <a href={originalUrl} target="_blank" rel="noreferrer">원문 열기</a>}</div>
     {state === "loading" && <p className="news-state">기사를 불러오는 중…</p>}
     {state === "error" && <p className="news-state news-error">기사 상세를 불러오지 못했습니다. 목록에 저장된 내용만 표시합니다.</p>}
     <p className="news-detail-body">{translated ? korean : original}</p>

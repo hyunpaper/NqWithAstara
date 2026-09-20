@@ -32,6 +32,7 @@ export type NewsArticle = {
   evidenceSource?: string | null;
   promptVersion?: string | null;
   classifiedFrom?: string | null;
+  evidenceArticleId?: string | null;
 };
 export type NewsEntity = { symbol: string; name: string; industry: string; sentimentScore: number | null; matchScore: number | null };
 
@@ -119,6 +120,7 @@ export const normalizeArticle = (raw: unknown): NewsArticle | null => {
     evidenceSource: str(r.evidenceSource),
     promptVersion: str(r.promptVersion),
     classifiedFrom: str(r.classifiedFrom),
+    evidenceArticleId: str(r.evidenceArticleId),
   };
 };
 
