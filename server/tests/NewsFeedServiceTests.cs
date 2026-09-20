@@ -396,7 +396,7 @@ public sealed class NewsFeedServiceTests
     }
 
     [Fact]
-    public async Task FeedFailureIsReportedAndLeavesStateUntouched()
+    public async Task FeedFailureIsReportedAndPersistsConsumedRequest()
     {
         var harness = new Harness();
         harness.Feed.ListError = new HttpRequestException("429");
@@ -404,7 +404,8 @@ public sealed class NewsFeedServiceTests
         await harness.PollAsync();
 
         Assert.Equal("news-feed", Assert.Single(harness.Diagnostics.Failures).Scope);
-        Assert.Empty(harness.Store.Texts);
+        var state = Assert.Single(harness.Store.Texts);
+        Assert.Contains("feedRequestTimes", state.Value);
         Assert.NotNull(harness.State.LastPollAt);
     }
 

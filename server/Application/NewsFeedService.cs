@@ -105,6 +105,9 @@ public sealed class NewsFeedService(
         while (page <= Math.Max(1, options.MaxPages) && budget > 0)
         {
             if (!ReserveFeedRequest(clock.GetUtcNow())) break;
+            // 공급자 호출은 빈 응답이나 예외에서도 쿼터를 소비할 수 있다.
+            // 호출 직후 시각을 저장해 재기동으로 일일 한도를 우회하지 않게 한다.
+            await SaveStateAsync(new NewsFeedState(maxId, maxCreatedAt, _dailyFeedRequests.ToArray()), ct);
             IReadOnlyList<NewsFeedItem> items;
             try { items = await feed.ListAsync(page, ct); }
             finally { budget--; }
