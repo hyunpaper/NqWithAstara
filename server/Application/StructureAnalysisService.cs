@@ -507,7 +507,7 @@ public sealed class StructureAnalysisService(
     /// 반환 null = 이 poll에 진입 시도 자체가 없음(off/shadow, READY 없음). 오류·거절은 v4 fallback 없이
     /// 진입 보류로 남긴다(§16B).
     /// </summary>
-    async Task<ActiveEntryResult?> TryEnterPreferredAsync(StructureObservationRequest request,
+    public async Task<ActiveEntryResult?> TryEnterPreferredAsync(StructureObservationRequest request,
         ImmutableArray<EntryCandidate> candidates, string? preferredId, StructureSnapshot snapshot,
         TrendAssessment? trend, DateTimeOffset now, IReadOnlyList<Candle> completedBars,
         CancellationToken ct)
@@ -664,7 +664,7 @@ public sealed class StructureAnalysisService(
                 .ToImmutableArray(),
             false, code, chosen.EventId);
 
-    sealed record ActiveEntryResult(ImmutableArray<EntryCandidate> Candidates, bool Entered, string? Note,
+    public sealed record ActiveEntryResult(ImmutableArray<EntryCandidate> Candidates, bool Entered, string? Note,
         string? BlockedEventId = null);
 
     /// <summary>
