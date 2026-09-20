@@ -69,7 +69,9 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
     {
         id = record.Id,
         title = record.Title,
+        titleKo = record.TitleKo,
         source = record.Source,
+        sourceKo = record.SourceKo,
         createdAt = record.CreatedAt,
         tickers = record.Tickers,
         matchedSymbols = record.MatchedSymbols,
@@ -77,6 +79,7 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         sentiment = record.Sentiment,
         strength = record.Strength,
         reason = record.Reason,
+        impactScores = record.ImpactScores,
         model = record.Model,
         latencyMs = record.LatencyMs,
         classifiedAt = record.ClassifiedAt,

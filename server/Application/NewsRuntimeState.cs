@@ -55,7 +55,10 @@ public sealed record NewsRecord(
     string InputKind = NewsInputKinds.Body,
     string PromptVersion = "",
     string? ClassifiedFrom = null,
-    IReadOnlyList<NewsEntity>? Entities = null);
+    IReadOnlyList<NewsEntity>? Entities = null,
+    string? TitleKo = null,
+    string? SourceKo = null,
+    IReadOnlyDictionary<string, int>? ImpactScores = null);
 
 /// <summary>health·조회가 함께 보는 뉴스 런타임 상태(#151 §6). 스레드 안전하다.</summary>
 public sealed class NewsRuntimeState

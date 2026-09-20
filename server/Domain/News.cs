@@ -193,7 +193,9 @@ public static class NewsSentimentDecay
 }
 
 /// <summary>로컬 LLM 분류 결과(#151 §3). 심볼은 관심종목에 한정하지 않는다.</summary>
-public sealed record NewsClassification(IReadOnlyList<string> Symbols, string Sentiment, int Strength, string Reason);
+public sealed record NewsClassification(IReadOnlyList<string> Symbols, string Sentiment, int Strength, string Reason,
+    string? KoreanTitle = null, string? KoreanSource = null,
+    IReadOnlyDictionary<string, int>? ImpactScores = null);
 
 /// <summary>
 /// 분류 JSON 파서(#151 §3). 코드펜스·앞뒤 잡문을 제거하고 첫 JSON 객체만 읽는다.
@@ -219,7 +221,8 @@ public static class NewsClassificationParser
             var symbols = Symbols(root);
             if (symbols.Count == 0) symbols = [NewsSymbols.Market];
 
-            return new NewsClassification(symbols, sentiment!, Strength(root), Reason(root));
+            return new NewsClassification(symbols, sentiment!, Strength(root), Reason(root),
+                Text(root, "title_ko"), Text(root, "source_ko"), ImpactScores(root));
         }
         catch (JsonException) { return null; }
     }
@@ -263,6 +266,18 @@ public static class NewsClassificationParser
     {
         var reason = Text(root, "reason")?.Trim() ?? "";
         return reason.Length > MaxReasonLength ? reason[..MaxReasonLength] : reason;
+    }
+
+    static IReadOnlyDictionary<string, int>? ImpactScores(JsonElement root)
+    {
+        if (!root.TryGetProperty("impact", out var element) || element.ValueKind != JsonValueKind.Object) return null;
+        var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var property in element.EnumerateObject())
+        {
+            var value = property.Value.ValueKind == JsonValueKind.Number && property.Value.TryGetInt32(out var n) ? n : 0;
+            if (property.Name.Length > 0) result[property.Name.Trim().TrimStart('$').ToUpperInvariant()] = Math.Clamp(value, 0, 100);
+        }
+        return result.Count == 0 ? null : result;
     }
 
     static string? Text(JsonElement root, string name)

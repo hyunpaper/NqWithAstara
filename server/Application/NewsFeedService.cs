@@ -329,7 +329,8 @@ public sealed class NewsFeedService(
             clock.GetUtcNow(),
             inputKind,
             result.PromptVersion,
-            classifiedFrom, entry.Article.Entities);
+            classifiedFrom, entry.Article.Entities, classification?.KoreanTitle,
+            classification?.KoreanSource, classification?.ImpactScores);
     }
 
     async Task SaveAsync(NewsRecord record, CancellationToken ct)
