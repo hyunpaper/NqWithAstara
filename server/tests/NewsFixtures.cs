@@ -25,6 +25,11 @@ sealed class FakeNewsFeed : INewsFeed
     public List<int> ListCalls { get; } = [];
     public List<string> DetailCalls { get; } = [];
     public Exception? ListError { get; set; }
+    public string Name { get; set; } = "feed";
+    public TimeSpan MinimumInterval { get; set; }
+    public int DailyRequestLimit { get; set; } = int.MaxValue;
+    public string? BatchStatus { get; set; }
+    public IReadOnlyList<NewsProviderFetchStatus>? ProviderStatuses { get; set; }
 
     public Task<IReadOnlyList<NewsFeedItem>> ListAsync(int page, CancellationToken ct)
     {
@@ -32,6 +37,14 @@ sealed class FakeNewsFeed : INewsFeed
         if (ListError is not null) throw ListError;
         return Task.FromResult<IReadOnlyList<NewsFeedItem>>(
             Pages.TryGetValue(page, out var items) ? items.ToArray() : []);
+    }
+
+    public async Task<NewsFeedBatch> FetchAsync(int page, CancellationToken ct)
+    {
+        var items = await ListAsync(page, ct);
+        var status = BatchStatus ?? (items.Count == 0 ? "empty" : "ok");
+        return new NewsFeedBatch(items, status,
+            ProviderStatuses ?? [new NewsProviderFetchStatus(Name, status, items.Count)]);
     }
 
     public Task<NewsDetail?> DetailAsync(string id, CancellationToken ct)
@@ -58,8 +71,17 @@ sealed class FakeNewsClassifier : INewsClassifier
 sealed class FakeNewsTranslator : INewsTranslator
 {
     public Func<string, string, (string Title, string Source)?> Respond { get; set; } = (_, _) => null;
+    public Func<string, string?> TextRespond { get; set; } = _ => null;
+    public List<string> TextCalls { get; } = [];
+    public bool IsConfigured { get; set; } = true;
     public Task<(string Title, string Source)?> TranslateAsync(string title, string source, CancellationToken ct)
         => Task.FromResult(Respond(title, source));
+
+    public Task<string?> TranslateTextAsync(string text, CancellationToken ct)
+    {
+        TextCalls.Add(text);
+        return Task.FromResult(TextRespond(text));
+    }
 }
 
 sealed class MemoryNewsStore : INewsStore
@@ -131,5 +153,8 @@ static class NewsBuilder
         NewsOptions options, FakeNewsFeed feed, FakeNewsClassifier classifier, MemoryNewsStore store,
         NewsLocalStore local, NewsRuntimeState state, NewsClock clock, NewsDiagnostics diagnostics,
         INewsTranslator? translator = null)
-        => new(options, feed, classifier, store, local, state, diagnostics, clock, translator);
+    {
+        var queue = translator is null ? null : new NewsTranslationQueue(options, translator, store, state, diagnostics, clock);
+        return new NewsFeedService(options, feed, classifier, store, local, state, diagnostics, clock, queue);
+    }
 }

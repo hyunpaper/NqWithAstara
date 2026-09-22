@@ -179,6 +179,7 @@ public sealed class NewsHostContractTests(AstraHostFixture host) : IClassFixture
         Assert.NotNull(services.GetRequiredService<INewsClassifier>());
         Assert.NotNull(services.GetRequiredService<INewsStore>());
         Assert.NotNull(services.GetRequiredService<NewsRuntimeState>());
+        Assert.NotNull(services.GetRequiredService<NewsTranslationQueue>());
         Assert.NotNull(services.GetRequiredService<NewsFeedService>());
         Assert.NotNull(services.GetRequiredService<NewsQueryService>());
     }
@@ -187,6 +188,7 @@ public sealed class NewsHostContractTests(AstraHostFixture host) : IClassFixture
     public void NewsHostedServiceIsRegisteredAndDisabledByDefault()
     {
         Assert.Contains(host.Factory.Services.GetServices<IHostedService>(), s => s is NewsService);
+        Assert.Contains(host.Factory.Services.GetServices<IHostedService>(), s => s is NewsTranslationService);
         Assert.False(host.Factory.Services.GetRequiredService<NewsOptions>().Enabled);
     }
 
@@ -216,5 +218,25 @@ public sealed class NewsHostContractTests(AstraHostFixture host) : IClassFixture
         using var sentiment = JsonDocument.Parse(await client.GetStringAsync("/api/news/sentiment"));
         Assert.Equal(30d, sentiment.RootElement.GetProperty("halfLifeMinutes").GetDouble());
         Assert.Empty(sentiment.RootElement.GetProperty("symbols").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task NewsDetailEndpointAcceptsOpaqueQueryIdsAndReturns404ForUnknownIds()
+    {
+        using var isolated = new AstraHostFixture();
+        var id = "https://provider.example/news/a/b?x=1";
+        var state = isolated.Factory.Services.GetRequiredService<NewsRuntimeState>();
+        state.Add(new NewsRecord(id, "상세 기사", "Reuters", DateTimeOffset.UtcNow, [], [], ["AAPL"],
+            NewsSentiments.Positive, 3, "이유", "qwen", 10, DateTimeOffset.UtcNow), 300);
+        using var client = isolated.Factory.CreateClient();
+
+        using var found = await client.GetAsync($"/api/news/detail?id={Uri.EscapeDataString(id)}&symbol=AAPL");
+        using var missing = await client.GetAsync("/api/news/detail?id=missing-opaque-id");
+
+        Assert.True(found.IsSuccessStatusCode);
+        using var json = JsonDocument.Parse(await found.Content.ReadAsStringAsync());
+        Assert.Equal(id, json.RootElement.GetProperty("id").GetString());
+        Assert.Equal("AAPL", json.RootElement.GetProperty("evidenceSymbol").GetString());
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, missing.StatusCode);
     }
 }

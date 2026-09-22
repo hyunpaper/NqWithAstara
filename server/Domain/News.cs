@@ -53,7 +53,8 @@ public sealed record NewsArticle(
     string? GroupId = null,
     IReadOnlyList<NewsEntity>? Entities = null,
     string Content = "",
-    string InputKind = "");
+    string InputKind = "",
+    string? Url = null);
 
 /// <summary>분류 입력으로 무엇을 썼는지(#151). 판정 근거를 사후에 되짚기 위해 레코드에 남긴다.</summary>
 public static class NewsInputKinds
