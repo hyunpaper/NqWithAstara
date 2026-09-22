@@ -136,13 +136,14 @@ public sealed class NewsRuntimeState
         {
             LastPollAt = at;
             FeedStatus = status;
-            LastError = status == "failed" ? "provider_failed" : null;
+            LastError = status is "failed" or "invalid_response" ? "provider_failed" : null;
             if (fetched) LastFetchAt = at;
             if (status is "ok" or "empty" or "partial" or "baseline") LastSuccessAt = at;
             if (newCount > 0) LastNewArticleAt = at;
             if (latestPublishedAt is not null && latestPublishedAt != DateTimeOffset.MinValue
                 && (LatestPublishedAt is null || latestPublishedAt > LatestPublishedAt))
                 LatestPublishedAt = latestPublishedAt;
+            if (providers.Count == 0) return;
             var previous = Providers.ToDictionary(x => x.Provider, StringComparer.OrdinalIgnoreCase);
             Providers = providers.Select(x =>
             {

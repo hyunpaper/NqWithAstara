@@ -226,6 +226,7 @@ public sealed class NewsEvidenceQueryTests
             [new NewsProviderFetchStatus("google-rss", "ok", 4, 2)]);
         state.CollectionCompleted(Now, "quota_wait", true, 0, null,
             [new NewsProviderFetchStatus("google-rss", "quota_wait", 0)]);
+        state.CollectionCompleted(Now.AddMinutes(1), "quota_wait", false, 0, null, []);
 
         var provider = Assert.Single(state.Providers);
         Assert.Equal("quota_wait", provider.Status);
