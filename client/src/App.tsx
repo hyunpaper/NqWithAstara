@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   Activity,
@@ -23,7 +23,6 @@ import {
   X,
 } from "lucide-react";
 import { useVisiblePolling } from "./useVisiblePolling";
-import LiquidityPanel from "./LiquidityPanel";
 import FeeWarningBadge from "./FeeWarningBadge";
 import StructurePanel from "./StructurePanel";
 // 이슈 #84: v5 코호트 섹션(SimStructurePanel)은 대시보드 렌더링에서 제거했다.
@@ -55,24 +54,26 @@ import { blockTradeLabel, flowSourceLabel } from "./tradeTape";
 import { turnoverText } from "./metricsFormat";
 import NewsPanel from "./NewsPanel";
 import NewsTicker from "./NewsTicker";
-import type { NewsSymbolScore } from "./newsTypes";
+import NewsDetailPanel from "./NewsDetailPanel";
+import { NewsScorePopover } from "./NewsEvidenceTooltip";
+import type { NewsEvidenceItem, NewsSymbolScore } from "./newsTypes";
 import {
+  articleFromEvidence,
   findSymbolScore,
   normalizeNewsHealth,
   normalizeSentimentResponse,
   shouldRenderNewsUi,
   type NewsSentimentResponse,
 } from "./newsTypes";
-import { scoreBadge, scoreBadgeTitle } from "./newsFormat";
+import { useNewsDetail } from "./useNewsDetail";
+import { scoreBadge } from "./newsFormat";
 import type { Badge } from "./newsFormat";
-import ConfluencePanel from "./ConfluencePanel";
 import { gaugeTone, scoreText2 } from "./confluenceFormat";
 import HistoricalReplayPanel from "./HistoricalReplayPanel";
 import { WatchList } from "./WatchRowContent";
 import type { WatchListItem } from "./WatchRowContent";
 import { WATCH_ORDER_URL, watchOrderRequest } from "./watchReorder";
-
-type Bar = { time: string; close: number; ema?: number; vwap?: number };
+import { normalizeChartBars, type ChartBar as Bar } from "./chartData";
 type Indicators = {
   rsi: number | null;
   emaFast: number | null;
@@ -276,17 +277,18 @@ const watchBadges = (
   newsBadge: Badge | null,
   newsScore: NewsSymbolScore | null,
   confluence: number | null,
+  onSelectEvidence: (evidence: NewsEvidenceItem, trigger: HTMLElement) => void,
 ): ReactNode[] => {
   const badges: ReactNode[] = [];
-  if (newsBadge)
+  if (newsBadge && newsScore)
     badges.push(
-      <span
+      <NewsScorePopover
         key="news"
+        score={newsScore}
         className={newsBadge.className}
-        title={scoreBadgeTitle(newsScore?.count, newsScore?.latestAt)}
-      >
-        {newsBadge.label}
-      </span>,
+        label={newsBadge.label}
+        onSelectEvidence={onSelectEvidence}
+      />,
     );
   if (confluence != null)
     badges.push(
@@ -370,22 +372,22 @@ const time = (v: string | null | undefined) => {
 
 function MiniChart({ bars, positive }: { bars: Bar[]; positive: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const normalized = useMemo(() => normalizeChartBars(bars), [bars]);
   useEffect(() => {
     const c = ref.current;
-    if (!c || bars.length < 2) return;
+    if (!c || normalized.length < 2) return;
     const rect = c.getBoundingClientRect(),
       dpr = devicePixelRatio || 1;
     c.width = rect.width * dpr;
     c.height = rect.height * dpr;
     const x = c.getContext("2d")!;
     x.scale(dpr, dpr);
-    const all = bars.flatMap((b) =>
-      [b.close, b.ema, b.vwap].filter((v): v is number => v != null),
-    );
+    const candles = normalized;
+    const all = candles.flatMap((b) => [b.high!, b.low!]);
     const lo = Math.min(...all),
       hi = Math.max(...all),
       range = hi - lo || 1;
-    const px = (i: number) => (i / (bars.length - 1)) * rect.width;
+    const px = (i: number) => ((i + 0.5) / candles.length) * rect.width;
     const py = (v: number) => 8 + ((hi - v) / range) * (rect.height - 20);
     const line = (
       get: (b: Bar) => number | undefined,
@@ -396,7 +398,7 @@ function MiniChart({ bars, positive }: { bars: Bar[]; positive: boolean }) {
       x.beginPath();
       x.setLineDash(dash);
       let started = false;
-      bars.forEach((b, i) => {
+      candles.forEach((b, i) => {
         const v = get(b);
         if (v == null) return;
         started ? x.lineTo(px(i), py(v)) : x.moveTo(px(i), py(v));
@@ -408,36 +410,28 @@ function MiniChart({ bars, positive }: { bars: Bar[]; positive: boolean }) {
       x.setLineDash([]);
     };
     x.clearRect(0, 0, rect.width, rect.height);
-    const grad = x.createLinearGradient(0, 0, 0, rect.height);
-    const color = positive ? "#27c499" : "#ef6571";
-    grad.addColorStop(
-      0,
-      positive ? "rgba(39,196,153,.25)" : "rgba(239,101,113,.22)",
-    );
-    grad.addColorStop(1, "rgba(0,0,0,0)");
-    x.beginPath();
-    bars.forEach((b, i) => {
-      i ? x.lineTo(px(i), py(b.close)) : x.moveTo(px(i), py(b.close));
+    const width = Math.max(2, Math.min(10, rect.width / candles.length * 0.65));
+    candles.forEach((b, i) => {
+      const up = b.close >= b.open!;
+      const color = up ? "#27c499" : "#ef6571";
+      const xPos = px(i);
+      x.strokeStyle = color;
+      x.fillStyle = color;
+      x.lineWidth = 1;
+      x.beginPath(); x.moveTo(xPos, py(b.high!)); x.lineTo(xPos, py(b.low!)); x.stroke();
+      const top = py(Math.max(b.open!, b.close));
+      const bottom = py(Math.min(b.open!, b.close));
+      x.fillRect(xPos - width / 2, top, width, Math.max(1, bottom - top));
     });
-    x.lineTo(rect.width, rect.height);
-    x.lineTo(0, rect.height);
-    x.fillStyle = grad;
-    x.fill();
     line((b) => b.vwap, "#e8a04c", 1.3, [5, 4]);
     line((b) => b.ema, "#6aa7ff", 1.3, []);
-    line((b) => b.close, color, 2, []);
-  }, [bars, positive]);
-  return bars.length < 2 ? (
-    <div className="chart-empty">차트 데이터 대기 중</div>
+  }, [normalized, positive]);
+  return normalized.length < 2 ? (
+    <div className="chart-empty">분봉 OHLC 데이터 부족 · 차트 대기 중</div>
   ) : (
     <>
       <canvas ref={ref} />
-      {bars.some((b) => b.vwap != null) && (
-        <div className="chart-legend">
-          <i className="l-close" /> 종가 <i className="l-ema" /> EMA9{" "}
-          <i className="l-vwap" /> VWAP
-        </div>
-      )}
+      <div className="chart-legend"><i className="l-close" /> 상승/하락 분봉 <i className="l-ema" /> EMA9 <i className="l-vwap" /> VWAP</div>
     </>
   );
 }
@@ -488,6 +482,7 @@ export default function App() {
   const previousRunning = useRef<boolean | null>(null);
   const lastNotified = useRef<Record<string, number>>({});
   const formDrafts = useRef<Record<string, { entryPrice: string; quantity: string }>>({});
+  const newsDetail = useNewsDetail();
   const load = async (silent = false) => {
     if (loadingState.current) return;
     loadingState.current = true;
@@ -825,7 +820,12 @@ export default function App() {
             tone: ((s.changePercent ?? 0) >= 0 ? "up" : "down") as "up" | "down",
           }
         : null,
-      badges: watchBadges(scoreBadge(newsScore?.score), newsScore, confluence),
+      badges: watchBadges(
+        scoreBadge(newsScore?.score),
+        newsScore,
+        confluence,
+        (evidence, trigger) => newsDetail.open(articleFromEvidence(evidence), trigger, w.symbol),
+      ),
     };
   });
   const submit = (e: FormEvent) => {
@@ -956,14 +956,12 @@ export default function App() {
             </div>
           </div>
           <div className="header-actions">
-            {marketNewsBadge && (
-              <span
-                className={marketNewsBadge.className}
-                title={scoreBadgeTitle(newsSentiment?.market?.count, newsSentiment?.market?.latestAt)}
-              >
-                시장 분위기 {marketNewsBadge.label}
-              </span>
-            )}
+            {marketNewsBadge && newsSentiment?.market && <NewsScorePopover
+              score={newsSentiment.market}
+              className={marketNewsBadge.className}
+              label={`시장 분위기 ${marketNewsBadge.label}`}
+              onSelectEvidence={(evidence, trigger) => newsDetail.open(articleFromEvidence(evidence), trigger, "MARKET")}
+            />}
             <FeeWarningBadge warnings={state?.warnings} />
             <div className={`market ${state?.market.isOpen ? "open" : ""}`}>
               <span />
@@ -1030,7 +1028,7 @@ export default function App() {
             </button>
           </div>
         </header>
-        <NewsTicker />
+        <NewsTicker onSelectArticle={(article, trigger) => newsDetail.open(article, trigger)} />
         {notice && (
           <div className="notice">
             <Bell size={15} />
@@ -1395,15 +1393,8 @@ export default function App() {
             running={!!state?.running}
           />
         )}
-        {selected && <LiquidityPanel key={selected} symbol={selected} />}
-        {selected && (
-          <ConfluencePanel
-            key={selected}
-            symbol={selected}
-            onScore={(symbol, score) => setConfluenceScore({ symbol, score })}
-          />
-        )}
-        {selected && newsUiEnabled && <NewsPanel key={selected} symbol={selected} />}
+        {selected && newsUiEnabled && <NewsPanel key={selected} symbol={selected} onSelectArticle={(article, trigger) => newsDetail.open(article, trigger, selected)} />}
+        {newsDetail.selected && <NewsDetailPanel article={newsDetail.detail ?? newsDetail.selected} state={newsDetail.state} onClose={newsDetail.close} />}
         </div>
         <footer>
           본 화면의 시그널은 기술적 조건 충족 점수이며 수익 확률이나 투자 권유가

@@ -32,6 +32,20 @@ public sealed class PapagoNewsTranslator : INewsTranslator
         catch (InvalidOperationException) { return null; }
     }
 
+    public bool IsConfigured => !string.IsNullOrWhiteSpace(_options.PapagoClientId)
+        && !string.IsNullOrWhiteSpace(_options.PapagoClientSecret);
+
+    public async Task<string?> TranslateTextAsync(string text, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(_options.PapagoClientId) || string.IsNullOrWhiteSpace(_options.PapagoClientSecret)) return null;
+        try { return await TranslateOneAsync(text.Length > 5000 ? text[..5000] : text, ct); }
+        catch (HttpRequestException) { return null; }
+        catch (TaskCanceledException) when (!ct.IsCancellationRequested) { return null; }
+        catch (JsonException) { return null; }
+        catch (KeyNotFoundException) { return null; }
+        catch (InvalidOperationException) { return null; }
+    }
+
     async Task<string?> TranslateOneAsync(string text, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(text)) return text;

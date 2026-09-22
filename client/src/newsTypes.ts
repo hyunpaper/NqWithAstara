@@ -23,8 +23,69 @@ export type NewsArticle = {
   inputKind: NewsInputKind | null;
   entities: NewsEntity[];
   impactScores?: Record<string, number>;
+  url?: string | null;
+  summary?: string | null;
+  body?: string | null;
+  summaryKo?: string | null;
+  contentKo?: string | null;
+  classificationText?: string | null;
+  classificationTextKo?: string | null;
+  classificationSource?: string | null;
+  publishedAtStatus?: string | null;
+  evidence?: NewsEvidenceItem[];
+  remainingEvidenceCount?: number | null;
+  remainingContribution?: number | null;
+  provenance?: string | null;
+  translationStatus?: string | null;
+  collectedAt?: string | null;
+  evidenceSource?: string | null;
+  promptVersion?: string | null;
+  classifiedFrom?: string | null;
+  evidenceArticleId?: string | null;
+  evidenceSymbol?: string | null;
+  snapshotId?: string | null;
+  asOf?: string | null;
+  score?: number | null;
+  totalWeight?: number | null;
+  remainingWeight?: number | null;
+  titleTranslationStatus?: string | null;
+  summaryTranslationStatus?: string | null;
+  contentTranslationStatus?: string | null;
+  classificationTranslationStatus?: string | null;
+};
+export type NewsEvidenceItem = {
+  id: string;
+  title: string;
+  titleKo?: string | null;
+  source?: string | null;
+  sourceKo?: string | null;
+  sentiment: NewsSentimentLabel;
+  strength: number | null;
+  weight: number | null;
+  contribution: number | null;
+  createdAt: string | null;
 };
 export type NewsEntity = { symbol: string; name: string; industry: string; sentimentScore: number | null; matchScore: number | null };
+
+export const articleFromEvidence = (evidence: NewsEvidenceItem): NewsArticle => ({
+  id: evidence.id,
+  title: evidence.title,
+  titleKo: evidence.titleKo,
+  source: evidence.source ?? null,
+  sourceKo: evidence.sourceKo,
+  createdAt: evidence.createdAt,
+  tickers: [],
+  matchedSymbols: [],
+  symbols: [],
+  sentiment: evidence.sentiment,
+  strength: evidence.strength,
+  reason: null,
+  model: null,
+  latencyMs: null,
+  classifiedAt: null,
+  inputKind: null,
+  entities: [],
+});
 
 export type NewsArticlesResponse = {
   enabled: boolean;
@@ -38,6 +99,13 @@ export type NewsSymbolScore = {
   count: number;
   latestAt: string | null;
   weight?: number | null;
+  evidence?: NewsEvidenceItem[];
+  remainingEvidenceCount?: number;
+  remainingContribution?: number;
+  remainingWeight?: number;
+  snapshotId?: string | null;
+  asOf?: string | null;
+  totalWeight?: number | null;
 };
 
 export type NewsSentimentResponse = {
@@ -74,6 +142,26 @@ const sentimentOf = (v: unknown): NewsSentimentLabel =>
 const inputKindOf = (v: unknown): NewsInputKind | null =>
   KNOWN_INPUT_KINDS.includes(v as NewsInputKind) ? (v as NewsInputKind) : null;
 
+const normalizeEvidence = (raw: unknown): NewsEvidenceItem[] =>
+  Array.isArray(raw) ? raw.flatMap((item) => {
+    if (typeof item !== "object" || item === null) return [];
+    const e = item as Record<string, unknown>;
+    const id = str(e.id);
+    if (!id) return [];
+    return [{
+      id,
+      title: str(e.title) ?? "(제목 없음)",
+      titleKo: str(e.titleKo),
+      source: str(e.source),
+      sourceKo: str(e.sourceKo),
+      sentiment: sentimentOf(e.sentiment),
+      strength: num(e.strength),
+      weight: num(e.weight),
+      contribution: num(e.contribution),
+      createdAt: str(e.createdAt),
+    }];
+  }) : [];
+
 /** id 없는 기사는 목록에서 제외한다 — 키·클릭 대상 식별이 불가능하다. */
 export const normalizeArticle = (raw: unknown): NewsArticle | null => {
   if (typeof raw !== "object" || raw === null) return null;
@@ -101,6 +189,35 @@ export const normalizeArticle = (raw: unknown): NewsArticle | null => {
     impactScores: typeof r.impactScores === "object" && r.impactScores !== null
       ? Object.fromEntries(Object.entries(r.impactScores as Record<string, unknown>).flatMap(([k, v]) => typeof v === "number" && Number.isFinite(v) ? [[k, v]] : []))
       : {},
+    url: str(r.url) ?? str(r.link),
+    summary: str(r.summary),
+    body: str(r.body) ?? str(r.content),
+    summaryKo: str(r.summaryKo),
+    contentKo: str(r.contentKo),
+    classificationText: str(r.classificationText),
+    classificationTextKo: str(r.classificationTextKo),
+    classificationSource: str(r.classificationSource),
+    publishedAtStatus: str(r.publishedAtStatus),
+    provenance: str(r.provenance) ?? str(r.sourceType),
+    translationStatus: str(r.translationStatus),
+    collectedAt: str(r.collectedAt),
+    evidenceSource: str(r.evidenceSource),
+    promptVersion: str(r.promptVersion),
+    classifiedFrom: str(r.classifiedFrom),
+    evidenceArticleId: str(r.evidenceArticleId),
+    evidenceSymbol: str(r.evidenceSymbol),
+    snapshotId: str(r.snapshotId),
+    asOf: str(r.asOf),
+    score: num(r.score),
+    totalWeight: num(r.totalWeight),
+    remainingWeight: num(r.remainingWeight),
+    titleTranslationStatus: str(r.titleTranslationStatus),
+    summaryTranslationStatus: str(r.summaryTranslationStatus),
+    contentTranslationStatus: str(r.contentTranslationStatus),
+    classificationTranslationStatus: str(r.classificationTranslationStatus),
+    evidence: normalizeEvidence(r.evidence),
+    remainingEvidenceCount: num(r.remainingEvidenceCount),
+    remainingContribution: num(r.remainingContribution),
   };
 };
 
@@ -118,7 +235,20 @@ const normalizeScore = (raw: unknown): NewsSymbolScore | null => {
   const symbol = str(r.symbol);
   const score = num(r.score);
   if (!symbol || score === null) return null;
-  return { symbol, score, count: num(r.count) ?? 0, latestAt: str(r.latestAt), weight: num(r.weight) };
+  return {
+    symbol,
+    score,
+    count: num(r.count) ?? 0,
+    latestAt: str(r.latestAt),
+    weight: num(r.weight),
+    evidence: normalizeEvidence(r.evidence),
+    remainingEvidenceCount: num(r.remainingEvidenceCount) ?? 0,
+    remainingContribution: num(r.remainingContribution) ?? 0,
+    remainingWeight: num(r.remainingWeight) ?? 0,
+    snapshotId: str(r.snapshotId),
+    asOf: str(r.asOf),
+    totalWeight: num(r.totalWeight),
+  };
 };
 
 export const normalizeSentimentResponse = (raw: unknown): NewsSentimentResponse => {
