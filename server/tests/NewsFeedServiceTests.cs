@@ -21,6 +21,7 @@ public sealed class NewsFeedServiceTests
         public NewsRuntimeState State { get; } = new();
         public NewsClock Clock { get; } = new(Start);
         public NewsDiagnostics Diagnostics { get; } = new();
+        public NewsTranslationQueue? TranslationQueue { get; }
         public NewsFeedService Service { get; }
 
         public Harness(params WatchItem[] watchlist) : this(null, watchlist) { }
@@ -28,7 +29,10 @@ public sealed class NewsFeedServiceTests
         public Harness(INewsTranslator? translator, params WatchItem[] watchlist)
         {
             Local = new NewsLocalStore(watchlist);
-            Service = NewsBuilder.Service(Options, Feed, Classifier, Store, Local, State, Clock, Diagnostics, translator);
+            TranslationQueue = translator is null ? null
+                : new NewsTranslationQueue(Options, translator, Store, State, Diagnostics, Clock);
+            Service = new NewsFeedService(Options, Feed, Classifier, Store, Local, State, Diagnostics, Clock,
+                TranslationQueue);
         }
 
         public Task PollAsync() => Service.PollAsync(CancellationToken.None);
@@ -360,7 +364,10 @@ public sealed class NewsFeedServiceTests
         await harness.PollAsync();
 
         Assert.Equal("긴 본문", Assert.Single(harness.Classifier.Requests).Body);
-        Assert.Equal(NewsInputKinds.Body, Assert.Single(harness.Saved()).InputKind);
+        var saved = Assert.Single(harness.Saved());
+        Assert.Equal(NewsInputKinds.Body, saved.InputKind);
+        Assert.Equal("detail_body", saved.ClassificationSource);
+        Assert.Contains("긴 본문", saved.ClassificationText);
     }
 
     [Fact]
@@ -477,7 +484,7 @@ public sealed class NewsFeedServiceTests
         await harness.PollAsync();
 
         Assert.Equal("news-feed", Assert.Single(harness.Diagnostics.Failures).Scope);
-        Assert.Equal("timeout", harness.State.LastError);
+        Assert.Equal("internal_error", harness.State.LastError);
         Assert.Null(harness.State.LastSuccessAt);
     }
 
@@ -563,6 +570,9 @@ public sealed class NewsFeedServiceTests
         Assert.Equal(NewsSentiments.Negative, saved["101"].Sentiment);
         Assert.Equal(3, saved["101"].Strength);
         Assert.Equal(0, saved["101"].LatencyMs);
+        Assert.Equal(saved["102"].ClassificationText, saved["101"].ClassificationText);
+        Assert.Equal("representative", saved["101"].ClassificationSource);
+        Assert.Equal("102", saved["101"].EvidenceArticleId);
     }
 
     [Fact]
@@ -604,8 +614,9 @@ public sealed class NewsFeedServiceTests
         harness.Classifier.Respond = _ => new NewsClassificationResult(
             new NewsClassification(["MARKET"], NewsSentiments.Neutral, 1, "영향 제한", "시장 주요 기업 기사", "야후 파이낸스", new Dictionary<string, int> { ["MARKET"] = 10 }),
             "qwen", 10, true, "v2c");
+        var firstCollectedAt = Start.AddHours(-2);
         var record = new NewsRecord("90", "영문 기사", "Yahoo Finance", Start, [], [], ["MARKET"],
-            NewsSentiments.Unclassified, 0, "", "qwen", 60000, Start);
+            NewsSentiments.Unclassified, 0, "", "qwen", 60000, Start, CollectedAt: firstCollectedAt);
         harness.Store.Files["2026-09-12.jsonl"] =
             [JsonSerializer.Serialize(record, new JsonSerializerOptions(JsonSerializerDefaults.Web))];
         harness.Page(1, Item("100", "기준"));
@@ -617,6 +628,7 @@ public sealed class NewsFeedServiceTests
         Assert.Equal("시장 주요 기업 기사", harness.Saved().Last().TitleKo);
         Assert.Equal("야후 파이낸스", harness.Saved().Last().SourceKo);
         Assert.Equal(10, harness.Saved().Last().ImpactScores!["MARKET"]);
+        Assert.Equal(firstCollectedAt, harness.Saved().Last().CollectedAt);
     }
 
     [Fact]
@@ -689,6 +701,107 @@ public sealed class NewsFeedServiceTests
         await harness.PollAsync();
         Assert.Equal("Ollama 번역", harness.Saved().Single().TitleKo);
         Assert.Equal("Ollama 출처", harness.Saved().Single().SourceKo);
+    }
+
+    [Fact]
+    public async Task 재기동은_pending_번역을_백그라운드큐에_복구한다()
+    {
+        var translator = new FakeNewsTranslator { TextRespond = text => "번역:" + text };
+        var harness = new Harness(translator);
+        var record = new NewsRecord("pending", "English", "한국어 출처", Start, [], [], ["MARKET"],
+            NewsSentiments.Neutral, 1, "이유", "qwen", 10, Start,
+            ImpactScores: new Dictionary<string, int> { ["MARKET"] = 1 }, TranslationStatus: "pending");
+        harness.Store.Files["2026-09-12.jsonl"] =
+            [JsonSerializer.Serialize(record, new JsonSerializerOptions(JsonSerializerDefaults.Web))];
+        harness.Page(1, Item("100", "기준"));
+
+        await harness.PollAsync();
+
+        Assert.Equal(1, harness.TranslationQueue!.QueueDepth);
+        Assert.True(await harness.TranslationQueue.ProcessNextAsync());
+        Assert.Equal("번역:English", harness.State.Find("pending")!.TitleKo);
+    }
+
+    [Fact]
+    public async Task 미처리_inbox가_재기동후_한번만_분류된다()
+    {
+        var harness = new Harness();
+        harness.Page(1, Item("100", "기준"));
+        await harness.PollAsync();
+        harness.Classifier.Respond = _ => new NewsClassificationResult(null, "qwen", 0, false);
+        harness.Page(1, Item("101", "복구 기사"), Item("100", "기준"));
+        await harness.PollAsync();
+        Assert.Empty(harness.Saved());
+
+        var restarted = new Harness();
+        restarted.Store.Texts[NewsFeedService.StateFile] = harness.Store.Texts[NewsFeedService.StateFile];
+        restarted.Page(1, Item("101", "복구 기사"), Item("100", "기준"));
+        await restarted.PollAsync();
+        await restarted.PollAsync();
+
+        Assert.Single(restarted.Classifier.Requests);
+        Assert.Single(restarted.Saved());
+        var state = JsonSerializer.Deserialize<NewsFeedState>(restarted.Store.Texts[NewsFeedService.StateFile],
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.All(state.Inbox!, entry => Assert.True(entry.Processed));
+    }
+
+    [Fact]
+    public async Task UTC자정뒤_도착한_전날기사가_재기동에도_중복없이_복원된다()
+    {
+        var harness = new Harness();
+        harness.Clock.Now = new DateTimeOffset(2026, 9, 12, 23, 59, 0, TimeSpan.Zero);
+        var baseline = NewsBuilder.Item("base", "기준", harness.Clock.Now, []);
+        harness.Page(1, baseline);
+        await harness.PollAsync();
+        harness.Clock.Now = new DateTimeOffset(2026, 9, 13, 0, 1, 0, TimeSpan.Zero);
+        var late = NewsBuilder.Item("late", "전날 지연 기사", harness.Clock.Now.AddMinutes(-3), []);
+        harness.Page(1, late, baseline);
+        await harness.PollAsync();
+        Assert.Single(harness.Store.Files["2026-09-13.jsonl"]);
+
+        var restarted = new Harness();
+        restarted.Clock.Now = harness.Clock.Now.AddMinutes(1);
+        restarted.Store.Texts[NewsFeedService.StateFile] = harness.Store.Texts[NewsFeedService.StateFile];
+        foreach (var file in harness.Store.Files)
+            restarted.Store.Files[file.Key] = file.Value.ToList();
+        restarted.Page(1, late, baseline);
+        await restarted.PollAsync();
+
+        Assert.Empty(restarted.Classifier.Requests);
+        Assert.Equal("late", Assert.Single(restarted.State.Recent()).Id);
+    }
+
+    [Fact]
+    public async Task 추적파라미터만_다른_URL은_공급자ID가_달라도_중복수집하지_않는다()
+    {
+        var harness = new Harness();
+        harness.Page(1, new NewsFeedItem("first", "기준", "요약", "Reuters", Start, [],
+            Url: "https://EXAMPLE.com/article?id=7&utm_source=feed", Provider: "one"));
+        await harness.PollAsync();
+        harness.Page(1, new NewsFeedItem("second", "중복", "요약", "Reuters", Start.AddMinutes(1), [],
+            Url: "https://example.com/article?utm_medium=rss&id=7#fragment", Provider: "two"));
+
+        await harness.PollAsync();
+
+        Assert.Empty(harness.Classifier.Requests);
+        Assert.Equal("https://example.com/article?id=7", NewsFeedService.CanonicalUrl(
+            "https://EXAMPLE.com/article?utm_source=feed&id=7#part"));
+    }
+
+    [Fact]
+    public async Task 쿼터대기는_성공수집과_구분해_health에_남긴다()
+    {
+        var harness = new Harness();
+        harness.Feed.BatchStatus = "quota_wait";
+        harness.Feed.ProviderStatuses = [new NewsProviderFetchStatus("marketaux", "quota_wait", 0)];
+
+        await harness.PollAsync();
+
+        Assert.Equal("quota_wait", harness.State.FeedStatus);
+        Assert.Null(harness.State.LastSuccessAt);
+        Assert.NotNull(harness.State.LastFetchAt);
+        Assert.Equal("marketaux", Assert.Single(harness.State.Providers).Provider);
     }
 
 }
