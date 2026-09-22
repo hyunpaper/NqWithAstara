@@ -1,30 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import type { MouseEvent } from "react";
 import { Newspaper } from "lucide-react";
 import { normalizeArticlesResponse, type NewsArticle } from "./newsTypes";
 import { absoluteTimeKst, inputKindLabel, relativeTimeKo, sentimentBadge } from "./newsFormat";
-import NewsDetailPanel from "./NewsDetailPanel";
 import NewsEvidenceTooltip from "./NewsEvidenceTooltip";
 
-export default function NewsPanel({ symbol }: { symbol: string }) {
+export default function NewsPanel({ symbol, onSelectArticle }: { symbol: string; onSelectArticle: (article: NewsArticle, trigger: HTMLElement) => void }) {
   const [articles, setArticles] = useState<NewsArticle[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [selected, setSelected] = useState<NewsArticle | null>(null);
-  const [detail, setDetail] = useState<NewsArticle | null>(null);
-  const [detailState, setDetailState] = useState<"idle" | "loading" | "error">("idle");
-  const detailRequest = useRef<AbortController | null>(null);
-  const openerRef = useRef<HTMLElement | null>(null);
-
-  const openDetail = async (article: NewsArticle) => {
-    openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    detailRequest.current?.abort();
-    setSelected(article);
-    setDetail(article);
-    setDetailState("loading");
-  };
 
   useEffect(() => {
-    setArticles([]); setSelected(null);
-    setDetail(null); setDetailState("idle");
+    setArticles([]);
     setLoaded(false);
     let active = true;
     let inFlight = false;
@@ -70,7 +56,6 @@ export default function NewsPanel({ symbol }: { symbol: string }) {
       active = false;
       if (timer) clearTimeout(timer);
       request?.abort();
-      detailRequest.current?.abort();
       document.removeEventListener("visibilitychange", visibility);
     };
   }, [symbol]);
@@ -93,9 +78,10 @@ export default function NewsPanel({ symbol }: { symbol: string }) {
           {articles.map((a) => {
             const badge = sentimentBadge(a.sentiment);
             const kind = inputKindLabel(a.inputKind);
+            const evidenceId = badge ? `news-evidence-${encodeURIComponent(a.id)}` : undefined;
             return (
               <li key={a.id}>
-                  <button type="button" className="news-row-button" onClick={() => void openDetail(a)} aria-label={`${a.titleKo ?? a.title} 상세 보기`}>
+                  <button type="button" className="news-row-button" onClick={(event: MouseEvent<HTMLButtonElement>) => onSelectArticle(a, event.currentTarget)} aria-label={`${a.titleKo ?? a.title} 상세 보기`} aria-describedby={evidenceId}>
                   <div className="news-row-head">
                     <span
                       className="news-time"
@@ -104,7 +90,7 @@ export default function NewsPanel({ symbol }: { symbol: string }) {
                       {relativeTimeKo(a.createdAt)}
                     </span>
                     {(a.sourceKo ?? a.source) && <span className="news-source">{a.sourceKo ?? a.source}</span>}
-                    {badge && <span className="news-badge-wrap"><span className={badge.className}>{badge.label}</span><NewsEvidenceTooltip article={a} /></span>}
+                    {badge && <span className="news-badge-wrap"><span className={badge.className}>{badge.label}</span><NewsEvidenceTooltip id={evidenceId} article={a} /></span>}
                   </div>
                   <div className="news-title">{a.titleKo ?? a.title}</div>
                   {a.reason && <div className="news-reason">{a.reason}</div>}
@@ -115,7 +101,6 @@ export default function NewsPanel({ symbol }: { symbol: string }) {
           })}
         </ul>
       )}
-      {selected && <NewsDetailPanel article={detail ?? selected} state={detailState} onClose={() => { detailRequest.current?.abort(); setSelected(null); setDetail(null); requestAnimationFrame(() => openerRef.current?.focus()); }} />}
     </section>
   );
 }

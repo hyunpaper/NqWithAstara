@@ -8,7 +8,7 @@ import {
 } from "./newsTypes";
 
 describe("normalizeArticlesResponse", () => {
-  it("opaque 상세 ID와 실제 번역·snapshot 근거 계약을 보존한다", () => {
+  it("불투명 상세 ID와 실제 번역·동일 시점 근거 계약을 보존한다", () => {
     const res = normalizeArticlesResponse({ enabled: true, articles: [{
       id: "opaque:save:20260921:abc%2F1", title: "English", titleKo: "한국어 제목", sourceKo: "로이터",
       summaryKo: "한국어 요약", contentKo: "한국어 본문", classificationText: "본문 기준 긍정",
@@ -103,6 +103,16 @@ describe("normalizeSentimentResponse", () => {
     expect(res.market?.symbol).toBe("MARKET");
     expect(res.symbols).toHaveLength(1);
     expect(res.symbols[0].symbol).toBe("AAPL");
+  });
+
+  it("점수와 같은 시점의 기사 기여도를 보존한다", () => {
+    const res = normalizeSentimentResponse({ enabled: true, symbols: [{
+      symbol: "AAPL", score: 3, count: 2, snapshotId: "snap-1", asOf: "2026-09-21T00:00:00Z", totalWeight: 1,
+      evidence: [{ id: "opaque:e/1", title: "Evidence", sentiment: "positive", contribution: 2.4 }],
+      remainingEvidenceCount: 1, remainingContribution: 0.6, remainingWeight: 0.2,
+    }] });
+    expect(res.symbols[0]).toMatchObject({ snapshotId: "snap-1", remainingContribution: 0.6, remainingWeight: 0.2 });
+    expect(res.symbols[0].evidence?.[0]).toMatchObject({ id: "opaque:e/1", contribution: 2.4 });
   });
 
   it("market이 null이면 그대로 null을 유지한다", () => {

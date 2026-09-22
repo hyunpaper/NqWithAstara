@@ -280,34 +280,32 @@ export function WatchList({
             >
               <GripVertical size={14} />
             </button>
-            <button
-              className="watch-select"
-              aria-label={`${item.symbol} ${item.name}`}
-              onClick={() => {
-                rollbackGrab();
-                if (suppressClick.current) {
-                  suppressClick.current = false;
-                  return;
-                }
-                onSelect(item.symbol);
-              }}
-              onKeyDown={(e) => {
-                const target = keyboardTargetIndex(index, symbols.length, {
-                  key: e.key,
-                  altKey: e.altKey,
-                });
-                if (target == null) return;
-                e.preventDefault();
-                void commit(moveItem(symbols, index, target));
-              }}
-            >
-              <WatchRowContent
-                symbol={item.symbol}
-                name={item.name}
-                change={item.change}
-                badges={item.badges}
-              />
-            </button>
+            <div className="watch-main">
+              <button
+                className="watch-select"
+                aria-label={`${item.symbol} ${item.name}`}
+                onClick={() => {
+                  rollbackGrab();
+                  if (suppressClick.current) {
+                    suppressClick.current = false;
+                    return;
+                  }
+                  onSelect(item.symbol);
+                }}
+                onKeyDown={(e) => {
+                  const target = keyboardTargetIndex(index, symbols.length, {
+                    key: e.key,
+                    altKey: e.altKey,
+                  });
+                  if (target == null) return;
+                  e.preventDefault();
+                  void commit(moveItem(symbols, index, target));
+                }}
+              >
+                <WatchRowContent symbol={item.symbol} name={item.name} change={item.change} />
+              </button>
+              {item.badges.length > 0 && <div className="watch-metrics" onPointerDown={(event) => event.stopPropagation()}>{item.badges}</div>}
+            </div>
             <button
               className="watch-move"
               aria-label={`${item.symbol} 위로 이동`}
