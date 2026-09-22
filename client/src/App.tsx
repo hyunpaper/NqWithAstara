@@ -54,15 +54,19 @@ import { blockTradeLabel, flowSourceLabel } from "./tradeTape";
 import { turnoverText } from "./metricsFormat";
 import NewsPanel from "./NewsPanel";
 import NewsTicker from "./NewsTicker";
-import type { NewsSymbolScore } from "./newsTypes";
+import NewsDetailPanel from "./NewsDetailPanel";
+import { NewsScorePopover } from "./NewsEvidenceTooltip";
+import type { NewsEvidenceItem, NewsSymbolScore } from "./newsTypes";
 import {
+  articleFromEvidence,
   findSymbolScore,
   normalizeNewsHealth,
   normalizeSentimentResponse,
   shouldRenderNewsUi,
   type NewsSentimentResponse,
 } from "./newsTypes";
-import { scoreBadge, scoreBadgeTitle } from "./newsFormat";
+import { useNewsDetail } from "./useNewsDetail";
+import { scoreBadge } from "./newsFormat";
 import type { Badge } from "./newsFormat";
 import { gaugeTone, scoreText2 } from "./confluenceFormat";
 import HistoricalReplayPanel from "./HistoricalReplayPanel";
@@ -273,17 +277,18 @@ const watchBadges = (
   newsBadge: Badge | null,
   newsScore: NewsSymbolScore | null,
   confluence: number | null,
+  onSelectEvidence: (evidence: NewsEvidenceItem, trigger: HTMLElement) => void,
 ): ReactNode[] => {
   const badges: ReactNode[] = [];
-  if (newsBadge)
+  if (newsBadge && newsScore)
     badges.push(
-      <span
+      <NewsScorePopover
         key="news"
+        score={newsScore}
         className={newsBadge.className}
-        title={scoreBadgeTitle(newsScore?.count, newsScore?.latestAt)}
-      >
-        {newsBadge.label}
-      </span>,
+        label={newsBadge.label}
+        onSelectEvidence={onSelectEvidence}
+      />,
     );
   if (confluence != null)
     badges.push(
@@ -477,6 +482,7 @@ export default function App() {
   const previousRunning = useRef<boolean | null>(null);
   const lastNotified = useRef<Record<string, number>>({});
   const formDrafts = useRef<Record<string, { entryPrice: string; quantity: string }>>({});
+  const newsDetail = useNewsDetail();
   const load = async (silent = false) => {
     if (loadingState.current) return;
     loadingState.current = true;
@@ -814,7 +820,12 @@ export default function App() {
             tone: ((s.changePercent ?? 0) >= 0 ? "up" : "down") as "up" | "down",
           }
         : null,
-      badges: watchBadges(scoreBadge(newsScore?.score), newsScore, confluence),
+      badges: watchBadges(
+        scoreBadge(newsScore?.score),
+        newsScore,
+        confluence,
+        (evidence, trigger) => newsDetail.open(articleFromEvidence(evidence), trigger, w.symbol),
+      ),
     };
   });
   const submit = (e: FormEvent) => {
@@ -945,14 +956,12 @@ export default function App() {
             </div>
           </div>
           <div className="header-actions">
-            {marketNewsBadge && (
-              <span
-                className={marketNewsBadge.className}
-                title={scoreBadgeTitle(newsSentiment?.market?.count, newsSentiment?.market?.latestAt)}
-              >
-                시장 분위기 {marketNewsBadge.label}
-              </span>
-            )}
+            {marketNewsBadge && newsSentiment?.market && <NewsScorePopover
+              score={newsSentiment.market}
+              className={marketNewsBadge.className}
+              label={`시장 분위기 ${marketNewsBadge.label}`}
+              onSelectEvidence={(evidence, trigger) => newsDetail.open(articleFromEvidence(evidence), trigger, "MARKET")}
+            />}
             <FeeWarningBadge warnings={state?.warnings} />
             <div className={`market ${state?.market.isOpen ? "open" : ""}`}>
               <span />
@@ -1019,7 +1028,7 @@ export default function App() {
             </button>
           </div>
         </header>
-        <NewsTicker />
+        <NewsTicker onSelectArticle={(article, trigger) => newsDetail.open(article, trigger)} />
         {notice && (
           <div className="notice">
             <Bell size={15} />
@@ -1384,7 +1393,8 @@ export default function App() {
             running={!!state?.running}
           />
         )}
-        {selected && newsUiEnabled && <NewsPanel key={selected} symbol={selected} />}
+        {selected && newsUiEnabled && <NewsPanel key={selected} symbol={selected} onSelectArticle={(article, trigger) => newsDetail.open(article, trigger, selected)} />}
+        {newsDetail.selected && <NewsDetailPanel article={newsDetail.detail ?? newsDetail.selected} state={newsDetail.state} onClose={newsDetail.close} />}
         </div>
         <footer>
           본 화면의 시그널은 기술적 조건 충족 점수이며 수익 확률이나 투자 권유가
