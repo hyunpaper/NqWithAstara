@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
+import type { MouseEvent } from "react";
 import { Newspaper } from "lucide-react";
 import { normalizeArticlesResponse, type NewsArticle } from "./newsTypes";
 import { absoluteTimeKst, inputKindLabel, relativeTimeKo, sentimentBadge } from "./newsFormat";
+import NewsEvidenceTooltip from "./NewsEvidenceTooltip";
 
-const NEWS_URL = "https://www.saveticker.com/news";
-
-export default function NewsPanel({ symbol }: { symbol: string }) {
+export default function NewsPanel({ symbol, onSelectArticle }: { symbol: string; onSelectArticle: (article: NewsArticle, trigger: HTMLElement) => void }) {
   const [articles, setArticles] = useState<NewsArticle[]>([]);
   const [loaded, setLoaded] = useState(false);
 
@@ -78,9 +78,10 @@ export default function NewsPanel({ symbol }: { symbol: string }) {
           {articles.map((a) => {
             const badge = sentimentBadge(a.sentiment);
             const kind = inputKindLabel(a.inputKind);
+            const evidenceId = badge ? `news-evidence-${encodeURIComponent(a.id)}` : undefined;
             return (
               <li key={a.id}>
-                <a href={NEWS_URL} target="_blank" rel="noreferrer">
+                  <button type="button" className="news-row-button" onClick={(event: MouseEvent<HTMLButtonElement>) => onSelectArticle(a, event.currentTarget)} aria-label={`${a.titleKo ?? a.title} 상세 보기`} aria-describedby={evidenceId}>
                   <div className="news-row-head">
                     <span
                       className="news-time"
@@ -88,13 +89,13 @@ export default function NewsPanel({ symbol }: { symbol: string }) {
                     >
                       {relativeTimeKo(a.createdAt)}
                     </span>
-                    {a.source && <span className="news-source">{a.source}</span>}
-                    {badge && <span className={badge.className}>{badge.label}</span>}
+                    {(a.sourceKo ?? a.source) && <span className="news-source">{a.sourceKo ?? a.source}</span>}
+                    {badge && <span className="news-badge-wrap"><span className={badge.className}>{badge.label}</span><NewsEvidenceTooltip id={evidenceId} article={a} /></span>}
                   </div>
-                  <div className="news-title">{a.title}</div>
+                  <div className="news-title">{a.titleKo ?? a.title}</div>
                   {a.reason && <div className="news-reason">{a.reason}</div>}
                   {kind && <span className="news-kind">{kind}</span>}
-                </a>
+                </button>
               </li>
             );
           })}
