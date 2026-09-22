@@ -7,7 +7,15 @@ using Astra.Server.Domain.Structure;
 namespace Astra.Server.Application.Backtest;
 
 /// <summary>Symbols가 지정되면 운영 관심종목을 읽지 않고 해당 심볼만 replay한다(OOS 비교용).</summary>
-public sealed record HistoricalReplayRequest(DateOnly From, DateOnly To, IReadOnlyList<string>? Symbols = null);
+public static class HistoricalReplayCostPolicies
+{
+    public const string RejectMissing = "reject-missing";
+    public const string ModeledV2 = "modeled-v2";
+    public static bool IsSupported(string value) => value is RejectMissing or ModeledV2;
+}
+
+public sealed record HistoricalReplayRequest(DateOnly From, DateOnly To, IReadOnlyList<string>? Symbols = null,
+    string MissingCostPolicy = HistoricalReplayCostPolicies.ModeledV2);
 
 public sealed record HistoricalReplayExitCounts(int Stop, int Target, int Eod);
 
@@ -31,6 +39,15 @@ public sealed record HistoricalReplaySourceQuality(string Symbol, int RawBars, i
 public sealed record HistoricalReplayTradeResult(SimTrade Trade, double? GrossPnlPercent,
     double FeePercent, double? SlippagePercent, double? NetPnlPercent);
 
+public sealed record HistoricalReplayCostResult(string Basis, string Source, bool Available,
+    string MissingCostPolicy, string? UnavailableReason, HistoricalReplayAggregate? Aggregate,
+    ImmutableArray<HistoricalReplaySymbolResult> Symbols,
+    HistoricalStructureTradeReplay.ReplayGateSummary GateSummary);
+
+public sealed record HistoricalReplaySelectionDiagnostics(string Version, DateOnly TrainFrom, DateOnly TrainTo,
+    DateOnly EvaluationFrom, DateOnly EvaluationTo, int TrainingRows, int RequiredTrainingRows,
+    double? SelectedThreshold, string Status, string Basis);
+
 public sealed record HistoricalReplayRun(string Id, DateOnly From, DateOnly To, ImmutableArray<string> Watchlist,
     string Benchmark, string Source, string PolicyHash, string WeightsVersion, string Status,
     DateTimeOffset CreatedAt, DateTimeOffset? CompletedAt, string? FailureReason,
@@ -42,7 +59,9 @@ public sealed record HistoricalReplayRun(string Id, DateOnly From, DateOnly To, 
     int? ExpectedValueTrainingRows = null,
     ImmutableArray<HistoricalStructureTradeReplay.ReplaySourceCoverage>? ReplayCoverage = null,
     HistoricalStructureTradeReplay.ReplayGateSummary? StrategyGateSummary = null,
-    string? TimeframeNotice = null);
+    string? TimeframeNotice = null, string SelectedCostPolicy = HistoricalReplayCostPolicies.ModeledV2,
+    ImmutableArray<HistoricalReplayCostResult>? CostResults = null,
+    HistoricalReplaySelectionDiagnostics? SelectionDiagnostics = null);
 
 public sealed record HistoricalReplayStartResult(int HttpStatus, HistoricalReplayRun? Run, string? Message);
 
@@ -83,6 +102,8 @@ public sealed class HistoricalReplayService
         if (request is null || request.To < request.From || request.From > DateOnly.FromDateTime(_clock.GetUtcNow().UtcDateTime)
             || request.To.DayNumber - request.From.DayNumber + 1 > MaxDays)
             return new(400, null, $"기간은 오늘 이전의 1~{MaxDays}일 범위여야 합니다.");
+        if (!HistoricalReplayCostPolicies.IsSupported(request.MissingCostPolicy))
+            return new(400, null, "비용 결측 정책은 reject-missing 또는 modeled-v2여야 합니다.");
 
         var requested = request.Symbols ?? Array.Empty<string>();
         var watch = (requested.Count > 0 ? requested.Select(x => new WatchItem(x, x))
@@ -94,7 +115,8 @@ public sealed class HistoricalReplayService
         var now = _clock.GetUtcNow();
         var run = new HistoricalReplayRun(Guid.NewGuid().ToString("N"), request.From, request.To, watch, "QQQ",
             _bars.Name, _structurePolicy.PolicyHash, _weights.WeightsVersion, "queued", now, null, null, [], null, [],
-            "historical-virtual", "과거 replay 가상 결과이며 실제 체결 성과가 아닙니다.");
+            "historical-virtual", "과거 replay 가상 결과이며 실제 체결 성과가 아닙니다.",
+            SelectedCostPolicy: request.MissingCostPolicy);
         await SaveAsync(run);
         var cancellation = new CancellationTokenSource();
         var work = new ReplayWork(cancellation);
@@ -194,12 +216,17 @@ public sealed class HistoricalReplayService
             var measurement = await new ConfluenceReplay(_barStores.Create(Path.Combine(replayRoot, "bars")),
                 _confluencePolicy).RunAsync(queued.From, queued.To, 10, queued.Benchmark, work.Cancellation.Token);
             var replayStore = _barStores.Create(Path.Combine(replayRoot, "bars"));
-            // 과거 orderbook은 제공되지 않으므로 운영 실시간 호가를 흉내 내지 않는다.
-            // replay에만 명시된 모델 비용을 주입하고, 결과와 source를 별도로 표시한다.
-            var costSource = new ModeledHistoricalLiquiditySource(HistoricalReplayCostModel.ConservativeDefault);
+            var costModel = HistoricalReplayCostModel.ConservativeDefault;
+            var costSource = new ModeledHistoricalLiquiditySource(costModel);
+            var modelPolicy = _structurePolicy with
+            {
+                RequireCompleteLiquidityCost = true,
+                ShortBorrowCostPercent = costModel.ShortBorrowPercent
+            };
             var trainDays = Math.Max(1, (queued.To.DayNumber - queued.From.DayNumber + 1) / 2);
             var trainTo = queued.From.AddDays(trainDays - 1);
-            var trainingRun = await new HistoricalStructureTradeReplay(replayStore, _structurePolicy, costSource)
+            var evaluationFrom = trainTo < queued.To ? trainTo.AddDays(1) : queued.To;
+            var trainingRun = await new HistoricalStructureTradeReplay(replayStore, modelPolicy, costSource)
                 .RunDetailedAsync(queued.From, trainTo, queued.Watchlist, work.Cancellation.Token);
             var observations = trainingRun.Candidates
                 .Where(x => x.CostComplete)
@@ -209,23 +236,44 @@ public sealed class HistoricalReplayService
                     : null)
                 .Where(x => x is not null).Select(x => x!).ToArray();
             ExpectedValueThreshold? selectedThreshold = null;
-            var replayPolicy = _structurePolicy;
-            if (observations.Length > 0)
+            var requiredTrainingRows = ReplaySelectionPolicy.RequiredTrainingRows(trainingRun.Coverage);
+            var replayPolicy = modelPolicy;
+            if (observations.Length >= requiredTrainingRows)
             {
                 selectedThreshold = WalkForwardExpectedValue.Select(observations,
-                    [0d, .25d, .5d, .75d, 1d], minimumRows: 1);
-                replayPolicy = WalkForwardExpectedValue.ApplyToPolicy(_structurePolicy, selectedThreshold);
+                    [0d, .25d, .5d, .75d, 1d], minimumRows: requiredTrainingRows);
+                replayPolicy = WalkForwardExpectedValue.ApplyToPolicy(modelPolicy, selectedThreshold);
             }
-            var replayedRun = await new HistoricalStructureTradeReplay(replayStore, replayPolicy, costSource)
-                .RunDetailedAsync(queued.From, queued.To, queued.Watchlist, work.Cancellation.Token);
-            var replayed = replayedRun.Trades;
+            var modeledRun = await new HistoricalStructureTradeReplay(replayStore, replayPolicy, costSource)
+                .RunDetailedAsync(evaluationFrom, queued.To, queued.Watchlist, work.Cancellation.Token);
+            var observedPolicy = replayPolicy with { RequireCompleteLiquidityCost = true, ShortBorrowCostPercent = null };
+            var observedRun = await new HistoricalStructureTradeReplay(replayStore, observedPolicy)
+                .RunDetailedAsync(evaluationFrom, queued.To, queued.Watchlist, work.Cancellation.Token);
+            var selectedRun = queued.SelectedCostPolicy == HistoricalReplayCostPolicies.ModeledV2
+                ? modeledRun : observedRun;
+            var replayed = selectedRun.Trades;
             await WriteTradesAsync(replayRoot, replayed.Values.SelectMany(x => x), work.Cancellation.Token);
-            var symbols = queued.Watchlist.Select(symbol =>
+            ImmutableArray<HistoricalReplaySymbolResult> Results(
+                HistoricalStructureTradeReplay.ReplayRun run) => queued.Watchlist.Select(symbol =>
                 import.Sources.First(x => string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase)).DataStatus == "no-data"
                 ? Unavailable(symbol, import.Sources.First(x => string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase)).Reason)
                 : Result(symbol, measurement.BySymbol.TryGetValue(symbol, out var techniques) ? techniques.Sum(x => x.N) : 0,
-                    replayed.GetValueOrDefault(symbol)))
+                    run.Trades.GetValueOrDefault(symbol)))
                 .ToImmutableArray();
+            var modeledSymbols = Results(modeledRun);
+            var observedUnavailable = queued.Watchlist.Select(symbol => Unavailable(symbol,
+                "과거 bid/ask·잔량·slippage 관측이 없어 observed-cost net 성과를 계산하지 않습니다."))
+                .ToImmutableArray();
+            var symbols = queued.SelectedCostPolicy == HistoricalReplayCostPolicies.ModeledV2
+                ? modeledSymbols : observedUnavailable;
+            var costResults = ImmutableArray.Create(
+                new HistoricalReplayCostResult("modeled", costModel.Version, true,
+                    HistoricalReplayCostPolicies.ModeledV2, null, Aggregate(modeledSymbols), modeledSymbols,
+                    modeledRun.GateSummary),
+                new HistoricalReplayCostResult("observed", "OBSERVED_ORDERBOOK", false,
+                    HistoricalReplayCostPolicies.RejectMissing,
+                    "과거 bid/ask·잔량·slippage 관측이 없어 net PnL을 산출하지 않습니다.", null,
+                    observedUnavailable, observedRun.GateSummary));
             var quality = import.Rows.Select(x => new HistoricalReplayQuality(x.Symbol, x.ExpectedBars, x.ActualBars,
                 x.Gaps, x.Duplicates, x.MissingRate, x.BenchmarkMissing)).ToImmutableArray();
             work.Cancellation.Token.ThrowIfCancellationRequested();
@@ -234,20 +282,33 @@ public sealed class HistoricalReplayService
                 Status = "completed", CompletedAt = _clock.GetUtcNow(),
                 Source = import.Source,
                 DataStatus = "partial",
-                DataReason = "과거 호가·체결과 slippage 원천이 없어 고정 historical 비용 모델을 사용했습니다. 운영 성능 결론에 사용할 수 없습니다.",
-                Notice = "과거 replay 가상 결과이며 모델 비용을 사용했으므로 운영 성능 결론에 사용할 수 없습니다.",
+                DataReason = "관측 비용은 결측이며 modeled-v2와 reject-missing 결과를 분리했습니다.",
+                Notice = "선택한 비용 결측 정책의 과거 가상 결과이며 실제 체결 성과가 아닙니다.",
                 SourceQuality = sourceQuality,
                 DataQuality = quality,
                 Symbols = symbols,
-                Aggregate = Aggregate(symbols),
-                CostProfile = HistoricalReplayCostModel.ConservativeDefault.Version,
+                Aggregate = queued.SelectedCostPolicy == HistoricalReplayCostPolicies.ModeledV2
+                    ? Aggregate(symbols) : null,
+                PolicyHash = replayPolicy.PolicyHash,
+                CostProfile = queued.SelectedCostPolicy == HistoricalReplayCostPolicies.ModeledV2
+                    ? costModel.Version : "OBSERVED_ORDERBOOK_UNAVAILABLE",
                 ExpectedValueThreshold = selectedThreshold?.Value,
-                ExpectedValueTrainingRows = selectedThreshold?.TrainingRows,
-                ReplayCoverage = replayedRun.Coverage,
-                StrategyGateSummary = replayedRun.GateSummary,
-                TimeframeNotice = replayedRun.Coverage.Any(x => x.GranularityStatus != "supported")
-                    ? "원천 봉 주기가 1분 엔진 계약과 다르므로 실시간 패리티 성과로 사용할 수 없습니다."
-                    : null
+                ExpectedValueTrainingRows = observations.Length,
+                ReplayCoverage = selectedRun.Coverage,
+                StrategyGateSummary = selectedRun.GateSummary,
+                TimeframeNotice = selectedRun.Coverage.Any(x => x.GranularityStatus == "unsupported" ||
+                    x.GranularityStatus == "mixed-unsupported")
+                    ? "지원하지 않는 원천 주기는 성과 집계에서 제외했습니다."
+                    : selectedRun.Coverage.Any(x => x.GranularityStatus == "native-supported")
+                        ? "5분 원천은 native-five-minute-v1 경로로 계산했으며 운영 1분 패리티가 아닙니다."
+                        : null,
+                CostResults = costResults,
+                SelectionDiagnostics = new HistoricalReplaySelectionDiagnostics(ReplaySelectionPolicy.Version,
+                    queued.From, trainTo, evaluationFrom, queued.To, observations.Length, requiredTrainingRows,
+                    selectedThreshold?.Value,
+                    selectedThreshold is null ? "insufficient-training-sample" : "selected-from-training-only",
+                    $"훈련 구간만 사용, 최소 {ReplaySelectionPolicy.MinimumTrainingRows}행 및 " +
+                    $"{ReplaySelectionPolicy.SymbolSessionsPerRequiredEntry} symbol-session당 1행")
             } : current);
         }
         catch (Exception) when (work.Cancellation.IsCancellationRequested)

@@ -19,11 +19,11 @@ public interface IHistoricalLiquiditySource
 /// 과거 bid/ask 원천이 없을 때 사용하는 명시적 검증용 비용 모델이다.
 /// 운영 서비스에는 주입하지 않으며, 결과에는 모델 비용임을 남긴다.
 /// </summary>
-public sealed record HistoricalReplayCostModel(string Version, double SpreadPercent)
+public sealed record HistoricalReplayCostModel(string Version, double SpreadPercent, double ShortBorrowPercent)
 {
     /// <summary>사전에 고정한 OHLCV 검증 프로필이다. 운영 비용으로 사용하지 않는다.</summary>
     public static HistoricalReplayCostModel ConservativeDefault { get; } =
-        new("historical.ohlcv-spread-model.v1", .10);
+        new("historical.ohlcv-spread-borrow-model.v2", .10, .02);
 
     public decimal Spread(decimal referencePrice) =>
         referencePrice > 0 && double.IsFinite(SpreadPercent)

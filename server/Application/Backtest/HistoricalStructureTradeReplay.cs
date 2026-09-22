@@ -20,7 +20,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
 
     public sealed record ReplaySourceCoverage(string Symbol, int Sessions, int ExpectedBars, int ActualBars,
         int MissingBars, double CoverageRate, double SourceBarMinutes, string GranularityStatus,
-        double ReplayBarMinutes, string ReplayTimingStatus);
+        double ReplayBarMinutes, string ReplayTimingStatus, string EnginePath, string Limitation);
 
     public sealed record ReplayGateCount(string Reason, int Candidates, int ExclusiveFirstFailures);
 
@@ -35,12 +35,13 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
     public sealed record ReplayPendingResolution(bool Clear, EntryConfirmation? Confirmation, string Reason);
 
     /// <summary>운영 replay loop와 테스트가 공유하는 pending 수명주기 판정이다.</summary>
-    public static ReplayPendingResolution ResolvePending(PendingEntry pending, Candle current, DateTimeOffset observedAt)
+    public static ReplayPendingResolution ResolvePending(PendingEntry pending, Candle current, DateTimeOffset observedAt,
+        TimeSpan? barDuration = null)
     {
         if (current.Timestamp == pending.ConfirmationBarStart)
         {
             var confirmation = PendingEntryPolicy.Confirm(pending, current, observedAt,
-                current.Close, "REPLAY_CONFIRMATION_BAR_CLOSE");
+                current.Close, "REPLAY_CONFIRMATION_BAR_CLOSE", barDuration);
             return new(true, confirmation, confirmation.Decision.ToString());
         }
         if (current.Timestamp > pending.ConfirmationBarStart || observedAt >= pending.ExpiresAt)
@@ -87,15 +88,17 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                     .Select(x => new Candle(x.Start, (double)x.Open, (double)x.High, (double)x.Low,
                         (double)x.Close, (double)x.Volume)).ToImmutableArray();
                 if (bars.Length == 0) continue;
-                var barSpan = bars.Length > 1 ? bars[1].Timestamp - bars[0].Timestamp : TimeSpan.FromMinutes(1);
-                if (barSpan <= TimeSpan.Zero || barSpan > TimeSpan.FromMinutes(30)) barSpan = TimeSpan.FromMinutes(1);
+                var barSpan = InferSourceSpan(bars);
+                var timeframe = ReplayTimeframePolicy.Contract(barSpan);
                 var sessionStart = bars[0].Timestamp;
                 var sessionEnd = sessionStart.AddHours(6.5);
-                coverage[symbol].Add(bars, sessionStart, sessionEnd, barSpan);
+                coverage[symbol].Add(bars, sessionStart, sessionEnd, barSpan, timeframe);
+                if (!timeframe.Supported) continue;
+                var sessionPolicy = ReplayTimeframePolicy.Apply(replayPolicy, timeframe);
                 var market = new MarketSession(true, "과거 replay", null, sessionStart, sessionEnd);
                 var previousZones = ImmutableArray<PriceZone>.Empty;
                 var retired = ImmutableArray<string>.Empty;
-                var latch = StructuralLatch.Empty(symbol, sessionStart, replayPolicy.PolicyHash);
+                var latch = StructuralLatch.Empty(symbol, sessionStart, sessionPolicy.PolicyHash);
                 var processedBars = 0;
                 PendingReplayEntry? pending = null;
                 var pendingEventIds = new HashSet<string>(StringComparer.Ordinal);
@@ -113,13 +116,13 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                     // 해당 봉이 닫힌 뒤에만 관측 가능하므로 look-ahead가 없다.
                     if (pending is { } queued && current.Timestamp == queued.Pending.ConfirmationBarStart)
                     {
-                        var resolution = ResolvePending(queued.Pending, current, now);
+                        var resolution = ResolvePending(queued.Pending, current, now, barSpan);
                         if (resolution.Confirmation is { Decision: PendingEntryDecision.Confirmed } confirmation)
                         {
                             var entered = StructuralSimulation.Enter(result[symbol], new StructuralEntryRequest(symbol,
                                 queued.Candidate.TriggerBarStart, now, sessionEnd, queued.Context,
                                 completedStarts, sessionStart, queued.Candidate.Plan?.TargetZoneSnapshot.Aliases, confirmation,
-                                RequireCompleteLiquidityCost: replayPolicy.RequireCompleteLiquidityCost), replayPolicy);
+                                RequireCompleteLiquidityCost: sessionPolicy.RequireCompleteLiquidityCost), sessionPolicy);
                             result[symbol] = entered.Trades;
                         }
                         pendingEventIds.Add(queued.Pending.EntryEventId);
@@ -127,7 +130,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                     }
                     else if (pending is { } unresolved)
                     {
-                        var resolution = ResolvePending(unresolved.Pending, current, now);
+                        var resolution = ResolvePending(unresolved.Pending, current, now, barSpan);
                         if (resolution.Clear)
                         {
                             // exact confirmation 봉을 놓치면 추후 봉으로 소급 체결하지 않는다.
@@ -138,30 +141,30 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                     var prefix = bars.Take(index + 1).ToArray();
                     var liquidity = liquiditySource?.Get(symbol, now, (decimal)current.Close);
                     var build = StructureSnapshotFactory.Create(symbol, market, prefix, daily[symbol], current.Close,
-                        now, now, 1, replayPolicy, liquidity, barSpan);
+                        now, now, 1, sessionPolicy, liquidity, barSpan);
                     if (build.Snapshot is null || build.LastCompletedBarStart is null ||
                         build.Status != StructureAnalysisStatus.Available) continue;
 
                     var snapshot = build.Snapshot;
                     var cutoff = build.LastCompletedBarStart.Value;
-                    var candidateFive = BarAggregator.Aggregate(build.Bars.Bars, snapshot.SessionStart, cutoff, replayPolicy);
+                    var candidateFive = build.FiveMinuteBars;
                     var built = ZoneBuilder.Build(new ZoneBuildRequest(symbol, snapshot.SessionStart,
                         snapshot.SessionEnd, cutoff, build.Bars.Bars, candidateFive, build.DailyBars, previousZones,
-                        retired), replayPolicy);
+                         retired), sessionPolicy);
                     var evaluated = ZoneEvaluator.Evaluate(built.Zones, new ZoneEvaluationRequest(snapshot.SessionStart,
-                        cutoff, build.Bars.Bars, previousZones, built.RetiredZoneIds), replayPolicy);
+                         cutoff, build.Bars.Bars, previousZones, built.RetiredZoneIds), sessionPolicy);
                     previousZones = evaluated.Zones;
                     retired = evaluated.RetiredZoneIds;
                     var trend = TrendEvaluator.Evaluate(TrendRequest.Create(symbol, snapshot.SessionStart,
-                        snapshot.AnalysisAsOf, build.Bars.Bars, build.FiveMinuteBars), replayPolicy);
+                         snapshot.AnalysisAsOf, build.Bars.Bars, build.FiveMinuteBars), sessionPolicy);
                     var gate = StructuralLifecycle.Gate(latch, cutoff, cutoff.Add(barSpan), barSpan,
-                        now, replayPolicy);
+                         now, sessionPolicy);
                     var detected = SetupDetector.Detect(SetupDetectionRequest.Create(symbol, snapshot.SessionStart,
                         snapshot.SessionEnd, snapshot.AnalysisAsOf, now, build.Bars.Bars, evaluated.Zones,
                         evaluated.Episodes, trend, built.Atr1mAtCutoff, snapshot.QuotePrice, snapshot.QuoteAt,
-                        snapshot.OptionalLiquidity, build.Quality.BlockersForCandidate.Concat(gate.Blockers).ToImmutableArray()), replayPolicy);
+                         snapshot.OptionalLiquidity, build.Quality.BlockersForCandidate.Concat(gate.Blockers).ToImmutableArray()), sessionPolicy);
                     var candidates = StructuralLifecycle.ApplyLive(
-                        StructuralLifecycle.ApplyLatch(latch, detected.Candidates, gate.AllowNewTrigger, replayPolicy,
+                        StructuralLifecycle.ApplyLatch(latch, detected.Candidates, gate.AllowNewTrigger, sessionPolicy,
                             evaluated.Zones), snapshot.QuotePrice, now);
                     foreach (var candidate in candidates)
                     {
@@ -274,7 +277,8 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
         SetupDetector.BlockerOutsideSession or SetupDetector.BlockerStaleLatestBar or
             SetupDetector.BlockerMissingQuote or SetupDetector.BlockerStaleQuote or
             SetupDetector.BlockerQuoteInFuture or SetupDetector.BlockerAfterEntryCutoff => 20,
-        SetupDetector.CodeTrendDirectionOpposesLong or SetupDetector.CodeTrendDeeplyOpposesRebound or
+        SetupDetector.CodeTrendDirectionOpposesLong or SetupDetector.CodeTrendDirectionOpposesShort or
+            SetupDetector.CodeTrendDeeplyOpposesRebound or SetupDetector.CodeTrendDeeplyOpposesShortRebound or
             SetupDetector.CodeTransitionPullbackBlocked or SetupDetector.CodeTransitionBreakoutBlocked => 30,
         StructuralPlanner.NoInvalidationStructure or StructuralPlanner.NoTargetStructure or
             StructuralPlanner.NoTargetRoom or StructuralPlanner.EntryInsideResistance => 40,
@@ -298,14 +302,18 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
         int _actual;
         readonly HashSet<long> _sourceSpanTicks = [];
         readonly HashSet<long> _replaySpanTicks = [];
+        readonly HashSet<string> _enginePaths = new(StringComparer.Ordinal);
+        readonly HashSet<string> _limitations = new(StringComparer.Ordinal);
 
         public void Add(ImmutableArray<Candle> bars, DateTimeOffset sessionStart, DateTimeOffset sessionEnd,
-            TimeSpan replaySpan)
+            TimeSpan replaySpan, ReplayTimeframeContract contract)
         {
             _sessions++;
             var sourceSpan = InferSourceSpan(bars);
             _sourceSpanTicks.Add(sourceSpan.Ticks);
             _replaySpanTicks.Add(replaySpan.Ticks);
+            _enginePaths.Add(contract.EnginePath);
+            _limitations.Add(contract.Limitation);
             var expected = sourceSpan > TimeSpan.Zero ? (int)((sessionEnd - sessionStart).Ticks / sourceSpan.Ticks) : 0;
             var actual = bars.Select(x => x.Timestamp).Distinct()
                 .Count(x => x >= sessionStart && x < sessionEnd && x + sourceSpan <= sessionEnd);
@@ -320,19 +328,22 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
             var replayMinutes = _replaySpanTicks.Count == 1
                 ? TimeSpan.FromTicks(_replaySpanTicks.Single()).TotalMinutes : 0;
             var status = _sourceSpanTicks.Count != 1 ? "mixed-unsupported"
-                : minutes == 1 ? "supported" : "unsupported";
+                : _enginePaths.SetEquals(["one-minute-v5"]) ? "supported"
+                : _enginePaths.SetEquals(["native-five-minute-v1"]) ? "native-supported" : "unsupported";
             var timingStatus = _sourceSpanTicks.SetEquals(_replaySpanTicks) ? "aligned" : "misinferred";
             return new ReplaySourceCoverage(symbol, _sessions, _expected, _actual,
                 Math.Max(0, _expected - _actual), _expected == 0 ? 0 : (double)_actual / _expected,
-                minutes, status, replayMinutes, timingStatus);
+                minutes, status, replayMinutes, timingStatus,
+                _enginePaths.Count == 1 ? _enginePaths.Single() : "mixed",
+                string.Join(' ', _limitations.Order(StringComparer.Ordinal)));
         }
+    }
 
-        static TimeSpan InferSourceSpan(ImmutableArray<Candle> bars)
-        {
-            var ticks = bars.Zip(bars.Skip(1), (left, right) => (right.Timestamp - left.Timestamp).Ticks)
-                .Where(x => x > 0 && x <= TimeSpan.FromMinutes(30).Ticks).ToArray();
-            return ticks.Length == 0 ? TimeSpan.FromMinutes(1) : TimeSpan.FromTicks(ticks.Min());
-        }
+    static TimeSpan InferSourceSpan(ImmutableArray<Candle> bars)
+    {
+        var ticks = bars.Zip(bars.Skip(1), (left, right) => (right.Timestamp - left.Timestamp).Ticks)
+            .Where(x => x > 0 && x <= TimeSpan.FromMinutes(30).Ticks).ToArray();
+        return ticks.Length == 0 ? TimeSpan.FromMinutes(1) : TimeSpan.FromTicks(ticks.Min());
     }
 
     static SimTrade ApplyModeledRealizedSpread(SimTrade trade)

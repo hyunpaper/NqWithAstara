@@ -66,7 +66,8 @@ public static class StructureSnapshotFactory
 
         // 진행 중 1분봉을 완료 봉으로 쓰지 않는다. 정규장 종료 exclusive(§5.1).
         var boundary = FloorToMinute(now < sessionEnd ? now : sessionEnd);
-        var normalized = BarAggregator.Normalize(oneMinute ?? [], sessionStart, sessionEnd, boundary, barDuration);
+        var sourceDuration = barDuration ?? TimeSpan.FromMinutes(1);
+        var normalized = BarAggregator.Normalize(oneMinute ?? [], sessionStart, sessionEnd, boundary, sourceDuration);
         foreach (var warning in normalized.Warnings) warnings.Add(warning);
 
         var (dailyBars, dailyWarnings) = Daily(daily, sessionStart, policy);
@@ -78,12 +79,14 @@ public static class StructureSnapshotFactory
             return new StructureSnapshotBuild(null, StructureAnalysisStatus.Warmup, normalized,
                 ImmutableArray<StructureBar>.Empty, dailyBars,
                 Quality(normalized, ImmutableArray<StructureBar>.Empty, dailyBars, sessionStart, boundary, null, null,
-                    now, liquidity, policy, warnings),
+                    now, liquidity, policy, warnings, sourceDuration),
                 warnings.ToImmutableArray());
         }
 
         var analysisAsOf = normalized.Bars[^1].End;
-        var fiveMinute = BarAggregator.Aggregate(normalized.Bars, sessionStart, analysisAsOf, policy);
+        var fiveMinute = sourceDuration == policy.AggregationSpan()
+            ? normalized.Bars
+            : BarAggregator.Aggregate(normalized.Bars, sessionStart, analysisAsOf, policy);
 
         decimal? price = null;
         if (quotePrice is { } raw && double.IsFinite(raw) && raw > 0) price = (decimal)raw;
@@ -98,7 +101,7 @@ public static class StructureSnapshotFactory
         if (normalized.Bars.Length < policy.Minimum1mBars) warnings.Add(WarningInsufficientBars);
 
         var quality = Quality(normalized, fiveMinute, dailyBars, sessionStart, analysisAsOf, analysisAsOf, quoteAt,
-            now, liquidity, policy, warnings);
+            now, liquidity, policy, warnings, sourceDuration);
 
         var snapshot = new StructureSnapshot(symbol, sessionStart, sessionEnd, analysisAsOf, price, quoteAt,
             (oneMinute ?? []).ToImmutableArray(), (daily ?? []).ToImmutableArray(), null, liquidity, generation);
@@ -165,19 +168,22 @@ public static class StructureSnapshotFactory
     static DataQuality Quality(NormalizedBars bars, ImmutableArray<StructureBar> fiveMinute,
         ImmutableArray<StructureDailyBar> daily, DateTimeOffset sessionStart, DateTimeOffset boundary,
         DateTimeOffset? analysisAsOf, DateTimeOffset? quoteAt, DateTimeOffset now, StructureLiquidity? liquidity,
-        StructurePolicy policy, SortedSet<string> warnings)
+        StructurePolicy policy, SortedSet<string> warnings, TimeSpan sourceDuration)
     {
         var elapsedMinutes = (int)Math.Max(Math.Floor((boundary - sessionStart).TotalMinutes), 0);
+        var sourceMinutes = Math.Max(1, (int)Math.Round(sourceDuration.TotalMinutes));
+        var elapsedSourceBars = elapsedMinutes / sourceMinutes;
         var sources = ImmutableArray.CreateBuilder<DataSourceQuality>();
 
         var barStatus = bars.Bars.Length == 0 ? SourceStatus.Missing
             : bars.Bars.Length < policy.Minimum1mBars ? SourceStatus.Missing
             : bars.Conflicts.Length > 0 || bars.Gaps.Length > 0 ? SourceStatus.Approximate
             : SourceStatus.Available;
-        sources.Add(new DataSourceQuality("bars1m", barStatus, bars.Bars.Length,
-            elapsedMinutes == 0 ? null : elapsedMinutes,
+        var sourceName = sourceMinutes == 1 ? "bars1m" : $"bars{sourceMinutes}m-native";
+        sources.Add(new DataSourceQuality(sourceName, barStatus, bars.Bars.Length,
+            elapsedSourceBars == 0 ? null : elapsedSourceBars,
             bars.Bars.Length == 0 ? null : bars.Bars[0].Start, analysisAsOf, bars.Gaps, bars.Conflicts,
-            elapsedMinutes == 0 ? null : (double)bars.Bars.Length / elapsedMinutes,
+            elapsedSourceBars == 0 ? null : (double)bars.Bars.Length / elapsedSourceBars,
             bars.Warnings));
 
         var expected5m = elapsedMinutes / policy.AggregationMinutes;
