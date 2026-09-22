@@ -122,7 +122,7 @@ public sealed class HistoricalStructureTradeReplayTests
         var liquidity = source.Get("TSLA", Start, 100m);
 
         Assert.True(source.IsModeled);
-        Assert.Equal("historical.ohlcv-spread-model.v1", source.SourceName);
+        Assert.Equal("historical.ohlcv-spread-borrow-model.v2", source.SourceName);
         Assert.Equal(.10m, (liquidity!.BestAsk!.Value - liquidity.BestBid!.Value));
     }
 
@@ -137,12 +137,40 @@ public sealed class HistoricalStructureTradeReplayTests
 
         var coverage = Assert.Single(run.Coverage);
         Assert.Equal(5, coverage.SourceBarMinutes);
-        Assert.Equal("unsupported", coverage.GranularityStatus);
+        Assert.Equal("native-supported", coverage.GranularityStatus);
         Assert.Equal(5, coverage.ReplayBarMinutes);
         Assert.Equal("aligned", coverage.ReplayTimingStatus);
+        Assert.Equal("native-five-minute-v1", coverage.EnginePath);
         Assert.Equal(78, coverage.ExpectedBars);
         Assert.Equal(78, coverage.ActualBars);
         Assert.Equal(1, coverage.CoverageRate);
+    }
+
+    [Fact]
+    public async Task 지원하지않는_원천주기는_후보와_거래를_성과로_집계하지않는다()
+    {
+        var bars = new MemoryBars();
+        bars.Seed("2026-09-08", "TSLA", 26, 15);
+
+        var run = await new HistoricalStructureTradeReplay(bars, StructurePolicy.Default,
+                new ModeledHistoricalLiquiditySource(HistoricalReplayCostModel.ConservativeDefault))
+            .RunDetailedAsync(new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 8), ["TSLA"], default);
+
+        Assert.Empty(run.Candidates);
+        Assert.Empty(run.Trades["TSLA"]);
+        Assert.Equal("unsupported", Assert.Single(run.Coverage).GranularityStatus);
+    }
+
+    [Fact]
+    public void 시간순선택은_최소표본과_symbol_session빈도를_모두_요구한다()
+    {
+        var sparse = new HistoricalStructureTradeReplay.ReplaySourceCoverage("TSLA", 10, 780, 780, 0, 1,
+            5, "native-supported", 5, "aligned", "native-five-minute-v1", "fixture");
+        var frequent = sparse with { Symbol = "SOXL", Sessions = 500 };
+
+        Assert.Equal(ReplaySelectionPolicy.MinimumTrainingRows,
+            ReplaySelectionPolicy.RequiredTrainingRows([sparse]));
+        Assert.Equal(25, ReplaySelectionPolicy.RequiredTrainingRows([frequent]));
     }
 
     [Fact]
@@ -213,8 +241,9 @@ public sealed class HistoricalStructureTradeReplayTests
             now, now, 1, StructurePolicy.Default, barDuration: TimeSpan.FromMinutes(5));
 
         Assert.Equal(12, oneMinute.FiveMinuteBars.Length);
-        Assert.Empty(fiveMinute.FiveMinuteBars);
+        Assert.Equal(12, fiveMinute.FiveMinuteBars.Length);
         Assert.All(fiveMinute.Bars.Bars, x => Assert.Equal(TimeSpan.FromMinutes(5), x.Duration));
+        Assert.All(fiveMinute.FiveMinuteBars, x => Assert.Equal(TimeSpan.FromMinutes(5), x.Duration));
     }
 
     static HistoricalStructureTradeReplay.ReplayCandidateDiagnostic Diagnostic(string id,

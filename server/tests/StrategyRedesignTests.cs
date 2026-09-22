@@ -1,7 +1,9 @@
 using Astra.Server;
 using Astra.Server.Application;
+using Astra.Server.Application.Backtest;
 using Astra.Server.Domain;
 using Astra.Server.Domain.Structure;
+using System.Collections.Immutable;
 using Xunit;
 
 namespace Astra.Server.Tests;
@@ -125,5 +127,62 @@ public sealed class StrategyRedesignTests
 
         Assert.DoesNotContain(StructureSnapshotFactory.BlockerBarGap, result.Quality.BlockersForCandidate);
         Assert.Equal(12, result.Bars.Bars.Length);
+    }
+
+    [Fact]
+    public void 하락추세_저항반락은_Short후보와_대칭계획을_생성한다()
+    {
+        StructureBar Bar(int minute, decimal open, decimal high, decimal low, decimal close, double volume = 1000) =>
+            new(Fx.At(minute), Fx.At(minute + 1), open, high, low, close, volume);
+        var bars = Enumerable.Range(0, 25).Select(i => Bar(i, 100m, 100.10m, 99.90m, 100m)).ToList();
+        bars.Add(Bar(25, 100.60m, 100.78m, 100.50m, 100.70m));
+        bars.Add(Bar(26, 100.65m, 100.72m, 100.35m, 100.40m));
+        bars.Add(Bar(27, 100.40m, 100.48m, 100.15m, 100.20m));
+        bars.Add(Bar(28, 100.20m, 100.28m, 99.95m, 100.00m));
+        bars.Add(Bar(29, 100.00m, 100.05m, 99.85m, 99.90m));
+        bars.Add(Bar(30, 99.90m, 99.95m, 99.45m, 99.55m, 2000));
+        var resistance = D2.Resistance(100.55m, 100.80m, id: "short-resistance");
+        var support = D2.Support(95.00m, 95.50m, id: "short-target");
+        var result = SetupDetector.Detect(SetupDetectionRequest.Create(Fx.Symbol, Fx.SessionStart, Fx.SessionEnd,
+            Fx.At(31), Fx.At(31), bars.ToImmutableArray(), [support, resistance],
+            [D2.Episode("short-resistance", 25, 28, role: ZoneRole.Resistance)],
+            D2.Trend(TrendState.Down, -40, structureDirection: -.5), .20, 99.55m, Fx.At(31),
+            D2.Quote(99.54m, 99.56m, 31)),
+            D2.WideNetR with { ShortBorrowCostPercent = .02 });
+
+        var candidate = Assert.Single(result.Candidates, x => x.KindName == "PULLBACK_SHORT");
+        Assert.Equal(TradeSide.Short, candidate.Side);
+        Assert.True(candidate.Disposition == CandidateDisposition.Ready,
+            string.Join(',', candidate.RejectionCodes.Concat(candidate.Planning.ReasonCodes)));
+        Assert.NotNull(candidate.Plan);
+        Assert.True(candidate.Plan!.Stop > candidate.EntryReference);
+        Assert.True(candidate.Plan.Target < candidate.EntryReference);
+        Assert.True(candidate.Evidence!.TrendAlignment > 0);
+        var invalidated = StructuralLifecycle.ApplyLive([candidate], candidate.Plan.Stop + .01m, Fx.At(31));
+        Assert.Equal(CandidateDisposition.Invalidated, Assert.Single(invalidated).Disposition);
+    }
+
+    [Fact]
+    public void 다섯분_전용정책은_시간기준_lookback을_봉수로_환산한다()
+    {
+        var contract = ReplayTimeframePolicy.Contract(TimeSpan.FromMinutes(5));
+        var adjusted = ReplayTimeframePolicy.Apply(StructurePolicy.Default, contract);
+
+        Assert.True(contract.Supported);
+        Assert.Equal("native-five-minute-v1", contract.EnginePath);
+        Assert.Equal(6, adjusted.Minimum1mBars);
+        Assert.Equal(3, adjusted.AtrPeriod);
+        Assert.Equal(4, adjusted.RelativeVolumeLookbackBars);
+        Assert.Contains("replay-native-5m", adjusted.Version);
+    }
+
+    [Fact]
+    public void 지원하지않는_봉주기는_성과경로를_열지않는다()
+    {
+        var contract = ReplayTimeframePolicy.Contract(TimeSpan.FromMinutes(15));
+
+        Assert.False(contract.Supported);
+        Assert.Equal("unsupported", contract.EnginePath);
+        Assert.Throws<InvalidOperationException>(() => ReplayTimeframePolicy.Apply(StructurePolicy.Default, contract));
     }
 }

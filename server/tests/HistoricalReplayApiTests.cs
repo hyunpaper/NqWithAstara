@@ -105,7 +105,7 @@ public sealed class HistoricalReplayApiTests : IDisposable
 
         Assert.Equal("completed", result.GetProperty("status").GetString());
         Assert.Equal("partial", result.GetProperty("dataStatus").GetString());
-        Assert.Contains("운영 성능 결론", result.GetProperty("notice").GetString());
+        Assert.Contains("실제 체결 성과", result.GetProperty("notice").GetString());
         Assert.Equal("TSLA", Assert.Single(result.GetProperty("watchlist").EnumerateArray()).GetString());
         Assert.Equal("QQQ", result.GetProperty("benchmark").GetString());
         var symbol = Assert.Single(result.GetProperty("symbols").EnumerateArray());
@@ -129,7 +129,11 @@ public sealed class HistoricalReplayApiTests : IDisposable
         Assert.Equal("supported", coverage.GetProperty("granularityStatus").GetString());
         Assert.Equal(JsonValueKind.Object, result.GetProperty("strategyGateSummary").ValueKind);
         Assert.Equal(JsonValueKind.Null, result.GetProperty("timeframeNotice").ValueKind);
-        Assert.Equal("historical.ohlcv-spread-model.v1", result.GetProperty("costProfile").GetString());
+        Assert.Equal("historical.ohlcv-spread-borrow-model.v2", result.GetProperty("costProfile").GetString());
+        Assert.Equal("modeled-v2", result.GetProperty("selectedCostPolicy").GetString());
+        Assert.Equal(2, result.GetProperty("costResults").GetArrayLength());
+        Assert.Equal("insufficient-training-sample",
+            result.GetProperty("selectionDiagnostics").GetProperty("status").GetString());
         using var diagnosticsResponse = await client.GetAsync($"/api/replays/{id}/diagnostics");
         Assert.Equal(HttpStatusCode.OK, diagnosticsResponse.StatusCode);
         using var diagnosticsDocument = JsonDocument.Parse(await diagnosticsResponse.Content.ReadAsStringAsync());
