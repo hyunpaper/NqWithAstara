@@ -124,6 +124,12 @@ public sealed class HistoricalReplayApiTests : IDisposable
         Assert.Equal(1, source.GetProperty("availableDailySeed").GetInt32());
         Assert.Equal("session-reset", source.GetProperty("carryPolicy").GetString());
         Assert.Equal(JsonValueKind.String, source.GetProperty("newestBar").ValueKind);
+        var coverage = Assert.Single(result.GetProperty("replayCoverage").EnumerateArray());
+        Assert.Equal(1, coverage.GetProperty("sourceBarMinutes").GetDouble());
+        Assert.Equal("supported", coverage.GetProperty("granularityStatus").GetString());
+        Assert.Equal(JsonValueKind.Object, result.GetProperty("strategyGateSummary").ValueKind);
+        Assert.Equal(JsonValueKind.Null, result.GetProperty("timeframeNotice").ValueKind);
+        Assert.Equal("historical.ohlcv-spread-model.v1", result.GetProperty("costProfile").GetString());
         using var diagnosticsResponse = await client.GetAsync($"/api/replays/{id}/diagnostics");
         Assert.Equal(HttpStatusCode.OK, diagnosticsResponse.StatusCode);
         using var diagnosticsDocument = JsonDocument.Parse(await diagnosticsResponse.Content.ReadAsStringAsync());

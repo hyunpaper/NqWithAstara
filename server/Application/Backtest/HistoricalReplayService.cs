@@ -37,7 +37,12 @@ public sealed record HistoricalReplayRun(string Id, DateOnly From, DateOnly To, 
     ImmutableArray<HistoricalReplayQuality> DataQuality, HistoricalReplayAggregate? Aggregate,
     ImmutableArray<HistoricalReplaySymbolResult> Symbols, string ResultKind, string Notice,
     string DataStatus = "unknown", string? DataReason = null,
-    ImmutableArray<HistoricalReplaySourceQuality>? SourceQuality = null);
+    ImmutableArray<HistoricalReplaySourceQuality>? SourceQuality = null,
+    string? CostProfile = null, double? ExpectedValueThreshold = null,
+    int? ExpectedValueTrainingRows = null,
+    ImmutableArray<HistoricalStructureTradeReplay.ReplaySourceCoverage>? ReplayCoverage = null,
+    HistoricalStructureTradeReplay.ReplayGateSummary? StrategyGateSummary = null,
+    string? TimeframeNotice = null);
 
 public sealed record HistoricalReplayStartResult(int HttpStatus, HistoricalReplayRun? Run, string? Message);
 
@@ -189,8 +194,31 @@ public sealed class HistoricalReplayService
             var measurement = await new ConfluenceReplay(_barStores.Create(Path.Combine(replayRoot, "bars")),
                 _confluencePolicy).RunAsync(queued.From, queued.To, 10, queued.Benchmark, work.Cancellation.Token);
             var replayStore = _barStores.Create(Path.Combine(replayRoot, "bars"));
-            var replayed = await new HistoricalStructureTradeReplay(replayStore, _structurePolicy).RunAsync(
-                queued.From, queued.To, queued.Watchlist, work.Cancellation.Token);
+            // 과거 orderbook은 제공되지 않으므로 운영 실시간 호가를 흉내 내지 않는다.
+            // replay에만 명시된 모델 비용을 주입하고, 결과와 source를 별도로 표시한다.
+            var costSource = new ModeledHistoricalLiquiditySource(HistoricalReplayCostModel.ConservativeDefault);
+            var trainDays = Math.Max(1, (queued.To.DayNumber - queued.From.DayNumber + 1) / 2);
+            var trainTo = queued.From.AddDays(trainDays - 1);
+            var trainingRun = await new HistoricalStructureTradeReplay(replayStore, _structurePolicy, costSource)
+                .RunDetailedAsync(queued.From, trainTo, queued.Watchlist, work.Cancellation.Token);
+            var observations = trainingRun.Candidates
+                .Where(x => x.CostComplete)
+                .Select(x => x.ExpectedNetR is { } feature && x.RealizedNetR is { } realized
+                    ? new ExpectedValueObservation(x.SignalAt, x.Regime, feature, realized,
+                        x.CostComplete, x.Side, x.Regime)
+                    : null)
+                .Where(x => x is not null).Select(x => x!).ToArray();
+            ExpectedValueThreshold? selectedThreshold = null;
+            var replayPolicy = _structurePolicy;
+            if (observations.Length > 0)
+            {
+                selectedThreshold = WalkForwardExpectedValue.Select(observations,
+                    [0d, .25d, .5d, .75d, 1d], minimumRows: 1);
+                replayPolicy = WalkForwardExpectedValue.ApplyToPolicy(_structurePolicy, selectedThreshold);
+            }
+            var replayedRun = await new HistoricalStructureTradeReplay(replayStore, replayPolicy, costSource)
+                .RunDetailedAsync(queued.From, queued.To, queued.Watchlist, work.Cancellation.Token);
+            var replayed = replayedRun.Trades;
             await WriteTradesAsync(replayRoot, replayed.Values.SelectMany(x => x), work.Cancellation.Token);
             var symbols = queued.Watchlist.Select(symbol =>
                 import.Sources.First(x => string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase)).DataStatus == "no-data"
@@ -206,12 +234,20 @@ public sealed class HistoricalReplayService
                 Status = "completed", CompletedAt = _clock.GetUtcNow(),
                 Source = import.Source,
                 DataStatus = "partial",
-                DataReason = "과거 호가·체결과 slippage 입력이 없어 운영 성능 결론에 사용할 수 없습니다.",
-                Notice = "과거 replay 가상 결과이며 입력이 부분적이므로 운영 성능 결론에 사용할 수 없습니다.",
+                DataReason = "과거 호가·체결과 slippage 원천이 없어 고정 historical 비용 모델을 사용했습니다. 운영 성능 결론에 사용할 수 없습니다.",
+                Notice = "과거 replay 가상 결과이며 모델 비용을 사용했으므로 운영 성능 결론에 사용할 수 없습니다.",
                 SourceQuality = sourceQuality,
                 DataQuality = quality,
                 Symbols = symbols,
-                Aggregate = Aggregate(symbols)
+                Aggregate = Aggregate(symbols),
+                CostProfile = HistoricalReplayCostModel.ConservativeDefault.Version,
+                ExpectedValueThreshold = selectedThreshold?.Value,
+                ExpectedValueTrainingRows = selectedThreshold?.TrainingRows,
+                ReplayCoverage = replayedRun.Coverage,
+                StrategyGateSummary = replayedRun.GateSummary,
+                TimeframeNotice = replayedRun.Coverage.Any(x => x.GranularityStatus != "supported")
+                    ? "원천 봉 주기가 1분 엔진 계약과 다르므로 실시간 패리티 성과로 사용할 수 없습니다."
+                    : null
             } : current);
         }
         catch (Exception) when (work.Cancellation.IsCancellationRequested)
