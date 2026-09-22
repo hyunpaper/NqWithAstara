@@ -18,16 +18,35 @@ public sealed record NewsFeedItem(
     string? GroupId = null,
     IReadOnlyList<NewsEntity>? Entities = null,
     string Content = "",
-    string? Url = null);
+    string? Url = null,
+    string Provider = "");
 
 
 /// <summary>기사 상세(#151). AI 요약이 있으면 본문 대신 그것을 분류 입력으로 쓴다.</summary>
 public sealed record NewsDetail(string Summary, string Body);
 
+public sealed record NewsProviderFetchStatus(string Provider, string Status, int Count, int NewCount = 0);
+
+public sealed record NewsFeedBatch(
+    IReadOnlyList<NewsFeedItem> Items,
+    string Status,
+    IReadOnlyList<NewsProviderFetchStatus> Providers);
+
 /// <summary>외부 뉴스 피드 포트(#151 §1). 구현은 Infrastructure에만 둔다.</summary>
 public interface INewsFeed
 {
+    string Name => "feed";
+    TimeSpan MinimumInterval => TimeSpan.Zero;
+    int DailyRequestLimit => int.MaxValue;
+
     Task<IReadOnlyList<NewsFeedItem>> ListAsync(int page, CancellationToken ct);
+
+    async Task<NewsFeedBatch> FetchAsync(int page, CancellationToken ct)
+    {
+        var items = await ListAsync(page, ct);
+        return new NewsFeedBatch(items, items.Count == 0 ? "empty" : "ok",
+            [new NewsProviderFetchStatus(Name, items.Count == 0 ? "empty" : "ok", items.Count)]);
+    }
 
     /// <summary>기사 상세. 없거나 실패하면 null이다.</summary>
     Task<NewsDetail?> DetailAsync(string id, CancellationToken ct);
@@ -48,6 +67,8 @@ public sealed record NewsClassificationResult(
 /// <summary>기사 제목·출처 번역 포트. 자격증명은 구현체 설정에서만 읽는다.</summary>
 public interface INewsTranslator
 {
+    bool IsConfigured => true;
+
     Task<(string Title, string Source)?> TranslateAsync(string title, string source, CancellationToken ct);
 
     /// <summary>본문/요약 번역. 기존 구현체와 호환되는 선택적 확장이다.</summary>

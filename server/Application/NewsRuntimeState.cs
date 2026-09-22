@@ -22,6 +22,15 @@ public sealed class NewsOptions
     public string PapagoClientId { get; set; } = "";
     public string PapagoClientSecret { get; set; } = "";
 
+    public int MarketauxPollMinutes { get; set; } = 15;
+    public int MarketauxDailyRequestLimit { get; set; } = 96;
+    public int RssDailyRequestLimit { get; set; } = 1440;
+    public int InboxRetentionHours { get; set; } = 168;
+    public int InboxCapacity { get; set; } = 5000;
+    public int TranslationDailyCharacterBudget { get; set; } = 50000;
+    public int TranslationMaxRetries { get; set; } = 2;
+    public int TranslationRetryDelaySeconds { get; set; } = 5;
+
     /// <summary>목록 확장 상한. 신규가 한 페이지를 넘칠 때만 다음 페이지를 본다.</summary>
     public int MaxPages { get; set; } = 1;
 
@@ -78,7 +87,22 @@ public sealed record NewsRecord(
     string? EvidenceArticleId = null,
     string? SummaryKo = null,
     string? ContentKo = null,
-    string PublishedAtStatus = "known");
+    string PublishedAtStatus = "known",
+    string TitleTranslationStatus = "not_requested",
+    string SummaryTranslationStatus = "not_requested",
+    string ContentTranslationStatus = "not_requested",
+    string ClassificationTranslationStatus = "not_requested",
+    string? ClassificationTextKo = null,
+    string? TranslationContentHash = null);
+
+public sealed record NewsProviderRuntimeStatus(
+    string Provider,
+    string Status,
+    int Count,
+    int NewCount,
+    DateTimeOffset LastAttemptAt,
+    DateTimeOffset? LastSuccessAt,
+    DateTimeOffset? LastNewArticleAt);
 
 /// <summary>health·조회가 함께 보는 뉴스 런타임 상태(#151 §6). 스레드 안전하다.</summary>
 public sealed class NewsRuntimeState
@@ -90,6 +114,9 @@ public sealed class NewsRuntimeState
     public DateTimeOffset? LastPollAt { get; private set; }
     public DateTimeOffset? LastAttemptAt { get; private set; }
     public DateTimeOffset? LastSuccessAt { get; private set; }
+    public DateTimeOffset? LastFetchAt { get; private set; }
+    public DateTimeOffset? LastNewArticleAt { get; private set; }
+    public DateTimeOffset? LatestPublishedAt { get; private set; }
     public string? LastError { get; private set; }
     public int Queue { get; private set; }
     public long Dropped { get; private set; }
@@ -98,9 +125,35 @@ public sealed class NewsRuntimeState
     public bool OllamaOk { get; private set; } = true;
     public bool StorageLimited { get; private set; }
     public string FeedStatus { get; private set; } = "idle";
+    public IReadOnlyList<NewsProviderRuntimeStatus> Providers { get; private set; } = [];
 
     public void PollStarted(DateTimeOffset at) { lock (_gate) LastAttemptAt = at; }
-    public void PollCompleted(DateTimeOffset at) { lock (_gate) { LastPollAt = at; LastSuccessAt = at; LastError = null; FeedStatus = "ok"; } }
+    public void PollCompleted(DateTimeOffset at) => CollectionCompleted(at, "ok", true, 0, null, []);
+    public void CollectionCompleted(DateTimeOffset at, string status, bool fetched, int newCount,
+        DateTimeOffset? latestPublishedAt, IReadOnlyList<NewsProviderFetchStatus> providers)
+    {
+        lock (_gate)
+        {
+            LastPollAt = at;
+            FeedStatus = status;
+            LastError = status == "failed" ? "provider_failed" : null;
+            if (fetched) LastFetchAt = at;
+            if (status is "ok" or "empty" or "partial" or "baseline") LastSuccessAt = at;
+            if (newCount > 0) LastNewArticleAt = at;
+            if (latestPublishedAt is not null && latestPublishedAt != DateTimeOffset.MinValue
+                && (LatestPublishedAt is null || latestPublishedAt > LatestPublishedAt))
+                LatestPublishedAt = latestPublishedAt;
+            var previous = Providers.ToDictionary(x => x.Provider, StringComparer.OrdinalIgnoreCase);
+            Providers = providers.Select(x =>
+            {
+                previous.TryGetValue(x.Provider, out var prior);
+                var succeeded = x.Status is "ok" or "empty" or "partial";
+                return new NewsProviderRuntimeStatus(x.Provider, x.Status, x.Count, x.NewCount, at,
+                    succeeded ? at : prior?.LastSuccessAt,
+                    x.NewCount > 0 ? at : prior?.LastNewArticleAt);
+            }).ToArray();
+        }
+    }
     public void PollFailed(DateTimeOffset at, string error) { lock (_gate) { LastPollAt = at; LastError = error; FeedStatus = "failed"; } }
     public void QueueDepth(int depth) { lock (_gate) Queue = depth; }
     public void Drop(int count) { lock (_gate) Dropped += count; }

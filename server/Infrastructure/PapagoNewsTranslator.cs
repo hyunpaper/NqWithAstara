@@ -32,6 +32,9 @@ public sealed class PapagoNewsTranslator : INewsTranslator
         catch (InvalidOperationException) { return null; }
     }
 
+    public bool IsConfigured => !string.IsNullOrWhiteSpace(_options.PapagoClientId)
+        && !string.IsNullOrWhiteSpace(_options.PapagoClientSecret);
+
     public async Task<string?> TranslateTextAsync(string text, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(_options.PapagoClientId) || string.IsNullOrWhiteSpace(_options.PapagoClientSecret)) return null;
