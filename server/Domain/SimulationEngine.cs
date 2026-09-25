@@ -4,7 +4,8 @@ public sealed record SimulationEntry(
     string Kind, double EntryPrice, double Target, double Stop,
     string? TargetBasis, string? StopBasis, int Score, double ExtSigma,
     double RelativeVolume, double? BuyShare, double Rsi, string[] Reasons,
-    DateTimeOffset EnteredAt, DateTimeOffset? SessionEnd, DateTimeOffset TriggerBarAt);
+    DateTimeOffset EnteredAt, DateTimeOffset? SessionEnd, DateTimeOffset TriggerBarAt,
+    TradeSide Side = TradeSide.Long);
 
 public static class SimulationEngine
 {
@@ -25,9 +26,9 @@ public static class SimulationEngine
                 // Quote timestamps are an ordered observation stream. A delayed duplicate must not
                 // change an already observed price or retroactively claim an earlier barrier hit.
                 if (!CanApplyQuote(trade, quoteAt)) { trades[i] = trade; continue; }
-                if (quotePrice <= trade.Stop)
+                if (IsStopHit(trade.Side, quotePrice, trade.Stop))
                     trade = Close(trade, "STOP", quotePrice, quoteAt, quotePrice, false, "SAMPLED_QUOTE", "QUOTE_STOP");
-                else if (quotePrice >= trade.Target)
+                else if (IsTargetHit(trade.Side, quotePrice, trade.Target))
                     trade = Close(trade, "TARGET", trade.Target, quoteAt, quotePrice, false, "SAMPLED_QUOTE", "QUOTE_TARGET");
                 // v4 전용 조기 청산(score<40 CUT). v5 구조 거래에는 적용하지 않는다 — v5는 동결된 구조
                 // Stop/Target과 EOD만으로 관리한다(설계 §10 "v5에 v4 score<40 CUT을 적용하지 않는다").
@@ -43,13 +44,14 @@ public static class SimulationEngine
             if (trades.Any(x => x.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase) && x.Status == "OPEN")) break;
             if (trades.Any(x => x.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase) &&
                                 x.Kind == entry.Kind && x.TriggerBarAt == entry.TriggerBarAt)) continue;
-            if (entry.Target <= entry.EntryPrice || entry.Stop >= entry.EntryPrice) continue;
+            if (entry.Side == TradeSide.Long && (entry.Target <= entry.EntryPrice || entry.Stop >= entry.EntryPrice) ||
+                entry.Side == TradeSide.Short && (entry.Target >= entry.EntryPrice || entry.Stop <= entry.EntryPrice)) continue;
             trades.Add(new(Guid.NewGuid().ToString("N")[..8], symbol, entry.Kind, entry.EnteredAt,
                 entry.EntryPrice, entry.Target, entry.Stop, entry.TargetBasis, entry.StopBasis,
                 "OPEN", null, null, null, entry.EntryPrice, entry.Score, entry.ExtSigma,
                 entry.RelativeVolume, entry.BuyShare, entry.Rsi, entry.Reasons, LogicVersion,
                 null, entry.SessionEnd, null, entry.EnteredAt, entry.TriggerBarAt, null,
-                EntryProvenance(entry.EnteredAt)));
+                EntryProvenance(entry.EnteredAt), entry.Side));
         }
 
         // OPEN records are operational state and must never be evicted. Retain the newest
@@ -111,18 +113,19 @@ public static class SimulationEngine
     {
         // A stop gap fills at the opening print; this avoids the optimistic assumption
         // that a sell order could execute at a stop already skipped by the market.
-        if (bar.Open <= trade.Stop)
+        if (IsStopHit(trade.Side, bar.Open, trade.Stop))
             return Close(trade, "STOP", bar.Open, bar.Timestamp, bar.Close, false, "GAP_OPEN", "GAP_STOP", bar) with { LastEvaluatedBarAt = bar.Timestamp };
         // A gap-up open already at/beyond target has the target order filled before the bar's
         // own low can be checked against stop — the target print came first. Fill conservatively
         // at Target rather than the more favorable Open (mirrors the stop-gap treatment above).
-        if (bar.Open >= trade.Target)
+        if (IsTargetHit(trade.Side, bar.Open, trade.Target))
             return Close(trade, "TARGET", trade.Target, bar.Timestamp, bar.Close, false, "GAP_OPEN", "GAP_TARGET", bar) with { LastEvaluatedBarAt = bar.Timestamp };
-        if (bar.Low <= trade.Stop)
+        if (IsStopHit(trade.Side, bar.Low, trade.Stop) || IsStopHit(trade.Side, bar.High, trade.Stop))
             return Close(trade, "STOP", trade.Stop, bar.Timestamp, bar.Close, false, "COMPLETED_BAR_REPLAY",
-                bar.High >= trade.Target ? "SAME_BAR_STOP_FIRST" : "BAR_STOP", bar) with { LastEvaluatedBarAt = bar.Timestamp };
+                IsTargetHit(trade.Side, bar.High, trade.Target) || IsTargetHit(trade.Side, bar.Low, trade.Target)
+                    ? "SAME_BAR_STOP_FIRST" : "BAR_STOP", bar) with { LastEvaluatedBarAt = bar.Timestamp };
         // When both levels occur within one minute and order is unknowable, stop-first is conservative.
-        if (bar.High >= trade.Target)
+        if (IsTargetHit(trade.Side, bar.High, trade.Target) || IsTargetHit(trade.Side, bar.Low, trade.Target))
             return Close(trade, "TARGET", trade.Target, bar.Timestamp, bar.Close, false, "COMPLETED_BAR_REPLAY", "BAR_TARGET_AFTER_STOP_CHECK", bar) with { LastEvaluatedBarAt = bar.Timestamp };
         return trade with { LastPrice = bar.Close, LastPriceAt = BarCloseAt(bar), LastEvaluatedBarAt = bar.Timestamp,
             Execution = WithBarEvidence(trade.Execution, bar) };
@@ -140,13 +143,20 @@ public static class SimulationEngine
 
     static SimTrade Close(SimTrade trade, string status, double exitPrice, DateTimeOffset exitAt, double lastPrice, bool estimated,
         string source, string decision, Candle? bar = null)
-        => trade with
+    {
+        var gross = (trade.Side == TradeSide.Long
+            ? exitPrice / trade.EntryPrice - 1
+            : 1 - exitPrice / trade.EntryPrice) * 100;
+        var borrow = trade.Side == TradeSide.Short && trade.Structure?.PlanSnapshot.BorrowCostPerShare is { } cost
+            ? cost / (decimal)trade.EntryPrice * 100 : 0;
+        return trade with
         {
             Status = status, ExitPrice = exitPrice, ExitAt = exitAt,
-            PnlPercent = Math.Round((exitPrice / trade.EntryPrice - 1) * 100 - MarketRules.RoundTripFeePercent, 2),
+            PnlPercent = Math.Round(gross - MarketRules.RoundTripFeePercent - (double)borrow, 2),
             LastPrice = lastPrice, LastPriceAt = estimated ? trade.LastPriceAt : bar is null ? exitAt : BarCloseAt(bar), ExitEstimated = estimated,
             Execution = WithExitEvidence(trade.Execution, source, estimated ? trade.LastPriceAt : bar is null ? exitAt : BarCloseAt(bar), decision, bar)
         };
+    }
 
     static ExecutionProvenance EntryProvenance(DateTimeOffset enteredAt)
     {
@@ -179,6 +189,10 @@ public static class SimulationEngine
     };
 
     static DateTimeOffset BarCloseAt(Candle bar) => bar.Timestamp.AddMinutes(1);
+    static bool IsStopHit(TradeSide side, double price, double stop) =>
+        side == TradeSide.Long ? price <= stop : price >= stop;
+    static bool IsTargetHit(TradeSide side, double price, double target) =>
+        side == TradeSide.Long ? price >= target : price <= target;
     static bool CanApplyQuote(SimTrade trade, DateTimeOffset quoteAt) => trade.Execution?.LastQuoteAt is not { } lastQuoteAt || quoteAt > lastQuoteAt;
     static bool SameMinute(DateTimeOffset left, DateTimeOffset right) => left.Year == right.Year && left.Month == right.Month &&
         left.Day == right.Day && left.Hour == right.Hour && left.Minute == right.Minute && left.Offset == right.Offset;

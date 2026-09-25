@@ -32,7 +32,7 @@ public sealed class HistoricalReplayDiagnosticsTests
         Assert.Equal(0, diagnostics.Summary.MaxAbsoluteDifference);
         Assert.Contains("slippage 미수집", diagnostics.Summary.ReconciliationBasis, StringComparison.Ordinal);
         Assert.Contains("slippage", diagnostics.Notice, StringComparison.Ordinal);
-        Assert.Equal(new[] { "entryQuality", "kind", "planNetR", "trend" }, diagnostics.Cohorts
+        Assert.Equal(new[] { "entryQuality", "kind", "planNetR", "regime", "side", "trend" }, diagnostics.Cohorts
             .Select(x => x.Dimension).Distinct().Order().ToArray());
         Assert.All(diagnostics.Cohorts.GroupBy(x => x.Dimension), group =>
             Assert.Equal(diagnostics.Summary.ClosedTrades, group.Sum(x => x.Summary.ClosedTrades)));

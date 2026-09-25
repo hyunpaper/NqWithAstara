@@ -10,7 +10,8 @@ namespace Astra.Server.Application.Backtest;
 public sealed record HistoricalReplayCostSummary(int ClosedTrades, int Wins, int Losses, double? WinRatePercent,
     int CostCollectedTrades, int CostUncollectedTrades, double? GrossPnlPercent, double? FeePercent,
     double? SlippagePercent, double? NetPnlPercent, int ReconciledTrades, int MismatchedTrades,
-    int UnverifiableTrades, double? MaxAbsoluteDifference, string ReconciliationBasis);
+    int UnverifiableTrades, double? MaxAbsoluteDifference, string ReconciliationBasis,
+    double? ProfitFactor = null, double? MaxDrawdownPercent = null, int MissingCostRows = 0);
 
 public sealed record HistoricalReplayCohort(string Dimension, string Key, string Label, bool Collected,
     HistoricalReplayCostSummary Summary);
@@ -91,6 +92,9 @@ public static class HistoricalReplayDiagnosticsBuilder
         var closed = rows.Where(IsClosed).ToArray();
         var cohorts = new List<HistoricalReplayCohort>();
         Add(cohorts, closed, "kind", x => (x.Trade.Kind, x.Trade.Kind, true));
+        Add(cohorts, closed, "side", x => (x.Trade.Side.ToString(), x.Trade.Side == Astra.Server.TradeSide.Long ? "롱" : "숏", true));
+        Add(cohorts, closed, "regime", x => x.Trade.Structure?.Regime is { } regime
+            ? (regime.Key, regime.Key, true) : ("UNCOLLECTED", "regime 미수집", false));
         Add(cohorts, closed, "trend", x => x.Trade.Structure?.TrendAtEntry is { Length: > 0 } trend
             ? (trend, trend, true) : ("UNCOLLECTED", "추세 미수집", false));
         Add(cohorts, closed, "entryQuality", Quality);
@@ -142,6 +146,18 @@ public static class HistoricalReplayDiagnosticsBuilder
         var reconciled = differences.Count(x => x <= .000001d);
         var complete = costs.Length == rows.Count;
         var slippageCollected = complete && rows.All(x => x.SlippagePercent.Finite);
+        var positive = netRows.Where(x => x.NetPnlPercent.Value > 0).Sum(x => x.NetPnlPercent.Value!.Value);
+        var negative = netRows.Where(x => x.NetPnlPercent.Value < 0).Sum(x => x.NetPnlPercent.Value!.Value);
+        double? profitFactor = negative < 0 ? positive / Math.Abs(negative) : positive > 0 ? double.PositiveInfinity : null;
+        double peak = 0, cumulative = 0, drawdown = 0;
+        foreach (var row in netRows.OrderBy(x => x.Trade.EnteredAt).ThenBy(x => x.Trade.Id, StringComparer.Ordinal))
+        {
+            cumulative += row.NetPnlPercent.Value!.Value;
+            peak = Math.Max(peak, cumulative);
+            drawdown = Math.Min(drawdown, cumulative - peak);
+        }
+        double? roundedProfitFactor = profitFactor is { } pf && double.IsFinite(pf)
+            ? Math.Round(pf, 6) : profitFactor;
         return new HistoricalReplayCostSummary(rows.Count, wins, netRows.Length - wins,
             netRows.Length == 0 ? null : Math.Round(wins * 100d / netRows.Length, 1), costs.Length,
             rows.Count - costs.Length,
@@ -151,7 +167,9 @@ public static class HistoricalReplayDiagnosticsBuilder
             complete ? Math.Round(costs.Sum(x => x.NetPnlPercent.Value!.Value), 6) : null,
             reconciled, differences.Length - reconciled, rows.Count - differences.Length,
             differences.Length == 0 ? null : Math.Round(differences.Max(), 6),
-            "slippage 수집 행: gross - fee - slippage = net; slippage 미수집 행: gross - fee = net");
+            "slippage 수집 행: gross - fee - slippage = net; slippage 미수집 행: gross - fee = net",
+            roundedProfitFactor,
+            Math.Round(Math.Abs(drawdown), 6), rows.Count - costs.Length);
     }
 
     static string Fingerprint(IEnumerable<HistoricalReplayDiagnosticTrade> rows)
@@ -161,6 +179,7 @@ public static class HistoricalReplayDiagnosticsBuilder
             .Select(x => string.Join('|', x.Trade.Id, x.Trade.Symbol, x.Trade.Kind, x.Trade.EnteredAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
                 x.Trade.Status, Number(x.Trade.EntryPrice), Number(x.Trade.ExitPrice),
                 x.Trade.ExitAt?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture) ?? string.Empty,
+                x.Trade.Side, x.Trade.Structure?.Regime?.Key ?? string.Empty,
                 x.Trade.Structure?.TrendAtEntry ?? string.Empty, Number(x.Trade.Structure?.EntryQualityAtEntry),
                 Number(x.Trade.Structure?.PlanSnapshot.NetR), Number(x.GrossPnlPercent.Value), Number(x.FeePercent.Value),
                 Number(x.SlippagePercent.Value), Number(x.NetPnlPercent.Value))));

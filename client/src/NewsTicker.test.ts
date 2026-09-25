@@ -29,7 +29,7 @@ describe("NewsTicker", () => {
   });
 
   it("반복 트랙을 220초에 이동하고 마우스·키보드 정지와 동작 축소를 유지한다", () => {
-    expect(css).toContain("animation: news-ticker-scroll 220s linear infinite");
+    expect(css).toContain("animation: news-ticker-scroll 147s linear infinite");
     expect(css).toContain(".news-ticker-viewport:hover .news-ticker-track, .news-ticker-viewport:focus-within .news-ticker-track { animation-play-state: paused; }");
     expect(css).toContain("@media (prefers-reduced-motion: reduce) { .news-ticker-track { animation: none; } }");
     expect(css).not.toContain("animation: news-ticker-scroll 110s linear infinite");

@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Globalization;
+using Astra.Server;
 
 namespace Astra.Server.Domain.Structure;
 
@@ -10,7 +11,8 @@ namespace Astra.Server.Domain.Structure;
 /// <summary>§9.3/§16B 비용 가정. 자격 평가용 비용과 실현 손익 비용을 같은 값으로 취급하지 않는다.</summary>
 public sealed record CostAssumptions(decimal FeePerShare, decimal ExtraCostPerShare, decimal? ValidSpread,
     bool MissingLiquidity, double RoundTripFeePercent, string EligibilityCostModelVersion,
-    string RealizedFillCostModelVersion, ImmutableArray<string> Notes);
+    string RealizedFillCostModelVersion, ImmutableArray<string> Notes,
+    decimal? BorrowCostPerShare = null, bool BorrowCostMissing = false);
 
 /// <summary>
 /// 설계 §11 StructuralTradePlan. Stop/Target은 구조에서 나온 값만 담으며, 계획이 성립하지 않으면
@@ -21,7 +23,9 @@ public sealed record StructuralTradePlan(string PlanId, string Kind, decimal Ent
     PriceZone TargetZoneSnapshot, decimal Buffer, string BufferBasis, decimal FrontRunBuffer,
     decimal NetReward, decimal NetRisk, decimal NetR, double RiskPercent, double? Atr1mAtPlan,
     CostAssumptions Costs, DateTimeOffset CreatedAt, DateTimeOffset ExpiresAt, string EngineVersion,
-    string PolicyHash, ImmutableArray<string> ReasonCodes, string HumanExplanation)
+    string PolicyHash, ImmutableArray<string> ReasonCodes, string HumanExplanation,
+    TradeSide Side = TradeSide.Long, StrategyRegime? Regime = null,
+    EntryEvidence? Evidence = null)
 {
     public string Fingerprint() => string.Join('|', PlanId, Kind, StructureMath.Price(EntryReference),
         StructureMath.Price(InvalidationAnchor), StructureMath.Price(Stop), StructureMath.Price(Target),
@@ -31,14 +35,16 @@ public sealed record StructuralTradePlan(string PlanId, string Kind, decimal Ent
         StructureMath.Price(Buffer), BufferBasis, StructureMath.Price(NetReward), StructureMath.Price(NetRisk),
         StructureMath.Price(NetR), StructureMath.Number(RiskPercent), StructureMath.Number(Atr1mAtPlan),
         StructureMath.Price(Costs.FeePerShare), StructureMath.Price(Costs.ExtraCostPerShare),
-        Costs.MissingLiquidity ? "1" : "0", EngineVersion, PolicyHash, string.Join(',', ReasonCodes));
+        Costs.MissingLiquidity ? "1" : "0", Side.ToString(), Regime?.Key ?? "null",
+        Evidence?.Fingerprint() ?? "null", EngineVersion, PolicyHash, string.Join(',', ReasonCodes));
 }
 
 /// <summary>계획 계산 입력. 가격은 decimal, ATR은 double이며 시각은 명시적으로 전달한다(§4, §16A).</summary>
 public sealed record PlanRequest(string Symbol, string EventId, string Kind, decimal EntryReference,
     decimal? InvalidationAnchor, PriceZone? InvalidationZone, ImmutableArray<PriceZone> Zones,
     double? Atr1mAtPlan, decimal? ValidSpread, DateTimeOffset CreatedAt, DateTimeOffset ExpiresAt,
-    bool PriceTickSupported = true);
+    bool PriceTickSupported = true, TradeSide Side = TradeSide.Long, StrategyRegime? Regime = null,
+    EntryEvidence? Evidence = null);
 
 /// <summary>
 /// 계획 계산 결과. 계획이 성립하지 않아도 화면·관측이 이유를 설명할 수 있도록 중간값을 남기지만,
@@ -109,6 +115,7 @@ public static class StructuralPlanner
     public const string ExcessiveRewardToRisk = "EXCESSIVE_REWARD_TO_RISK";
     public const string RiskTooWide = "RISK_TOO_WIDE";
     public const string StopNotBelowEntry = "STOP_NOT_BELOW_ENTRY";
+    public const string StopNotAboveEntry = "STOP_NOT_ABOVE_ENTRY";
     public const string StopNotPositive = "STOP_NOT_POSITIVE";
 
     /// <summary>#43/#209 §9.1: 손절폭이 max(왕복 수수료, MinStopAtrFactor*ATR1m) 안쪽이다. 위험이 아니라 체결 잡음이다.</summary>
@@ -121,6 +128,7 @@ public static class StructuralPlanner
     public const string PriceBelowMinimumSupported = "PRICE_BELOW_MINIMUM_SUPPORTED";
     public const string UnsupportedPriceTick = "UNSUPPORTED_PRICE_TICK";
     public const string MissingLiquidityCost = "MISSING_LIQUIDITY_COST";
+    public const string ShortBorrowCostMissing = "SHORT_BORROW_COST_MISSING";
     public const string BufferFromTickOnly = "BUFFER_FROM_TICK_ONLY";
 
     public const string BasisAtrNoise = "ATR_NOISE";
@@ -134,6 +142,7 @@ public static class StructuralPlanner
         var reasons = new List<string>();
         var warnings = new SortedSet<string>(StringComparer.Ordinal);
         var entry = request.EntryReference;
+        var longSide = request.Side == TradeSide.Long;
 
         var spread = request.ValidSpread;
         var missingLiquidity = spread is null;
@@ -150,6 +159,15 @@ public static class StructuralPlanner
         // §9.3 feeCostPerShare=Entry*RoundTripFeePercent/100. 0.2%는 설정 기본값이며 계좌별 실제 수수료가 아니다.
         // 진입가만으로 정해지므로 손절 하한 검사(#43)보다 먼저 구한다. 공식은 §9.3 그대로다.
         var fee = entry * (decimal)policy.RoundTripFeePercent / 100m;
+        var borrowMissing = !longSide && policy.ShortBorrowCostPercent is null;
+        if (borrowMissing)
+        {
+            warnings.Add(ShortBorrowCostMissing);
+            reasons.Add(ShortBorrowCostMissing);
+        }
+        var borrowCost = !longSide && policy.ShortBorrowCostPercent is { } borrowPercent
+            ? entry * (decimal)borrowPercent / 100m : 0m;
+        var variableCost = extraCost + borrowCost;
 
         // ── §9.1 손절: 구조 anchor 없으면 Stop=null, READY 금지 ──
         decimal? buffer = null, stop = null;
@@ -169,7 +187,7 @@ public static class StructuralPlanner
             var candidates = new (decimal Value, string Basis)[]
             {
                 (atrBuffer ?? 0m, BasisAtrNoise),
-                (extraCost, BasisSpread),
+                (variableCost, BasisSpread),
                 (policy.StopBufferFloor, BasisTickFloor)
             };
             var best = candidates[0];
@@ -178,17 +196,20 @@ public static class StructuralPlanner
             buffer = best.Value;
             bufferBasis = best.Basis;
 
-            var computed = StructureMath.FloorToCent(anchor.Value - buffer.Value);
+            var computed = longSide
+                ? StructureMath.FloorToCent(anchor.Value - buffer.Value)
+                : StructureMath.CeilingToCent(anchor.Value + buffer.Value);
             stop = computed;
             if (computed <= 0) reasons.Add(StopNotPositive);
-            if (computed >= entry) reasons.Add(StopNotBelowEntry);
+            if (longSide && computed >= entry) reasons.Add(StopNotBelowEntry);
+            if (!longSide && computed <= entry) reasons.Add(StopNotAboveEntry);
         }
 
         // §9.1 초기 MaxRiskPercent는 사용 안전 정책이다. 넘으면 거절하고 손절을 구조 안쪽으로 당기지 않는다.
         double? riskPercent = null;
-        if (stop is { } stopValue && stopValue > 0 && stopValue < entry)
+        if (stop is { } stopValue && stopValue > 0 && (longSide ? stopValue < entry : stopValue > entry))
         {
-            riskPercent = (double)((entry - stopValue) / entry) * 100;
+            riskPercent = (double)(Math.Abs(entry - stopValue) / entry) * 100;
             if (riskPercent > policy.MaxRiskPercent) reasons.Add(RiskTooWide);
 
             // ── #43 최소 손절 거리 하한. §9.1 MaxRiskPercent 상한과 대칭인 하한이다 ──
@@ -197,7 +218,7 @@ public static class StructuralPlanner
             // 손절을 넓히거나 옮기지 않는다 — ATR로 손절 위치를 만들어내는 폴백은 v5 금지 사항이다(§19-5).
             // #209: 비용 하한과 노이즈 하한은 척도만 다른 같은 규칙이다 — max()로 합쳐 사유 코드도 하나만 낸다.
             // §16A: ATR 결측·비양수를 0으로 대체하지 않는다. 이 경우 노이즈 하한은 빠지고 비용 하한만 남는다.
-            var stopDistance = entry - stopValue;
+            var stopDistance = Math.Abs(entry - stopValue);
             var noiseFloor = StructureMath.ToPriceDelta(
                 request.Atr1mAtPlan is { } atrForFloor && double.IsFinite(atrForFloor) && atrForFloor > 0
                     ? atrForFloor * policy.MinStopAtrFactor
@@ -206,26 +227,31 @@ public static class StructuralPlanner
             if (stopDistance < minimumStop) reasons.Add(StopInsideCost);
         }
 
-        // ── §9.2 목표: 가장 가까운 자격 있는 저항 앞 ──
-        var frontRun = policy.FrontRunBufferFloor > extraCost ? policy.FrontRunBufferFloor : extraCost;
-        // 진입가가 적격 저항 구간 안이면 그 저항을 건너뛰고 위쪽 먼 저항을 목표로 삼지 않는다(§19-5).
-        var enclosing = EnclosingQualifiedResistance(request.Zones, entry);
-        var targetZone = enclosing is null ? NearestQualifiedResistance(request.Zones, entry) : null;
+        // ── §9.2 목표: side에 맞는 가장 가까운 구조 앞 ──
+        var frontRun = policy.FrontRunBufferFloor > variableCost ? policy.FrontRunBufferFloor : variableCost;
+        var enclosing = longSide ? EnclosingQualifiedResistance(request.Zones, entry)
+            : EnclosingQualifiedSupport(request.Zones, entry);
+        var targetZone = enclosing is null
+            ? (longSide ? NearestQualifiedResistance(request.Zones, entry) : NearestQualifiedSupport(request.Zones, entry))
+            : null;
         decimal? target = null;
         if (enclosing is not null) reasons.Add(EntryInsideResistance);
         else if (targetZone is null) reasons.Add(NoTargetStructure);
         else
         {
-            target = StructureMath.FloorToCent(targetZone.Lower - frontRun);
-            if (target <= entry) reasons.Add(NoTargetRoom);
+            target = longSide
+                ? StructureMath.FloorToCent(targetZone.Lower - frontRun)
+                : StructureMath.CeilingToCent(targetZone.Upper + frontRun);
+            if (longSide && target <= entry || !longSide && target >= entry) reasons.Add(NoTargetRoom);
         }
 
         // ── §9.3 비용과 진입 자격 ──
         decimal? netReward = null, netRisk = null, netR = null;
-        if (stop is { } s2 && s2 > 0 && s2 < entry && target is { } t2 && t2 > entry)
+        if (stop is { } s2 && s2 > 0 && target is { } t2 &&
+            (longSide ? s2 < entry && t2 > entry : s2 > entry && t2 < entry))
         {
-            netReward = t2 - entry - fee - extraCost;
-            netRisk = entry - s2 + fee + extraCost;
+            netReward = Math.Abs(t2 - entry) - fee - variableCost;
+            netRisk = Math.Abs(entry - s2) + fee + variableCost;
             if (netReward <= 0) reasons.Add(CostExceedsRoom);
             if (netRisk <= 0) reasons.Add(InvalidEntryReference);
             else
@@ -236,8 +262,9 @@ public static class StructuralPlanner
             }
         }
 
-        var costs = new CostAssumptions(fee, extraCost, spread, missingLiquidity, policy.RoundTripFeePercent,
-            policy.EligibilityCostModelVersion, policy.RealizedFillCostModelVersion, warnings.ToImmutableArray());
+        var costs = new CostAssumptions(fee, variableCost, spread, missingLiquidity, policy.RoundTripFeePercent,
+            policy.EligibilityCostModelVersion, policy.RealizedFillCostModelVersion, warnings.ToImmutableArray(),
+            borrowCost, borrowMissing);
 
         if (reasons.Count > 0)
             return Rejected(reasons, warnings, request, anchor, buffer, stop, target, spread, missingLiquidity,
@@ -249,7 +276,8 @@ public static class StructuralPlanner
             buffer!.Value, bufferBasis!, frontRun, netReward!.Value, netRisk!.Value, netR!.Value,
             riskPercent!.Value, request.Atr1mAtPlan, costs, request.CreatedAt, request.ExpiresAt,
             policy.Version, policy.PolicyHash, warnings.ToImmutableArray(),
-            Explain(request, entry, anchor.Value, stop.Value, target.Value, targetZone!, netR.Value));
+            Explain(request, entry, anchor.Value, stop.Value, target.Value, targetZone!, netR.Value),
+            request.Side, request.Regime, request.Evidence);
 
         return new PlanEvaluation(plan, ImmutableArray<string>.Empty, anchor, buffer, bufferBasis, stop, target,
             netReward, netRisk, netR, riskPercent, request.InvalidationZone, targetZone, spread, missingLiquidity,
@@ -271,10 +299,23 @@ public static class StructuralPlanner
     public static PriceZone? EnclosingQualifiedResistance(ImmutableArray<PriceZone> zones, decimal entry) =>
         Ordered(QualifiedResistances(zones).Where(x => x.Lower <= entry && entry < x.Upper)).FirstOrDefault();
 
+    public static PriceZone? NearestQualifiedSupport(ImmutableArray<PriceZone> zones, decimal entry) =>
+        QualifiedSupports(zones).Where(x => x.Upper < entry)
+            .OrderByDescending(x => x.Upper).ThenBy(x => x.Lower).ThenBy(x => x.Id, StringComparer.Ordinal)
+            .FirstOrDefault();
+
+    public static PriceZone? EnclosingQualifiedSupport(ImmutableArray<PriceZone> zones, decimal entry) =>
+        Ordered(QualifiedSupports(zones).Where(x => x.Lower < entry && entry < x.Upper)).FirstOrDefault();
+
     static IEnumerable<PriceZone> QualifiedResistances(ImmutableArray<PriceZone> zones) =>
         zones
             .Where(x => x.Eligible && !x.Retired && !x.ProfileOnly)
             .Where(x => x.Role is ZoneRole.Resistance or ZoneRole.FlippedResistance);
+
+    static IEnumerable<PriceZone> QualifiedSupports(ImmutableArray<PriceZone> zones) =>
+        zones
+            .Where(x => x.Eligible && !x.Retired && !x.ProfileOnly)
+            .Where(x => x.Role is ZoneRole.Support or ZoneRole.FlippedSupport);
 
     static IEnumerable<PriceZone> Ordered(IEnumerable<PriceZone> zones) =>
         zones.OrderBy(x => x.Lower).ThenBy(x => x.Upper).ThenBy(x => x.Id, StringComparer.Ordinal);

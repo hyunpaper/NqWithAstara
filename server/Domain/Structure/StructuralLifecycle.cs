@@ -306,11 +306,15 @@ public static class StructuralLifecycle
     {
         if (candidate.Plan is { } plan)
         {
-            if (live <= plan.Stop) return true;
-            if (candidate.Kind == SetupKind.Breakout && live <= plan.InvalidationZoneSnapshot.Upper) return true;
+            if (plan.Side == TradeSide.Long && live <= plan.Stop ||
+                plan.Side == TradeSide.Short && live >= plan.Stop) return true;
+            if (candidate.Kind == SetupKind.Breakout &&
+                (plan.Side == TradeSide.Long && live <= plan.InvalidationZoneSnapshot.Upper ||
+                 plan.Side == TradeSide.Short && live >= plan.InvalidationZoneSnapshot.Lower)) return true;
             return false;
         }
-        return candidate.Kind != SetupKind.Breakout && candidate.InvalidationAnchor is { } anchor && live < anchor;
+        return candidate.Kind != SetupKind.Breakout && candidate.InvalidationAnchor is { } anchor &&
+            (candidate.Side == TradeSide.Long ? live < anchor : live > anchor);
     }
 
     /// <summary>
