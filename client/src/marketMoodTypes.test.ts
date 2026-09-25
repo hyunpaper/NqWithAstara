@@ -15,6 +15,10 @@ describe("시장 분위기 API 계약", () => {
       refreshSeconds: 60,
       limitations: ["ETF 프록시입니다."],
       evidence: ["gold"],
+      economicCalendar: {
+        marketDate: "2026-09-22", timeZone: "America/New_York", status: "unsupported", source: "미연결", asOf: "2026-09-22T15:00:00Z",
+        reason: "검증된 무료 제공자가 없습니다.", events: [],
+      },
       assets: [
         { key: "gold", label: "금", symbol: "GLD", assetKind: "commodity", proxy: true, isAvailable: true, direction: "up", changePercent: 1.25, asOf: "2026-09-22T14:59:00Z", source: "Toss", delayStatus: "fresh", sessionStatus: "open", reason: null },
         { key: "oil", label: "유가", symbol: "USO", assetKind: "commodity", proxy: true, isAvailable: false, direction: "unknown", changePercent: null, asOf: null, source: "Toss", delayStatus: "unavailable", sessionStatus: "closed", reason: "휴장" },
@@ -22,6 +26,7 @@ describe("시장 분위기 API 계약", () => {
     });
 
     expect(mood?.evidence).toEqual(["gold"]);
+    expect(mood?.economicCalendar).toMatchObject({ status: "unsupported", events: [], reason: "검증된 무료 제공자가 없습니다." });
     expect(mood?.assets[0].proxy).toBe(true);
     expect(mood?.assets[1]).toMatchObject({ isAvailable: false, sessionStatus: "closed", reason: "휴장" });
     expect(marketMoodBadge(mood!)).toEqual({ label: "시장 분위기 상승 +1.25%", className: "news-badge positive" });

@@ -88,6 +88,14 @@ export default function MarketMoodPopover({ mood }: { mood: MarketMoodResponse }
         <small>{asset.reason ?? `${absoluteTimeKst(asset.asOf)} · ${asset.source}`}</small>
       </li>)}
     </ul>
+    <strong>오늘의 미국 경제 일정</strong>
+    {mood.economicCalendar.events.length === 0
+      ? <span className="market-mood-limit">{mood.economicCalendar.reason ?? "등록된 일정이 없습니다."}</span>
+      : <ul>{mood.economicCalendar.events.map((event) => <li key={event.id} className={event.status === "published" ? "" : "excluded"}>
+        <span><b>{event.title}</b> · {absoluteTimeKst(event.scheduledAt)}</span>
+        <span>{event.status === "published" ? `발표 ${event.actual ?? "값 없음"}${event.unit ?? ""}` : event.status === "unpublished" ? "미발표" : event.status === "delayed" ? "지연" : "미지원"}</span>
+        <small>예상 {event.forecast ?? "미제공"} · 이전 {event.previous ?? "미제공"} · 영향 {event.impactDirection} · {event.source}{event.reason ? ` · ${event.reason}` : ""}</small>
+      </li>)}</ul>}
     {mood.limitations.map((limitation) => <small className="market-mood-limit" key={limitation}>{limitation}</small>)}
   </div> : null;
 

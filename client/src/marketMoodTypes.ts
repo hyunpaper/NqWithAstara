@@ -26,7 +26,32 @@ export type MarketMoodResponse = {
   refreshSeconds: number;
   limitations: string[];
   evidence: string[];
+  economicCalendar: EconomicCalendarSnapshot;
   assets: MarketMoodAsset[];
+};
+
+export type EconomicCalendarEvent = {
+  id: string;
+  title: string;
+  scheduledAt: string;
+  status: "published" | "unpublished" | "delayed" | "unsupported";
+  actual: string | null;
+  forecast: string | null;
+  previous: string | null;
+  unit: string | null;
+  impactDirection: string;
+  source: string;
+  reason: string | null;
+};
+
+export type EconomicCalendarSnapshot = {
+  marketDate: string;
+  timeZone: string;
+  status: "available" | "partial" | "unpublished" | "delayed" | "unsupported";
+  source: string;
+  asOf: string;
+  reason: string | null;
+  events: EconomicCalendarEvent[];
 };
 
 const record = (value: unknown): Record<string, unknown> | null =>
@@ -64,6 +89,27 @@ export const normalizeMarketMood = (value: unknown): MarketMoodResponse | null =
   });
   const status = text(root.status);
   const direction = text(root.direction);
+  const rawCalendar = record(root.economicCalendar);
+  const calendarStatus = text(rawCalendar?.status);
+  const calendarEvents = Array.isArray(rawCalendar?.events) ? rawCalendar.events.flatMap((raw): EconomicCalendarEvent[] => {
+    const event = record(raw);
+    const id = text(event?.id);
+    const title = text(event?.title);
+    const scheduledAt = text(event?.scheduledAt);
+    if (!event || !id || !title || !scheduledAt) return [];
+    const eventStatus = text(event.status);
+    return [{
+      id, title, scheduledAt,
+      status: eventStatus === "published" || eventStatus === "unpublished" || eventStatus === "delayed" ? eventStatus : "unsupported",
+      actual: text(event.actual),
+      forecast: text(event.forecast),
+      previous: text(event.previous),
+      unit: text(event.unit),
+      impactDirection: text(event.impactDirection) ?? "unknown",
+      source: text(event.source) ?? "출처 미상",
+      reason: text(event.reason),
+    }];
+  }) : [];
   return {
     asOf: text(root.asOf) ?? "",
     status: status === "available" || status === "partial" ? status : "unavailable",
@@ -76,6 +122,15 @@ export const normalizeMarketMood = (value: unknown): MarketMoodResponse | null =
     refreshSeconds: finite(root.refreshSeconds) ?? 60,
     limitations: Array.isArray(root.limitations) ? root.limitations.flatMap((item) => text(item) ?? []) : [],
     evidence: Array.isArray(root.evidence) ? root.evidence.flatMap((item) => text(item) ?? []) : [],
+    economicCalendar: {
+      marketDate: text(rawCalendar?.marketDate) ?? "",
+      timeZone: text(rawCalendar?.timeZone) ?? "America/New_York",
+      status: calendarStatus === "available" || calendarStatus === "partial" || calendarStatus === "unpublished" || calendarStatus === "delayed" ? calendarStatus : "unsupported",
+      source: text(rawCalendar?.source) ?? "미연결",
+      asOf: text(rawCalendar?.asOf) ?? "",
+      reason: text(rawCalendar?.reason),
+      events: calendarEvents,
+    },
     assets,
   };
 };

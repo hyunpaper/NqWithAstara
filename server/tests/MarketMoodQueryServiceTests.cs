@@ -24,7 +24,7 @@ public sealed class MarketMoodQueryServiceTests
         gateway.Prices["IBIT"] = (105, Now.AddMinutes(-1));
         gateway.Prices["TLT"] = (95, Now.AddMinutes(-1));
 
-        var result = await new MarketMoodQueryService(gateway, new MoodClock(Now)).GetAsync();
+        var result = await Service(gateway).GetAsync();
 
         Assert.Equal("available", result.Status);
         Assert.Equal(5, result.AvailableCount);
@@ -49,7 +49,7 @@ public sealed class MarketMoodQueryServiceTests
         gateway.Prices["USO"] = (80, Now.AddMinutes(-5));
         gateway.Prices.Remove("IBIT");
 
-        var result = await new MarketMoodQueryService(gateway, new MoodClock(Now)).GetAsync();
+        var result = await Service(gateway).GetAsync();
 
         Assert.Equal("partial", result.Status);
         Assert.Equal(3, result.AvailableCount);
@@ -72,7 +72,7 @@ public sealed class MarketMoodQueryServiceTests
         var gateway = OpenGateway();
         gateway.CurrentSession = new(false, "휴장", null, null, null);
 
-        var result = await new MarketMoodQueryService(gateway, new MoodClock(Now)).GetAsync();
+        var result = await Service(gateway).GetAsync();
 
         Assert.Equal("unavailable", result.Status);
         Assert.Null(result.Score);
@@ -91,7 +91,7 @@ public sealed class MarketMoodQueryServiceTests
     {
         var gateway = OpenGateway();
         var clock = new MoodClock(Now);
-        var service = new MarketMoodQueryService(gateway, clock);
+        var service = new MarketMoodQueryService(gateway, new MoodCalendar(), clock);
 
         var first = await service.GetAsync();
         clock.Now = Now.AddSeconds(59);
@@ -102,6 +102,27 @@ public sealed class MarketMoodQueryServiceTests
         Assert.Equal(5, gateway.PriceCalls);
         Assert.Equal(5, gateway.DailyCalls);
     }
+
+    [Fact]
+    public async Task EconomicCalendarPreservesPublishedAndUnpublishedEvidence()
+    {
+        var events = new[]
+        {
+            new EconomicCalendarEvent("cpi", "소비자물가지수", Now.AddHours(-1), "published", "2.8", "2.7", "2.6", "%", "risk_off", "공식 통계", null),
+            new EconomicCalendarEvent("fed", "연준 의장 연설", Now.AddHours(2), "unpublished", null, null, null, null, "unknown", "공식 일정", "아직 발표되지 않았습니다.")
+        };
+        var calendar = new MoodCalendar(new(DateOnly.Parse("2026-09-22"), "America/New_York", "partial", "검증 제공자", Now, null, events));
+
+        var result = await new MarketMoodQueryService(OpenGateway(), calendar, new MoodClock(Now)).GetAsync();
+
+        Assert.Equal("partial", result.EconomicCalendar.Status);
+        Assert.Equal("2.8", result.EconomicCalendar.Events[0].Actual);
+        Assert.Null(result.EconomicCalendar.Events[1].Actual);
+        Assert.Equal("unpublished", result.EconomicCalendar.Events[1].Status);
+    }
+
+    static MarketMoodQueryService Service(MoodGateway gateway) =>
+        new(gateway, new MoodCalendar(), new MoodClock(Now));
 
     static MoodGateway OpenGateway()
     {
@@ -151,6 +172,8 @@ public sealed class MarketMoodApiContractTests
             Assert.Equal("equal_weight_available_only", rootElement.GetProperty("aggregation").GetString());
             Assert.Equal(5, rootElement.GetProperty("availableCount").GetInt32());
             Assert.Equal(5, rootElement.GetProperty("evidence").GetArrayLength());
+            Assert.Equal("unsupported", rootElement.GetProperty("economicCalendar").GetProperty("status").GetString());
+            Assert.Equal(0, rootElement.GetProperty("economicCalendar").GetProperty("events").GetArrayLength());
             var asset = rootElement.GetProperty("assets")[0];
             Assert.True(asset.GetProperty("proxy").GetBoolean());
             Assert.Equal("fresh", asset.GetProperty("delayStatus").GetString());
@@ -169,6 +192,12 @@ sealed class MoodClock(DateTimeOffset now) : TimeProvider
 {
     public DateTimeOffset Now { get; set; } = now;
     public override DateTimeOffset GetUtcNow() => Now;
+}
+
+sealed class MoodCalendar(EconomicCalendarSnapshot? snapshot = null) : IEconomicCalendarProvider
+{
+    public Task<EconomicCalendarSnapshot> GetAsync(DateOnly marketDate, DateTimeOffset asOf, CancellationToken ct) =>
+        Task.FromResult(snapshot ?? new EconomicCalendarSnapshot(marketDate, "America/New_York", "unsupported", "미연결", asOf, "미지원", []));
 }
 
 sealed class MoodGateway(MarketSession session) : IMarketDataGateway

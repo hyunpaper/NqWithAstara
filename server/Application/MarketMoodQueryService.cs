@@ -29,9 +29,35 @@ public sealed record MarketMoodResponse(
     int RefreshSeconds,
     IReadOnlyList<string> Limitations,
     IReadOnlyList<string> Evidence,
+    EconomicCalendarSnapshot EconomicCalendar,
     IReadOnlyList<MarketMoodAsset> Assets);
 
-public sealed class MarketMoodQueryService(IMarketDataGateway marketData, TimeProvider clock)
+public sealed record EconomicCalendarEvent(
+    string Id, string Title, DateTimeOffset ScheduledAt, string Status,
+    string? Actual, string? Forecast, string? Previous, string? Unit,
+    string ImpactDirection, string Source, string? Reason);
+
+public sealed record EconomicCalendarSnapshot(
+    DateOnly MarketDate, string TimeZone, string Status, string Source,
+    DateTimeOffset AsOf, string? Reason, IReadOnlyList<EconomicCalendarEvent> Events);
+
+public interface IEconomicCalendarProvider
+{
+    Task<EconomicCalendarSnapshot> GetAsync(DateOnly marketDate, DateTimeOffset asOf, CancellationToken ct);
+}
+
+public sealed class UnsupportedEconomicCalendarProvider : IEconomicCalendarProvider
+{
+    public Task<EconomicCalendarSnapshot> GetAsync(DateOnly marketDate, DateTimeOffset asOf, CancellationToken ct) =>
+        Task.FromResult(new EconomicCalendarSnapshot(
+            marketDate, "America/New_York", "unsupported", "미연결", asOf,
+            "검증된 무료·합법 경제 일정 제공자가 연결되지 않아 임의 값을 표시하지 않습니다.", []));
+}
+
+public sealed class MarketMoodQueryService(
+    IMarketDataGateway marketData,
+    IEconomicCalendarProvider economicCalendar,
+    TimeProvider clock)
 {
     internal static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(60);
     internal static readonly TimeSpan StaleAfter = TimeSpan.FromMinutes(5);
@@ -76,6 +102,22 @@ public sealed class MarketMoodQueryService(IMarketDataGateway marketData, TimePr
 
     async Task<MarketMoodResponse> RefreshAsync(DateTimeOffset now, CancellationToken ct)
     {
+        var marketDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeBySystemTimeZoneId(now, "America/New_York").DateTime);
+        EconomicCalendarSnapshot calendar;
+        try
+        {
+            calendar = await economicCalendar.GetAsync(marketDate, now, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            calendar = new(marketDate, "America/New_York", "delayed", "제공자 오류", now,
+                "경제 일정 제공자 응답을 확인하지 못해 임의 값을 표시하지 않습니다.", []);
+        }
+
         MarketSession? session;
         try
         {
@@ -122,6 +164,7 @@ public sealed class MarketMoodQueryService(IMarketDataGateway marketData, TimePr
             (int)RefreshInterval.TotalSeconds,
             Limitations,
             included.Select(asset => asset.Key).ToArray(),
+            calendar,
             assets);
     }
 
