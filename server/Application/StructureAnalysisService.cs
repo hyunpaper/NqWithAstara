@@ -225,6 +225,9 @@ public sealed class StructureAnalysisService(
     public bool TryGetPublished(string symbol, out StructureAnalysisView view) =>
         _published.TryGetValue(symbol, out view!);
 
+    public IReadOnlyList<StructureAnalysisView> PublishedViews() =>
+        _published.Values.OrderBy(x => x.Symbol, StringComparer.OrdinalIgnoreCase).ToArray();
+
     // 테스트 전용 seam: 실제 공개 Summary 경로를 후보 상태별로 검증하기 위한 주입점이다.
     internal void PublishForContractTest(StructureAnalysisView view, bool failed = false)
     {
