@@ -76,6 +76,8 @@ import { WatchList } from "./WatchRowContent";
 import type { WatchListItem } from "./WatchRowContent";
 import { WATCH_ORDER_URL, watchOrderRequest } from "./watchReorder";
 import { normalizeChartBars, type ChartBar as Bar } from "./chartData";
+import EntryObservabilityPanel from "./EntryObservabilityPanel";
+import type { EntryObservabilityReport } from "./entryObservability";
 type Indicators = {
   rsi: number | null;
   emaFast: number | null;
@@ -232,6 +234,7 @@ type SimData = {
   trades: SimTradeRow[];
   /** 이슈 #27: v5 동결 근거 기준 코호트 집계(additive). 구버전 서버에는 없을 수 있다. */
   structure?: StructureCohortReport | null;
+  entryObservability?: EntryObservabilityReport | null;
 };
 type Metrics = {
   symbol: string;
@@ -1568,6 +1571,7 @@ function Dashboard() {
         </div>
       )}
       {!!s.missingPnl && <div className="sample-warning">청산 {s.closed}건 중 손익이 없는 {s.missingPnl}건은 승률·평균·합계 계산에서 제외했습니다.</div>}
+      <EntryObservabilityPanel report={data.entryObservability} />
       {analysis?.sampleWarning && <div className="sample-warning">{analysis.sampleWarning}</div>}
       {analysis && (
         <section className="panel metrics-panel">
