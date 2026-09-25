@@ -175,7 +175,7 @@ public sealed class ValidationEndpointTests(AstraHostFixture host) : IClassFixtu
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var root = json.RootElement;
         foreach (var name in new[] { "generatedAt", "asOf", "windowDays", "engineVersion", "policyHash", "data",
-            "link", "evaluation", "walkForward", "costScenarios", "limitations" })
+            "link", "evaluation", "walkForward", "riskFrequency", "costScenarios", "limitations" })
             Assert.True(root.TryGetProperty(name, out _), $"missing property: {name}");
         Assert.False(root.TryGetProperty("Data", out _));
 
