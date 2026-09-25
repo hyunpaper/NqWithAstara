@@ -1,3 +1,5 @@
+using Astra.Server.Domain.Structure;
+
 namespace Astra.Server;
 
 public sealed class TossAuthException(string message, string guideUrl) : HttpRequestException(message, null, System.Net.HttpStatusCode.Forbidden)
@@ -44,7 +46,8 @@ public sealed record FrozenStructureContext(string EntryEventId, FrozenPlanSnaps
     DateTimeOffset AnalysisAsOf, DateTimeOffset? QuoteAt, string StructuralExitPolicyVersion,
     // #111 additive: 재진입 코호트 태그. 기존 필드 순서·의미를 바꾸지 않으려고 마지막에 선택 필드로 붙인다.
     // 이 계약 이전에 저장된 행은 null로 복원되며, 결측을 "첫 진입"으로 바꾸지 않는다(§16A).
-    ReentryTags? Reentry = null);
+    ReentryTags? Reentry = null, StrategyRegime? Regime = null,
+    EntryEvidence? EntryEvidence = null);
 
 /// <summary>
 /// #111 재진입 코호트 태그. 진입 시점에 직전 거래를 아는 계층이 채우는 관측값이며 진입·청산 판정에 쓰이지 않는다.
@@ -67,7 +70,9 @@ public sealed record FrozenPlanSnapshot(string PlanId, string Kind, decimal Entr
     // #43 additive: 계획 시점 1분 ATR. 기존 필드 순서·의미를 바꾸지 않으려고 마지막에 선택 필드로 붙인다.
     // 이 값이 있어야 거래 기록만으로 "손절폭이 ATR 대비 얼마였나"를 사후 재구성할 수 있다(#28 분석 입력).
     // 과거에 저장된 행은 null로 복원되며 결측을 0으로 대체하지 않는다(§16A).
-    double? Atr1mAtPlan = null);
+    double? Atr1mAtPlan = null, TradeSide Side = TradeSide.Long,
+    StrategyRegime? Regime = null, EntryEvidence? EntryEvidence = null,
+    decimal? BorrowCostPerShare = null, bool BorrowCostMissing = false);
 public sealed record IndicatorSnapshot(double Rsi, double EmaFast, double EmaSlow, double Vwap, double Atr, double RelativeVolume, double BollingerLower, double BollingerUpper, double VwapSd = 0);
 public sealed record SignalResult(int Score, string Action, string[] Reasons, IndicatorSnapshot Indicators);
 public sealed record SignalView(string Symbol, string Name, double Price, double ChangePercent, int Score, string Action, string[] Reasons, DateTimeOffset UpdatedAt, bool Stale, object Indicators, IEnumerable<object> Bars, object? Position, double Atr, string? Setup = null, DateTimeOffset? SetupAt = null, string? Breakout = null, DateTimeOffset? BreakoutAt = null);

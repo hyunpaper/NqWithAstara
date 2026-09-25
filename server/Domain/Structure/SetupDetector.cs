@@ -1,9 +1,9 @@
 using System.Collections.Immutable;
+using Astra.Server;
 
 namespace Astra.Server.Domain.Structure;
 
 // v5 구조 엔진 D2 — 설계 §8 진입 후보와 구조 가설 + §16B 시각/상태 계약.
-// long-only다. DOWN 추세 점수는 공매도 진입 지시가 아니다(§8).
 // structureCutoff=TriggerBarStart이며 트리거 봉은 조건 판정과 트리거 거래량에만 쓴다(§16B).
 
 public enum SetupKind { Pullback, Breakout, Rebound }
@@ -33,7 +33,8 @@ public sealed record EntryCandidate(string EventId, string DuplicateGuardKey, Se
     CandidateDisposition Disposition, decimal EntryReference, decimal? InvalidationAnchor,
     double? EntryQuality, EntryQualityResult Quality, StructuralTradePlan? Plan, PlanEvaluation Planning,
     ImmutableArray<string> RejectionCodes, ImmutableArray<string> Notes, bool CounterTrend,
-    bool RetestConfirmed, DateTimeOffset? EpisodeStartAt)
+    bool RetestConfirmed, DateTimeOffset? EpisodeStartAt, TradeSide Side = TradeSide.Long,
+    StrategyRegime? Regime = null, EntryEvidence? Evidence = null)
 {
     public decimal? NetR => Planning.NetR;
 
@@ -45,7 +46,8 @@ public sealed record EntryCandidate(string EventId, string DuplicateGuardKey, Se
         StructureMath.Number(EntryQuality), Quality.Fingerprint(), Plan?.Fingerprint() ?? "null",
         string.Join(',', Planning.ReasonCodes), string.Join(',', RejectionCodes), string.Join(',', Notes),
         CounterTrend ? "1" : "0", RetestConfirmed ? "1" : "0",
-        EpisodeStartAt is null ? "null" : StructureMath.Iso(EpisodeStartAt.Value));
+        EpisodeStartAt is null ? "null" : StructureMath.Iso(EpisodeStartAt.Value), Side.ToString(),
+        Regime?.Key ?? "null", Evidence?.Fingerprint() ?? "null");
 }
 
 /// <summary>
@@ -100,6 +102,9 @@ public static class SetupDetector
     public const string NoteLiveBelowSupportLower = "LIVE_PRICE_BELOW_SUPPORT_LOWER";
     public const string NoteLiveBelowBreakoutLevel = "LIVE_PRICE_NOT_ABOVE_BREAKOUT_LEVEL";
     public const string NoteLiveBelowStop = "LIVE_PRICE_AT_OR_BELOW_STRUCTURAL_STOP";
+    public const string NoteLiveAboveResistanceUpper = "LIVE_PRICE_ABOVE_RESISTANCE_UPPER";
+    public const string NoteLiveAboveBreakdownLevel = "LIVE_PRICE_NOT_BELOW_BREAKDOWN_LEVEL";
+    public const string NoteLiveAboveStop = "LIVE_PRICE_AT_OR_ABOVE_STRUCTURAL_STOP";
     public const string NotePullbackTrendState = "PULLBACK_REQUIRES_UP_OR_TRANSITION";
 
     /// <summary>
@@ -110,9 +115,13 @@ public static class SetupDetector
 
     /// <summary>PULLBACK/BREAKOUT이 signedTrend&lt;0에서 롱으로 승격되는 것을 막는 거절 사유(#42).</summary>
     public const string CodeTrendDirectionOpposesLong = "TREND_DIRECTION_OPPOSES_LONG";
+    public const string CodeTrendDirectionOpposesShort = "TREND_DIRECTION_OPPOSES_SHORT";
 
     /// <summary>REBOUND가 극단적 하락 추세에서 롱으로 승격되는 것을 막는 거절 사유(§I-1, #208).</summary>
     public const string CodeTrendDeeplyOpposesRebound = "TREND_DEEPLY_OPPOSES_REBOUND";
+    public const string CodeTrendDeeplyOpposesShortRebound = "TREND_DEEPLY_OPPOSES_SHORT_REBOUND";
+    public const string CodeTransitionPullbackBlocked = "TRANSITION_PULLBACK_BLOCKED";
+    public const string CodeTransitionBreakoutBlocked = "TRANSITION_BREAKOUT_BLOCKED";
 
     public static SetupDetectionResult Detect(SetupDetectionRequest request, StructurePolicy policy)
     {
@@ -198,6 +207,21 @@ public static class SetupDetector
                 if (rebound is not null && pullback is not null && pullback.Anchor == rebound.Anchor) rebound = null;
                 if (rebound is not null) candidates.Add(Build(request, policy, rebound, trigger, bars, structureCutoff,
                     triggerConfirmedAt, expiresAt, entryReference, entryNotes, spread, readyBlockers));
+
+                var shortPullback = DetectShortPullback(request, policy, zone, trigger, previous, bars,
+                    structureCutoff, warnings);
+                if (shortPullback is not null) candidates.Add(Build(request, policy, shortPullback, trigger, bars,
+                    structureCutoff, triggerConfirmedAt, expiresAt, entryReference, entryNotes, spread, readyBlockers));
+
+                var breakdown = DetectBreakdown(zone, trigger, previous);
+                if (breakdown is not null) candidates.Add(Build(request, policy, breakdown, trigger, bars,
+                    structureCutoff, triggerConfirmedAt, expiresAt, entryReference, entryNotes, spread, readyBlockers));
+
+                var shortRebound = DetectShortRebound(request, policy, zone, trigger, previous, bars, structureCutoff);
+                if (shortRebound is not null && shortPullback is not null &&
+                    shortPullback.Anchor == shortRebound.Anchor) shortRebound = null;
+                if (shortRebound is not null) candidates.Add(Build(request, policy, shortRebound, trigger, bars,
+                    structureCutoff, triggerConfirmedAt, expiresAt, entryReference, entryNotes, spread, readyBlockers));
             }
         }
 
@@ -213,9 +237,9 @@ public static class SetupDetector
 
     // ── 트리거 정의 (§8) ──
 
-    sealed record Hypothesis(SetupKind Kind, PriceZone Zone, decimal? Anchor, DateTimeOffset? EpisodeStartAt,
+    sealed record Hypothesis(SetupKind Kind, TradeSide Side, PriceZone Zone, decimal? Anchor, DateTimeOffset? EpisodeStartAt,
         bool CounterTrend, bool RetestConfirmed, SortedSet<string> Notes, decimal? LiveFloorExclusive,
-        decimal? LiveFloorInclusive);
+        decimal? LiveFloorInclusive, decimal? LiveCeilingExclusive = null, decimal? LiveCeilingInclusive = null);
 
     /// <summary>
     /// PULLBACK: UP/TRANSITION에서 확인된 support(또는 retest된 flipped-support) 접촉 episode 뒤,
@@ -244,7 +268,7 @@ public static class SetupDetector
         var episodeLow = EpisodeLow(zone, episode, request.Episodes, bars, structureCutoff);
         var anchor = episodeLow is { } low && low < zone.Lower ? low : zone.Lower;
         if (trigger.Low < anchor) notes.Add(NoteChaseTriggerBelowAnchor);
-        return new Hypothesis(SetupKind.Pullback, zone, anchor, episode.StartAt, false, false, notes,
+        return new Hypothesis(SetupKind.Pullback, TradeSide.Long, zone, anchor, episode.StartAt, false, false, notes,
             null, zone.Lower);
     }
 
@@ -271,7 +295,8 @@ public static class SetupDetector
         if (!retest) notes.Add(NoteRetestPending);
         // 트리거 봉 저점이 Lower 아래면 추격/넓은 위험으로 기록하되 손절을 더 먼 저점으로 옮기지 않는다.
         if (trigger.Low < zone.Lower) notes.Add(NoteChaseTriggerBelowAnchor);
-        return new Hypothesis(SetupKind.Breakout, zone, zone.Lower, null, false, retest, notes, zone.Upper, null);
+        return new Hypothesis(SetupKind.Breakout, TradeSide.Long, zone, zone.Lower, null, false, retest, notes,
+            zone.Upper, null);
     }
 
     /// <summary>
@@ -295,12 +320,70 @@ public static class SetupDetector
         var episodeLow = EpisodeLow(zone, episode, request.Episodes, bars, structureCutoff);
         var anchor = episodeLow is { } low && low < zone.Lower ? low : zone.Lower;
         if (trigger.Low < anchor) notes.Add(NoteChaseTriggerBelowAnchor);
-        return new Hypothesis(SetupKind.Rebound, zone, anchor, episode.StartAt, true, false, notes, null, zone.Lower);
+        return new Hypothesis(SetupKind.Rebound, TradeSide.Long, zone, anchor, episode.StartAt, true, false, notes,
+            null, zone.Lower);
+    }
+
+    static Hypothesis? DetectShortPullback(SetupDetectionRequest request, StructurePolicy policy, PriceZone zone,
+        StructureBar trigger, StructureBar previous, ImmutableArray<StructureBar> bars, DateTimeOffset structureCutoff,
+        SortedSet<string> warnings)
+    {
+        if (!IsUsableResistance(zone)) return null;
+        if (trigger.Close >= previous.Low || trigger.Close >= zone.Lower) return null;
+        var episode = TriggerEligibleEpisode(request, policy, zone, bars, structureCutoff);
+        if (episode is null) return null;
+        if (request.Trend.State is not (TrendState.Down or TrendState.Transition))
+        {
+            warnings.Add(NotePullbackTrendState);
+            return null;
+        }
+        var notes = new SortedSet<string>(StringComparer.Ordinal);
+        var episodeHigh = EpisodeHigh(zone, episode, request.Episodes, bars, structureCutoff);
+        var anchor = episodeHigh is { } high && high > zone.Upper ? high : zone.Upper;
+        if (trigger.High > anchor) notes.Add(NoteChaseTriggerBelowAnchor);
+        return new Hypothesis(SetupKind.Pullback, TradeSide.Short, zone, anchor, episode.StartAt, false, false,
+            notes, null, null, null, zone.Upper);
+    }
+
+    static Hypothesis? DetectBreakdown(PriceZone zone, StructureBar trigger, StructureBar previous)
+    {
+        if (!zone.Eligible || zone.Retired || zone.ProfileOnly) return null;
+        var retest = zone.RoleHistory.Any(x => x.Reason == "RETEST_HELD_BELOW_LOWER");
+        var role = zone.Role is ZoneRole.Support or ZoneRole.FlippedSupport
+            || (zone.Role == ZoneRole.FlippedResistance && retest);
+        if (!role || previous.Close < zone.Lower || trigger.Close >= zone.Lower || trigger.Close >= trigger.Open)
+            return null;
+        var notes = new SortedSet<string>(StringComparer.Ordinal);
+        if (!retest) notes.Add(NoteRetestPending);
+        if (trigger.High > zone.Upper) notes.Add(NoteChaseTriggerBelowAnchor);
+        return new Hypothesis(SetupKind.Breakout, TradeSide.Short, zone, zone.Upper, null, false, retest, notes,
+            null, null, zone.Lower, null);
+    }
+
+    static Hypothesis? DetectShortRebound(SetupDetectionRequest request, StructurePolicy policy, PriceZone zone,
+        StructureBar trigger, StructureBar previous, ImmutableArray<StructureBar> bars, DateTimeOffset structureCutoff)
+    {
+        if (!IsUsableResistance(zone)) return null;
+        if (trigger.Close >= previous.Low || trigger.Close >= zone.Lower || trigger.Close >= trigger.Open) return null;
+        var episode = TriggerEligibleEpisode(request, policy, zone, bars, structureCutoff);
+        if (episode is not null && !IsFailedBreakoutEpisode(zone, episode, request.Episodes, bars, structureCutoff))
+            episode = null;
+        if (episode is null) return null;
+        var notes = new SortedSet<string>(StringComparer.Ordinal) { NoteCounterTrend };
+        var episodeHigh = EpisodeHigh(zone, episode, request.Episodes, bars, structureCutoff);
+        var anchor = episodeHigh is { } high && high > zone.Upper ? high : zone.Upper;
+        if (trigger.High > anchor) notes.Add(NoteChaseTriggerBelowAnchor);
+        return new Hypothesis(SetupKind.Rebound, TradeSide.Short, zone, anchor, episode.StartAt, true, false, notes,
+            null, null, null, zone.Upper);
     }
 
     static bool IsUsableSupport(PriceZone zone) =>
         zone.Eligible && !zone.Retired && !zone.ProfileOnly &&
         zone.Role is ZoneRole.Support or ZoneRole.FlippedSupport;
+
+    static bool IsUsableResistance(PriceZone zone) =>
+        zone.Eligible && !zone.Retired && !zone.ProfileOnly &&
+        zone.Role is ZoneRole.Resistance or ZoneRole.FlippedResistance;
 
     /// <summary>
     /// 접촉 episode는 세션 내 유효기간 안에서만 후보를 무장한다. 소비 여부는 재시작 가능한 lifecycle
@@ -342,6 +425,14 @@ public static class SetupDetector
         return window.Any(x => x.Low < zone.Lower);
     }
 
+    static bool IsFailedBreakoutEpisode(PriceZone zone, TouchEpisode episode, ImmutableArray<TouchEpisode> episodes,
+        ImmutableArray<StructureBar> bars, DateTimeOffset structureCutoff)
+    {
+        var window = EpisodeBars(zone, episode, episodes, bars, structureCutoff);
+        if (window.Count == 0 || window.Any(x => x.Close > zone.Upper)) return false;
+        return window.Any(x => x.High > zone.Upper);
+    }
+
     /// <summary>
     /// §16B: episode low는 트리거 직전까지의 완료 봉에서 구한다. 뒤에서 생긴 더 낮은 저점을 끌어다 넣지 않으려고
     /// 해당 episode의 접촉 봉만(다음 episode 시작 전까지) 사용한다.
@@ -362,6 +453,13 @@ public static class SetupDetector
         return window.Count == 0 ? null : window.Min(x => x.Low);
     }
 
+    static decimal? EpisodeHigh(PriceZone zone, TouchEpisode episode, ImmutableArray<TouchEpisode> episodes,
+        ImmutableArray<StructureBar> bars, DateTimeOffset structureCutoff)
+    {
+        var window = EpisodeBars(zone, episode, episodes, bars, structureCutoff);
+        return window.Count == 0 ? null : window.Max(x => x.High);
+    }
+
     // ── 계획·품질·상태 ──
 
     static EntryCandidate Build(SetupDetectionRequest request, StructurePolicy policy, Hypothesis hypothesis,
@@ -369,19 +467,24 @@ public static class SetupDetector
         DateTimeOffset triggerConfirmedAt, DateTimeOffset expiresAt, decimal entryReference,
         SortedSet<string> entryNotes, decimal? spread, SortedSet<string> readyBlockers)
     {
-        var kindName = SetupKinds.Name(hypothesis.Kind);
+        var kindName = hypothesis.Side == TradeSide.Long
+            ? SetupKinds.Name(hypothesis.Kind)
+            : $"{SetupKinds.Name(hypothesis.Kind)}_SHORT";
         var eventId = EventId(request.Symbol, request.SessionStart, kindName, hypothesis.Zone.Id, structureCutoff);
         var guardKey = DuplicateGuardKey(request.Symbol, request.SessionStart, kindName, structureCutoff);
+        var side = hypothesis.Side;
+        var regime = StrategyRegimeClassifier.Classify(request.Trend, bars, policy);
 
         var planning = StructuralPlanner.Evaluate(new PlanRequest(request.Symbol, eventId, kindName, entryReference,
             hypothesis.Anchor, hypothesis.Zone, request.Zones, request.Atr1mAtStructureCutoff, spread,
-            triggerConfirmedAt, expiresAt, request.PriceTickSupported), policy);
+            triggerConfirmedAt, expiresAt, request.PriceTickSupported, side, regime), policy);
 
         var relativeVolume = SessionIndicators.RelativeVolume(bars, trigger.Start, policy.RelativeVolumeLookbackBars);
         var quality = EntryQualityEvaluator.Evaluate(new EntryQualityInput(hypothesis.Kind,
             hypothesis.Zone.Strength?.Value, planning.TargetZone?.Strength?.Value, planning.NetR, entryReference,
             hypothesis.Anchor, request.Atr1mAtStructureCutoff, relativeVolume, request.Trend.SignedTrend,
-            trigger.Close, hypothesis.Zone.Upper, planning.Buffer), policy);
+            trigger.Close, side == TradeSide.Long ? hypothesis.Zone.Upper : hypothesis.Zone.Lower,
+            planning.Buffer, side), policy);
 
         var notes = new SortedSet<string>(hypothesis.Notes, StringComparer.Ordinal);
         foreach (var note in entryNotes) notes.Add(note);
@@ -405,15 +508,36 @@ public static class SetupDetector
         }
         foreach (var reason in quality.Reasons) rejections.Add(reason);
 
+        if (request.Trend.State == TrendState.Transition && hypothesis.Kind == SetupKind.Pullback &&
+            !policy.AllowTransitionPullback)
+            rejections.Add(CodeTransitionPullbackBlocked);
+        if (request.Trend.State == TrendState.Transition && hypothesis.Kind == SetupKind.Breakout &&
+            !policy.AllowTransitionBreakout)
+            rejections.Add(CodeTransitionBreakoutBlocked);
+
+        var expectedNetR = planning.NetR is { } netR ? (double)netR : (double?)null;
+        if (expectedNetR is { } expected && expected <= policy.MinimumExpectedNetR)
+            rejections.Add("EXPECTED_NET_R_NON_POSITIVE");
+        if (expectedNetR is { } feature && !WalkForwardExpectedValue.Allows(policy, feature))
+            rejections.Add("EXPECTED_VALUE_TRAINED_THRESHOLD");
+
         // null은 TREND_UNAVAILABLE이 이미 막으므로 중복 사유를 만들지 않는다(#42).
         if (RequiresTrendAlignment(hypothesis.Kind) && request.Trend.SignedTrend is { } signedTrend
-            && double.IsFinite(signedTrend) && signedTrend < 0)
-            rejections.Add(CodeTrendDirectionOpposesLong);
+            && double.IsFinite(signedTrend))
+        {
+            if (side == TradeSide.Long && signedTrend < 0) rejections.Add(CodeTrendDirectionOpposesLong);
+            if (side == TradeSide.Short && signedTrend > 0) rejections.Add(CodeTrendDirectionOpposesShort);
+        }
 
         // REBOUND는 추세 점수가 낮다고 거절하지 않지만 극단적 하락에서는 승격하지 않는다(§I-1, #208).
         if (hypothesis.Kind == SetupKind.Rebound && request.Trend.SignedTrend is { } reboundTrend
-            && double.IsFinite(reboundTrend) && reboundTrend < -policy.TrendStateThreshold)
-            rejections.Add(CodeTrendDeeplyOpposesRebound);
+            && double.IsFinite(reboundTrend))
+        {
+            if (side == TradeSide.Long && reboundTrend < -policy.TrendStateThreshold)
+                rejections.Add(CodeTrendDeeplyOpposesRebound);
+            if (side == TradeSide.Short && reboundTrend > policy.TrendStateThreshold)
+                rejections.Add(CodeTrendDeeplyOpposesShortRebound);
+        }
 
         // 실시간 유지 조건 붕괴는 INVALIDATED이며 재상승했다고 같은 이벤트를 되살리지 않는다(§10, §16B).
         var invalidated = false;
@@ -429,10 +553,31 @@ public static class SetupDetector
                 invalidated = true;
                 notes.Add(NoteLiveBelowSupportLower);
             }
-            if (planning.Stop is { } stop && live <= stop)
+            if (planning.Stop is { } stopValue && live <= stopValue)
             {
-                invalidated = true;
-                notes.Add(NoteLiveBelowStop);
+                if (side == TradeSide.Long)
+                {
+                    invalidated = true;
+                    notes.Add(NoteLiveBelowStop);
+                }
+            }
+            if (side == TradeSide.Short)
+            {
+                if (hypothesis.LiveCeilingExclusive is { } ceilingExclusive && live >= ceilingExclusive)
+                {
+                    invalidated = true;
+                    notes.Add(NoteLiveAboveBreakdownLevel);
+                }
+                if (hypothesis.LiveCeilingInclusive is { } ceilingInclusive && live > ceilingInclusive)
+                {
+                    invalidated = true;
+                    notes.Add(NoteLiveAboveResistanceUpper);
+                }
+                if (planning.Stop is { } shortStop && live >= shortStop)
+                {
+                    invalidated = true;
+                    notes.Add(NoteLiveAboveStop);
+                }
             }
         }
 
@@ -446,12 +591,37 @@ public static class SetupDetector
         // 같은 note를 달면 코호트가 "구조 결측 후보 전체"로 희석된다(#65).
         if (structureWaived && disposition == CandidateDisposition.Ready) notes.Add(NoteReadyWithout5mStructure);
 
+        var trendAlignment = request.Trend.SignedTrend is { } signed && double.IsFinite(signed)
+            ? Math.Clamp((side == TradeSide.Long ? signed : -signed) / 100d, -1d, 1d) : (double?)null;
+        var vwapDistance = request.Trend.Vwap is { } vwap && request.Trend.Atr1m is > 0 &&
+                           double.IsFinite(vwap) && double.IsFinite(request.Trend.Atr1m.Value)
+            ? (side == TradeSide.Long ? (double)trigger.Close - vwap : vwap - (double)trigger.Close)
+              / request.Trend.Atr1m.Value : (double?)null;
+        var distance = planning.Stop is { } stopDistance && request.Atr1mAtStructureCutoff is > 0
+            ? (double)Math.Abs(entryReference - stopDistance) / request.Atr1mAtStructureCutoff.Value : (double?)null;
+        var evidence = new EntryEvidence(trigger.Start, trigger.End + trigger.Duration, side, regime,
+            trendAlignment, distance, planning.NetR, expectedNetR, relativeVolume, vwapDistance,
+            hypothesis.Anchor is { } anchorDistance ? Math.Abs(entryReference - anchorDistance) : null,
+            trigger.Start.TimeOfDay,
+            !planning.MissingLiquidity, planning.Viable,
+            rejections.ToImmutableArray(),
+            [
+                $"TREND_ALIGNMENT:{(trendAlignment is null ? "MISSING" : trendAlignment.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))}",
+                $"REGIME:{regime.Key}",
+                $"NET_R:{(planning.NetR is null ? "MISSING" : planning.NetR.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))}",
+                $"RELATIVE_VOLUME:{(relativeVolume is null ? "MISSING" : relativeVolume.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))}",
+                $"VWAP_DISTANCE_ATR:{(vwapDistance is null ? "MISSING" : vwapDistance.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))}",
+                $"COST_COMPLETE:{(!planning.MissingLiquidity ? "1" : "0")}"
+            ]);
+        if (planning.Plan is { } planned)
+            planning = planning with { Plan = planned with { Evidence = evidence } };
+
         return new EntryCandidate(eventId, guardKey, hypothesis.Kind, kindName, hypothesis.Zone.Id, trigger.Start,
             triggerConfirmedAt, structureCutoff, request.AnalysisAsOf, expiresAt, disposition, entryReference,
             hypothesis.Anchor, quality.Score, quality,
             disposition == CandidateDisposition.Ready ? planning.Plan : null, planning,
             rejections.ToImmutableArray(), notes.ToImmutableArray(), hypothesis.CounterTrend,
-            hypothesis.RetestConfirmed, hypothesis.EpisodeStartAt);
+            hypothesis.RetestConfirmed, hypothesis.EpisodeStartAt, side, regime, evidence);
     }
 
     /// <summary>추세 정렬을 전제로 하는 종류. REBOUND는 제외다(§8/§9.4).</summary>
