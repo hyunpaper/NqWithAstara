@@ -47,9 +47,9 @@ public static class PendingEntryPolicy
 {
     /// <summary>확인봉의 OHLC만 사용한다. 신호봉의 종가나 이후 봉을 체결가로 재사용하지 않는다.</summary>
     public static EntryConfirmation Confirm(PendingEntry pending, Candle confirmationBar, DateTimeOffset observedAt,
-        double? observedFill, string priceSource = "CONFIRMATION_BAR")
+        double? observedFill, string priceSource = "CONFIRMATION_BAR", TimeSpan? barDuration = null)
     {
-        var confirmationClose = confirmationBar.Timestamp.AddMinutes(1);
+        var confirmationClose = confirmationBar.Timestamp + (barDuration ?? TimeSpan.FromMinutes(1));
         if (confirmationBar.Timestamp != pending.ConfirmationBarStart || observedAt < confirmationClose)
             return new(pending, PendingEntryDecision.RejectedUnobservedFill, observedAt, null, null, priceSource, "UNOBSERVED");
         if (observedAt > pending.ExpiresAt)

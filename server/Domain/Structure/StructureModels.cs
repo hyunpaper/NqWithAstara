@@ -169,6 +169,8 @@ public static class StructureMath
     /// <summary>§16A floorToCent. double 왕복 없이 decimal로만 계산한다.</summary>
     public static decimal FloorToCent(decimal x) => decimal.Floor(x * 100m) / 100m;
 
+    public static decimal CeilingToCent(decimal x) => decimal.Ceiling(x * 100m) / 100m;
+
     /// <summary>가격 폭을 정책 tick(0.01 USD) 격자에 가장 가까운 값으로 고정한다.</summary>
     public static decimal RoundToCent(decimal x) => decimal.Round(x, 2, MidpointRounding.AwayFromZero);
 

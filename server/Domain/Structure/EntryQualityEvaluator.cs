@@ -28,7 +28,7 @@ public sealed record EntryQualityResult(double? Score, ImmutableArray<QualityCom
 public sealed record EntryQualityInput(SetupKind Kind, double? InvalidationStrength, double? TargetStrength,
     decimal? NetR, decimal EntryReference, decimal? InvalidationAnchor, double? Atr1mAtPlan,
     double? RelativeVolume, double? SignedTrend, decimal? TriggerClose, decimal? SupportUpper,
-    decimal? StopBuffer = null);
+    decimal? StopBuffer = null, TradeSide Side = TradeSide.Long);
 
 /// <summary>
 /// 설계 §9.4/§16B. 종류별 필수 구성요소의 기하평균(§16A)만 점수로 만들고 참고 지표는 넣지 않는다.
@@ -93,7 +93,10 @@ public static class EntryQualityEvaluator
         {
             if (usableAtr is { } atr)
             {
-                var distance = (double)(input.EntryReference - anchor - (input.StopBuffer ?? 0m));
+                var directionalDistance = input.Side == TradeSide.Long
+                    ? input.EntryReference - anchor
+                    : anchor - input.EntryReference;
+                var distance = (double)(directionalDistance - (input.StopBuffer ?? 0m));
                 if (distance < 0) distance = 0;
                 extensionRaw = distance / Math.Max(atr, policy.IndicatorFloor);
                 extension = Normalized(Math.Exp(-extensionRaw.Value / policy.ExtensionQualityAtrScale));
@@ -112,7 +115,11 @@ public static class EntryQualityEvaluator
         {
             // PULLBACK/BREAKOUT의 alignmentQuality=(1+signedTrend/100)/2
             double? alignment = null;
-            if (input.SignedTrend is { } signed && double.IsFinite(signed)) alignment = Normalized((1 + signed / 100) / 2);
+            if (input.SignedTrend is { } signed && double.IsFinite(signed))
+            {
+                var directional = input.Side == TradeSide.Long ? signed : -signed;
+                alignment = Normalized((1 + directional / 100) / 2);
+            }
             else reasons.Add(ReasonTrendUnavailable);
             components.Add(Component(AlignmentQuality, input.SignedTrend, alignment, required));
         }
@@ -126,7 +133,7 @@ public static class EntryQualityEvaluator
             {
                 if (usableAtr is { } atr)
                 {
-                    var distance = (double)(close - upper);
+                    var distance = (double)(input.Side == TradeSide.Long ? close - upper : upper - close);
                     if (distance < 0) distance = 0;
                     reclaimRaw = distance / Math.Max(atr, policy.IndicatorFloor);
                     reclaim = Normalized(1 - Math.Exp(-reclaimRaw.Value));
@@ -136,7 +143,9 @@ public static class EntryQualityEvaluator
             components.Add(Component(ReclaimQuality, reclaimRaw, reclaim, required));
             // 참고: alignmentQuality는 REBOUND에서 제외한다(§9.4).
             components.Add(new QualityComponent(AlignmentQuality, input.SignedTrend,
-                input.SignedTrend is { } s && double.IsFinite(s) ? Normalized((1 + s / 100) / 2) : null, false));
+                input.SignedTrend is { } s && double.IsFinite(s)
+                    ? Normalized((1 + (input.Side == TradeSide.Long ? s : -s) / 100) / 2)
+                    : null, false));
         }
 
         var byName = components.ToImmutable();
