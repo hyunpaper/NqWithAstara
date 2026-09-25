@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using Astra.Server.Domain;
 using Astra.Server.Domain.Confluence;
 using Astra.Server.Domain.Structure;
+using Astra.Server.Domain.Validation;
 
 namespace Astra.Server.Application.Backtest;
 
@@ -61,7 +62,8 @@ public sealed record HistoricalReplayRun(string Id, DateOnly From, DateOnly To, 
     HistoricalStructureTradeReplay.ReplayGateSummary? StrategyGateSummary = null,
     string? TimeframeNotice = null, string SelectedCostPolicy = HistoricalReplayCostPolicies.ModeledV2,
     ImmutableArray<HistoricalReplayCostResult>? CostResults = null,
-    HistoricalReplaySelectionDiagnostics? SelectionDiagnostics = null);
+    HistoricalReplaySelectionDiagnostics? SelectionDiagnostics = null,
+    RegimeValidationReport? RegimeValidation = null);
 
 public sealed record HistoricalReplayStartResult(int HttpStatus, HistoricalReplayRun? Run, string? Message);
 
@@ -308,7 +310,9 @@ public sealed class HistoricalReplayService
                     selectedThreshold?.Value,
                     selectedThreshold is null ? "insufficient-training-sample" : "selected-from-training-only",
                     $"훈련 구간만 사용, 최소 {ReplaySelectionPolicy.MinimumTrainingRows}행 및 " +
-                    $"{ReplaySelectionPolicy.SymbolSessionsPerRequiredEntry} symbol-session당 1행")
+                    $"{ReplaySelectionPolicy.SymbolSessionsPerRequiredEntry} symbol-session당 1행"),
+                RegimeValidation = BuildRegimeValidation(selectedRun, queued.From, trainTo,
+                    evaluationFrom, queued.To)
             } : current);
         }
         catch (Exception) when (work.Cancellation.IsCancellationRequested)
@@ -336,6 +340,32 @@ public sealed class HistoricalReplayService
     static HistoricalReplaySymbolResult Unavailable(string symbol, string? reason) =>
         new(symbol, null, null, null, null, null, null, null, "unavailable",
             reason ?? "요청 기간의 종목 데이터가 없습니다.");
+
+    static RegimeValidationReport BuildRegimeValidation(HistoricalStructureTradeReplay.ReplayRun run,
+        DateOnly trainFrom, DateOnly trainTo, DateOnly evaluationFrom, DateOnly evaluationTo)
+    {
+        if (trainTo >= evaluationFrom)
+            return new(RegimeClassification.Unavailable, trainFrom, trainTo, evaluationFrom, evaluationTo, 0, [],
+                [RegimeValidationEvaluator.OutOfSampleWindowUnavailable]);
+        var trades = run.Trades.Values.SelectMany(x => x)
+            .Where(x => x.Structure?.EntryEventId is not null)
+            .GroupBy(x => x.Structure!.EntryEventId, StringComparer.Ordinal)
+            .ToDictionary(x => x.Key, x => x.First(), StringComparer.Ordinal);
+        var samples = run.Candidates.Select(candidate =>
+        {
+            trades.TryGetValue(candidate.EventId, out var trade);
+            double? stopDistance = trade is null || trade.EntryPrice <= 0
+                ? null : Math.Abs(trade.EntryPrice - trade.Stop) / trade.EntryPrice * 100;
+            double? targetDistance = trade is null || trade.EntryPrice <= 0
+                ? null : Math.Abs(trade.Target - trade.EntryPrice) / trade.EntryPrice * 100;
+            return new RegimeValidationSample(candidate.EventId, candidate.Symbol, candidate.SessionDate,
+                candidate.SignalAt, candidate.Regime == "UNCOLLECTED" ? null : candidate.Regime,
+                trade?.Kind ?? "UNCOLLECTED", candidate.FinalApproved, trade is not null,
+                trade is { Status: not "OPEN" } ? trade.Status : null, stopDistance, targetDistance,
+                trade?.PnlPercent);
+        }).ToArray();
+        return RegimeValidationEvaluator.Evaluate(samples, trainFrom, trainTo, evaluationFrom, evaluationTo);
+    }
 
     static HistoricalReplaySymbolResult Result(string symbol, int signals, ImmutableArray<SimTrade> trades)
     {
