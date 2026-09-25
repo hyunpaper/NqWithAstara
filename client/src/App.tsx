@@ -70,6 +70,8 @@ import { scoreBadge } from "./newsFormat";
 import type { Badge } from "./newsFormat";
 import { gaugeTone, scoreText2 } from "./confluenceFormat";
 import HistoricalReplayPanel from "./HistoricalReplayPanel";
+import MarketMoodPopover from "./MarketMoodPopover";
+import { normalizeMarketMood, type MarketMoodResponse } from "./marketMoodTypes";
 import { WatchList } from "./WatchRowContent";
 import type { WatchListItem } from "./WatchRowContent";
 import { WATCH_ORDER_URL, watchOrderRequest } from "./watchReorder";
@@ -468,6 +470,7 @@ export default function App() {
     // 이슈 #152: 뉴스 감성. news.enabled(health)와 sentiment 응답 enabled가 모두 true일 때만 렌더한다.
     [newsHealthEnabled, setNewsHealthEnabled] = useState<boolean | null>(null),
     [newsSentiment, setNewsSentiment] = useState<NewsSentimentResponse | null>(null),
+    [marketMood, setMarketMood] = useState<MarketMoodResponse | null>(null),
     // 이슈 #168/#181: 선택 종목은 ConfluencePanel의 기존 폴링 결과를, 나머지 행은
     // structureSummary 캐시 요약을 그대로 쓴다(추가 호출 없음, §4).
     [confluenceScore, setConfluenceScore] = useState<{ symbol: string; score: number | null } | null>(null),
@@ -531,12 +534,21 @@ export default function App() {
       /* 이전 값 유지 */
     }
   };
+  const loadMarketMood = async () => {
+    try {
+      const next = normalizeMarketMood(await api("/api/market-mood"));
+      if (next) setMarketMood(next);
+    } catch {
+      /* 이전 값 유지 */
+    }
+  };
   useEffect(() => {
     let active = true;
     let id: ReturnType<typeof setTimeout>;
     const poll = async () => {
       await load(true);
       await loadNews();
+      await loadMarketMood();
       if (active) id = setTimeout(poll, 3000);
     };
     void poll();
@@ -770,7 +782,6 @@ export default function App() {
   const selectedWatch = state?.watchlist.find((x) => x.symbol === selected);
   // 이슈 #152: news.enabled(health) 또는 sentiment.enabled가 false면 뉴스 UI를 아무것도 그리지 않는다.
   const newsUiEnabled = shouldRenderNewsUi(newsHealthEnabled, newsSentiment?.enabled);
-  const marketNewsBadge = newsUiEnabled ? scoreBadge(newsSentiment?.market?.score) : null;
   // ── 이슈 #26/#88: 모드별 정렬 ──
   // active/shadow = v5 계열 정렬(v5 상태/추세 강도/추세 방향/진입 품질/종목명) 중 선택.
   // off·summary 부재는 v5 분석이 없으므로 선택지 없이 종목 알파벳순으로 고정한다.
@@ -956,12 +967,7 @@ export default function App() {
             </div>
           </div>
           <div className="header-actions">
-            {marketNewsBadge && newsSentiment?.market && <NewsScorePopover
-              score={newsSentiment.market}
-              className={marketNewsBadge.className}
-              label={`시장 분위기 ${marketNewsBadge.label}`}
-              onSelectEvidence={(evidence, trigger) => newsDetail.open(articleFromEvidence(evidence), trigger, "MARKET")}
-            />}
+            {marketMood && <MarketMoodPopover mood={marketMood} />}
             <FeeWarningBadge warnings={state?.warnings} />
             <div className={`market ${state?.market.isOpen ? "open" : ""}`}>
               <span />

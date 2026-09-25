@@ -21,6 +21,7 @@ public static class ApiEndpoints
         app.MapPost("/api/news/translation", (string? id, NewsQueryService q) => q.RequestTranslation(id) ? Results.Accepted() : Results.NotFound());
         app.MapGet("/api/news/{id}/evidence", (string id, NewsQueryService q) => q.Evidence(id) is { } value ? Results.Ok(value) : Results.NotFound());
         app.MapGet("/api/news/sentiment", (NewsQueryService q) => Results.Ok(q.Sentiment()));
+        app.MapGet("/api/market-mood", async (MarketMoodQueryService q, CancellationToken ct) => Results.Ok(await q.GetAsync(ct)));
         app.MapGet("/api/state", async (StateQueryService q) => Results.Ok(await q.GetAsync())); app.MapGet("/api/search", SearchAsync);
         app.MapPost("/api/watchlist", AddWatchAsync);
         app.MapDelete("/api/watchlist/{symbol}", async (string symbol, MonitorControlService c, CancellationToken ct) => { await c.RemoveAsync(symbol, ct); return Results.NoContent(); });

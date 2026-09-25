@@ -40,6 +40,7 @@ public sealed class HostBootTests(AstraHostFixture host) : IClassFixture<AstraHo
         var services = host.Factory.Services;
         // Program.cs의 DI 배선이 실제 호스트 기동에서 전부 해결되는지 확인한다.
         Assert.NotNull(services.GetRequiredService<StateQueryService>());
+        Assert.NotNull(services.GetRequiredService<MarketMoodQueryService>());
         Assert.NotNull(services.GetRequiredService<MonitorControlService>());
         Assert.NotNull(services.GetRequiredService<MetricsQueryService>());
         Assert.NotNull(services.GetRequiredService<LiquidityQueryService>());
