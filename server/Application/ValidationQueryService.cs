@@ -32,7 +32,8 @@ public sealed record ValidationDataAudit(DateOnly From, DateOnly To, int DaysSca
 public sealed record ValidationReport(DateTimeOffset GeneratedAt, DateTimeOffset AsOf, int WindowDays,
     string EngineVersion, string PolicyHash, ValidationDataAudit Data, LinkAudit Link,
     ValidationEvaluation Evaluation, WalkForwardReport WalkForward,
-    IReadOnlyList<CostScenarioResult> CostScenarios, IReadOnlyList<string> Limitations);
+    RiskFrequencyReport RiskFrequency, IReadOnlyList<CostScenarioResult> CostScenarios,
+    IReadOnlyList<string> Limitations);
 
 public sealed class ValidationQueryService(ILocalStore store, IStructureObservationStore observations,
     TimeProvider clock, StructurePolicy? policy = null)
@@ -73,6 +74,7 @@ public sealed class ValidationQueryService(ILocalStore store, IStructureObservat
         var link = CandidateTradeLinker.Link(rows, trades, new LinkOptions(now));
         var evaluation = ValidationEvaluator.Evaluate(link.Candidates, now);
         var walkForward = WalkForwardEvaluator.Evaluate(link.Candidates);
+        var riskFrequency = RiskFrequencyEvaluator.Evaluate(link.Candidates);
         var scenarios = CostSensitivity.Evaluate(link.Candidates);
 
         var data = audit with
@@ -89,11 +91,12 @@ public sealed class ValidationQueryService(ILocalStore store, IStructureObservat
         if (audit.Files.Any(x => x.NearDailyLimit)) extra.Add(LinkCodes.ObservationRetentionCapped);
         var limitations = link.Audit.Limitations
             .Concat(walkForward.Limitations)
+            .Concat(riskFrequency.Limitations)
             .Concat(extra)
             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
 
         return (200, new ValidationReport(now, now, window, _policy.Version, _policy.PolicyHash, data, link.Audit,
-            evaluation, walkForward, scenarios, limitations));
+            evaluation, walkForward, riskFrequency, scenarios, limitations));
     }
 
     // ── 관측 파일 읽기 ─────────────────────────────────────────────────────────────────────────
