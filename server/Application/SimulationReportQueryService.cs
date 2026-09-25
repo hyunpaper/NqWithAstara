@@ -8,7 +8,7 @@ public sealed record SimulationAnalysis(DateTimeOffset GeneratedAt, int ClosedCo
 public sealed record SimulationKindReport(string Kind, SimulationStats Stats);
 public sealed record SimulationVersionReport(string Version, string Label, SimulationStats Stats, SimulationAnalysis? Analysis, IEnumerable<SimulationKindReport> ByKind);
 /// <summary>이슈 #27: <paramref name="Structure"/>는 additive 필드다 — 기존 /api/sim 소비자의 필드 의미를 바꾸지 않는다.</summary>
-public sealed record SimulationReport(SimulationStats Summary, IEnumerable<SimulationKindReport> ByKind, SimulationAnalysis? Analysis, IEnumerable<SimulationVersionReport> ByVersion, IEnumerable<SimTrade> Trades, StructureCohortReport Structure);
+public sealed record SimulationReport(SimulationStats Summary, IEnumerable<SimulationKindReport> ByKind, SimulationAnalysis? Analysis, IEnumerable<SimulationVersionReport> ByVersion, IEnumerable<SimTrade> Trades, StructureCohortReport Structure, EntryObservabilityReport? EntryObservability = null);
 
 public sealed record SimulationResetResult(int Removed, int Kept, string? Backup);
 
@@ -34,7 +34,8 @@ public sealed class SimulationResetService(ILocalStore store, TimeProvider clock
     static bool IsOpen(SimTrade trade) => string.Equals(trade.Status, "OPEN", StringComparison.Ordinal);
 }
 
-public sealed class SimulationReportQueryService(ILocalStore store, TimeProvider clock)
+public sealed class SimulationReportQueryService(ILocalStore store, TimeProvider clock,
+    EntryObservabilityQueryService? entryObservability = null)
 {
     public async Task<SimulationReport> GetAsync()
     {
@@ -43,7 +44,7 @@ public sealed class SimulationReportQueryService(ILocalStore store, TimeProvider
             new SimulationVersionReport(g.Key, g.Key == "legacy" ? "Legacy / unknown" : g.Key, Stats(g), Analysis(g.ToArray()), g.GroupBy(x => x.Kind).Select(k => new SimulationKindReport(k.Key, Stats(k))).ToArray())).ToArray();
         var rootAnalysis = versions.Length <= 1 ? Analysis(trades) : null;
         return new(Stats(trades), trades.GroupBy(x => x.Kind).Select(g => new SimulationKindReport(g.Key, Stats(g))), rootAnalysis, versions, trades.OrderByDescending(x => x.EnteredAt).Take(200),
-            SimulationCohorts.Build(trades));
+            SimulationCohorts.Build(trades), entryObservability?.Get());
     }
 
     static string VersionOf(SimTrade trade) => string.IsNullOrWhiteSpace(trade.Logic) ? "legacy" : trade.Logic.Trim();
