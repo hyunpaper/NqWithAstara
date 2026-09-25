@@ -32,6 +32,7 @@ export type MarketMoodResponse = {
 
 export type EconomicCalendarEvent = {
   id: string;
+  kind: "MichiganInflationExpectations" | "DurableGoodsOrders" | "CPI" | "PPI" | "InitialJoblessClaims" | "FOMC" | "TreasuryAuction";
   title: string;
   scheduledAt: string;
   status: "published" | "unpublished" | "delayed" | "unsupported";
@@ -40,6 +41,7 @@ export type EconomicCalendarEvent = {
   previous: string | null;
   unit: string | null;
   impactDirection: string;
+  bondImpact: "positive" | "negative" | "unknown";
   source: string;
   reason: string | null;
 };
@@ -94,18 +96,23 @@ export const normalizeMarketMood = (value: unknown): MarketMoodResponse | null =
   const calendarEvents = Array.isArray(rawCalendar?.events) ? rawCalendar.events.flatMap((raw): EconomicCalendarEvent[] => {
     const event = record(raw);
     const id = text(event?.id);
+    const kind = text(event?.kind);
     const title = text(event?.title);
     const scheduledAt = text(event?.scheduledAt);
     if (!event || !id || !title || !scheduledAt) return [];
     const eventStatus = text(event.status);
+    const normalizedKind = kind === "MichiganInflationExpectations" || kind === "DurableGoodsOrders" || kind === "CPI" || kind === "PPI" || kind === "InitialJoblessClaims" || kind === "FOMC" || kind === "TreasuryAuction" ? kind : null;
+    if (!normalizedKind) return [];
+    const bondImpact = text(event.bondImpact);
     return [{
-      id, title, scheduledAt,
+      id, kind: normalizedKind, title, scheduledAt,
       status: eventStatus === "published" || eventStatus === "unpublished" || eventStatus === "delayed" ? eventStatus : "unsupported",
       actual: text(event.actual),
       forecast: text(event.forecast),
       previous: text(event.previous),
       unit: text(event.unit),
       impactDirection: text(event.impactDirection) ?? "unknown",
+      bondImpact: bondImpact === "positive" || bondImpact === "negative" ? bondImpact : "unknown",
       source: text(event.source) ?? "출처 미상",
       reason: text(event.reason),
     }];

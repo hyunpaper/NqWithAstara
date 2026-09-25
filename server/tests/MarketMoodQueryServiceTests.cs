@@ -108,8 +108,9 @@ public sealed class MarketMoodQueryServiceTests
     {
         var events = new[]
         {
-            new EconomicCalendarEvent("cpi", "소비자물가지수", Now.AddHours(-1), "published", "2.8", "2.7", "2.6", "%", "risk_off", "공식 통계", null),
-            new EconomicCalendarEvent("fed", "연준 의장 연설", Now.AddHours(2), "unpublished", null, null, null, null, "unknown", "공식 일정", "아직 발표되지 않았습니다.")
+            new EconomicCalendarEvent("cpi", EconomicEventKinds.CPI, "소비자물가지수", Now.AddHours(-1), "published", "2.8", "2.7", "2.6", "%", "risk_off", "unknown", "공식 통계", null),
+            new EconomicCalendarEvent("claims", EconomicEventKinds.InitialJoblessClaims, "신규 실업수당 청구", Now.AddMinutes(-30), "published", "245,000", "230,000", "225,000", "건", "risk_off", "unknown", "공식 통계", null),
+            new EconomicCalendarEvent("fed", EconomicEventKinds.FOMC, "연준 의장 연설", Now.AddHours(2), "unpublished", null, null, null, null, "unknown", "unknown", "공식 일정", "아직 발표되지 않았습니다.")
         };
         var calendar = new MoodCalendar(new(DateOnly.Parse("2026-09-22"), "America/New_York", "partial", "검증 제공자", Now, null, events));
 
@@ -117,8 +118,11 @@ public sealed class MarketMoodQueryServiceTests
 
         Assert.Equal("partial", result.EconomicCalendar.Status);
         Assert.Equal("2.8", result.EconomicCalendar.Events[0].Actual);
-        Assert.Null(result.EconomicCalendar.Events[1].Actual);
-        Assert.Equal("unpublished", result.EconomicCalendar.Events[1].Status);
+        Assert.Equal("negative", result.EconomicCalendar.Events[0].BondImpact);
+        Assert.Equal("positive", result.EconomicCalendar.Events[1].BondImpact);
+        Assert.Null(result.EconomicCalendar.Events[2].Actual);
+        Assert.Equal("unknown", result.EconomicCalendar.Events[2].BondImpact);
+        Assert.Equal("unpublished", result.EconomicCalendar.Events[2].Status);
     }
 
     static MarketMoodQueryService Service(MoodGateway gateway) =>

@@ -33,9 +33,20 @@ public sealed record MarketMoodResponse(
     IReadOnlyList<MarketMoodAsset> Assets);
 
 public sealed record EconomicCalendarEvent(
-    string Id, string Title, DateTimeOffset ScheduledAt, string Status,
+    string Id, string Kind, string Title, DateTimeOffset ScheduledAt, string Status,
     string? Actual, string? Forecast, string? Previous, string? Unit,
-    string ImpactDirection, string Source, string? Reason);
+    string ImpactDirection, string BondImpact, string Source, string? Reason);
+
+public static class EconomicEventKinds
+{
+    public const string MichiganInflationExpectations = nameof(MichiganInflationExpectations);
+    public const string DurableGoodsOrders = nameof(DurableGoodsOrders);
+    public const string CPI = nameof(CPI);
+    public const string PPI = nameof(PPI);
+    public const string InitialJoblessClaims = nameof(InitialJoblessClaims);
+    public const string FOMC = nameof(FOMC);
+    public const string TreasuryAuction = nameof(TreasuryAuction);
+}
 
 public sealed record EconomicCalendarSnapshot(
     DateOnly MarketDate, string TimeZone, string Status, string Source,
@@ -106,7 +117,7 @@ public sealed class MarketMoodQueryService(
         EconomicCalendarSnapshot calendar;
         try
         {
-            calendar = await economicCalendar.GetAsync(marketDate, now, ct);
+            calendar = NormalizeCalendar(await economicCalendar.GetAsync(marketDate, now, ct));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -167,6 +178,30 @@ public sealed class MarketMoodQueryService(
             calendar,
             assets);
     }
+
+    static EconomicCalendarSnapshot NormalizeCalendar(EconomicCalendarSnapshot calendar) =>
+        calendar with { Events = calendar.Events.Select(x => x with { BondImpact = BondImpact(x) }).ToArray() };
+
+    static string BondImpact(EconomicCalendarEvent value)
+    {
+        if (value.Status != "published" || !Number(value.Actual, out var actual) || !Number(value.Forecast, out var forecast) || actual == forecast)
+            return "unknown";
+
+        var higherIsBondPositive = value.Kind == EconomicEventKinds.InitialJoblessClaims;
+        if (value.Kind == EconomicEventKinds.FOMC) return "unknown";
+        var supported = value.Kind is EconomicEventKinds.MichiganInflationExpectations
+            or EconomicEventKinds.DurableGoodsOrders
+            or EconomicEventKinds.CPI
+            or EconomicEventKinds.PPI
+            or EconomicEventKinds.InitialJoblessClaims
+            or EconomicEventKinds.TreasuryAuction;
+        if (!supported) return "unknown";
+        return (actual > forecast) == higherIsBondPositive ? "positive" : "negative";
+    }
+
+    static bool Number(string? value, out double result) =>
+        double.TryParse(value?.Replace(",", "", StringComparison.Ordinal).Trim().TrimEnd('%'),
+            System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out result);
 
     async Task<MarketMoodAsset> RefreshAssetAsync(
         (string Key, string Label, string Symbol, string AssetKind) definition,
