@@ -17,6 +17,7 @@
 | Domain | `server/Domain/Validation/ValidationEvaluator.cs` | 사전 정의 코호트 평가, 표본 충분성, 불확실성 |
 | Domain | `server/Domain/Validation/WalkForwardEvaluator.cs` | 시간 순서 학습/검증 분리 |
 | Domain | `server/Domain/Validation/CostSensitivity.cs` | 보수적 비용 시나리오(별도 필드) |
+| Domain | `server/Domain/Validation/RiskFrequencyEvaluator.cs` | 종목별 빈도·손익비·PF·MDD·노출 및 시간순 판정 |
 | Application | `server/Application/ValidationQueryService.cs` | 관측 파일·거래 저장소 읽기, 데이터 감사, 보고서 조립 |
 | Api | `GET /api/validation?days=N` | additive 조회 엔드포인트 (기본 30일, 최대 180일) |
 
@@ -347,6 +348,20 @@ REBOUND는 D12 이후에도 counter-trend setup이지만 무제한 반추세 허
 
 `realizedMeanPercent`(원본)와 `scenarioMeanPercent`(가정)는 **다른 필드**다. 시나리오가 저장된 실현 손익을
 덮어쓰지 않으며 운영 비용 모델도 바꾸지 않는다.
+
+### 4.7 빈도·리스크 계약 (#281)
+
+`riskFrequency`는 종목별로 후보가 관측된 New York 거래일을 분모로 일평균 기회 수와 거래 수를 계산한다.
+기회는 중복 poll을 접은 `EventId` 한 건이며, 거래와 승률은 각각 연결된 진입과 기준 시각까지 확정된 청산만 센다.
+손익비(평균 이익/평균 손실 절댓값)와 PF(이익 합/손실 합 절댓값)는 이익·손실 표본이 모두 있을 때만 값이 있고,
+한쪽이 없으면 0이나 무한대 대신 `null`이다. MDD는 청산 시각 순 비용 후 누적 손익률의 고점 대비 최대 하락이며,
+노출시간은 진입부터 확정 청산까지의 분을 합산한다. 중첩 거래 시간은 합산하며 복리 자산곡선이나 자본 점유율로 해석하지 않는다.
+
+기본 임계값은 결과를 보기 전에 고정한다: 종목별 실현 거래 20건, 관측 세션 3일, 일평균 거래 0.2~3건,
+MDD 10% 이하, 일평균 노출 120분 이하. 기본 3-fold anchored walk-forward의 각 out-of-sample 구간에 같은 값을
+적용하며 학습 구간 결과로 임계값을 다시 맞추지 않는다. 표본 미달은 `InsufficientSample`, 빈도 범위 이탈은
+`FrequencyOutsideTarget`, MDD·노출 상한 이탈은 `RiskLimitExceeded`다. 이 판정은 읽기 전용이며
+`StructurePolicy` 또는 진입·청산 정책을 바꾸지 않는다. 정책 변경은 별도 설계 승인과 replay 증거가 필요하다.
 
 ---
 
