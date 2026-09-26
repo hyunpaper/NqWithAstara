@@ -58,17 +58,18 @@ public sealed record SetupDetectionRequest(string Symbol, DateTimeOffset Session
     DateTimeOffset AnalysisAsOf, DateTimeOffset Now, ImmutableArray<StructureBar> OneMinuteBars,
     ImmutableArray<PriceZone> Zones, ImmutableArray<TouchEpisode> Episodes, TrendAssessment Trend,
     double? Atr1mAtStructureCutoff, decimal? LivePrice, DateTimeOffset? QuoteAt,
-    StructureLiquidity? Liquidity, ImmutableArray<string> ExternalBlockers, bool PriceTickSupported = true)
+    StructureLiquidity? Liquidity, ImmutableArray<string> ExternalBlockers, bool PriceTickSupported = true,
+    ConditionalReturnModel? ForecastModel = null)
 {
     public static SetupDetectionRequest Create(string symbol, DateTimeOffset sessionStart, DateTimeOffset sessionEnd,
         DateTimeOffset analysisAsOf, DateTimeOffset now, ImmutableArray<StructureBar> bars,
         ImmutableArray<PriceZone> zones, ImmutableArray<TouchEpisode> episodes, TrendAssessment trend,
         double? atr1mAtStructureCutoff, decimal? livePrice, DateTimeOffset? quoteAt,
         StructureLiquidity? liquidity = null, ImmutableArray<string>? externalBlockers = null,
-        bool priceTickSupported = true) =>
+        bool priceTickSupported = true, ConditionalReturnModel? forecastModel = null) =>
         new(symbol, sessionStart, sessionEnd, analysisAsOf, now, bars, zones, episodes, trend,
             atr1mAtStructureCutoff, livePrice, quoteAt, liquidity,
-            externalBlockers ?? ImmutableArray<string>.Empty, priceTickSupported);
+            externalBlockers ?? ImmutableArray<string>.Empty, priceTickSupported, forecastModel);
 }
 
 public sealed record SetupDetectionResult(ImmutableArray<EntryCandidate> Candidates, string? PreferredCandidateId,
@@ -474,6 +475,7 @@ public static class SetupDetector
         var guardKey = DuplicateGuardKey(request.Symbol, request.SessionStart, kindName, structureCutoff);
         var side = hypothesis.Side;
         var regime = StrategyRegimeClassifier.Classify(request.Trend, bars, policy);
+        var regimeAssessment = StrategyRegimeClassifier.Assess(request.Trend, bars, policy);
 
         var planning = StructuralPlanner.Evaluate(new PlanRequest(request.Symbol, eventId, kindName, entryReference,
             hypothesis.Anchor, hypothesis.Zone, request.Zones, request.Atr1mAtStructureCutoff, spread,
@@ -599,6 +601,19 @@ public static class SetupDetector
               / request.Trend.Atr1m.Value : (double?)null;
         var distance = planning.Stop is { } stopDistance && request.Atr1mAtStructureCutoff is > 0
             ? (double)Math.Abs(entryReference - stopDistance) / request.Atr1mAtStructureCutoff.Value : (double?)null;
+        var planCosts = planning.Plan?.Costs;
+        var forecast = ConditionalReturnForecaster.Evaluate(new ConditionalReturnForecastInput(
+            request.AnalysisAsOf, side, quality.Score,
+            request.Atr1mAtStructureCutoff is > 0 && entryReference > 0
+                ? request.Atr1mAtStructureCutoff.Value / (double)entryReference * 100d : null,
+            trendAlignment, regime.Volatility,
+            planning.NetReward is > 0 && entryReference > 0
+                ? (double)(planning.NetReward.Value / entryReference * 100m) : null,
+            planning.NetRisk is > 0 && entryReference > 0
+                ? (double)(planning.NetRisk.Value / entryReference * 100m) : null,
+            planCosts?.RoundTripFeePercent,
+            planCosts is not null && entryReference > 0
+                ? (double)(planCosts.ExtraCostPerShare / entryReference * 100m) : null), request.ForecastModel);
         var evidence = new EntryEvidence(trigger.Start, trigger.End + trigger.Duration, side, regime,
             trendAlignment, distance, planning.NetR, expectedNetR, relativeVolume, vwapDistance,
             hypothesis.Anchor is { } anchorDistance ? Math.Abs(entryReference - anchorDistance) : null,
@@ -612,7 +627,7 @@ public static class SetupDetector
                 $"RELATIVE_VOLUME:{(relativeVolume is null ? "MISSING" : relativeVolume.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))}",
                 $"VWAP_DISTANCE_ATR:{(vwapDistance is null ? "MISSING" : vwapDistance.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))}",
                 $"COST_COMPLETE:{(!planning.MissingLiquidity ? "1" : "0")}"
-            ]);
+            ], forecast, regimeAssessment);
         if (planning.Plan is { } planned)
             planning = planning with { Plan = planned with { Evidence = evidence } };
 

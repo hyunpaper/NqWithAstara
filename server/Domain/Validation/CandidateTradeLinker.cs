@@ -179,7 +179,7 @@ public static class CandidateTradeLinker
             resolved ? trade.ExitEstimated : null, plan.MissingLiquidity, plan.ValidSpread, plan.NetR,
             plan.EligibilityCostModelVersion, plan.RealizedFillCostModelVersion, plan.EngineVersion,
             plan.PolicyHash, plan.Kind, context.TrendAtEntry, Finite(context.EntryQualityAtEntry),
-            context.EntryEventId);
+            context.EntryEventId, context.EntryEvidence?.Forecast, context.EntryEvidence?.RegimeAssessment);
     }
 
     static CandidateOutcome Outcome(string? state) => (state ?? string.Empty).ToUpperInvariant() switch

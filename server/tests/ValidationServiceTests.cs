@@ -175,7 +175,8 @@ public sealed class ValidationEndpointTests(AstraHostFixture host) : IClassFixtu
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var root = json.RootElement;
         foreach (var name in new[] { "generatedAt", "asOf", "windowDays", "engineVersion", "policyHash", "data",
-            "link", "evaluation", "walkForward", "riskFrequency", "costScenarios", "limitations" })
+            "link", "evaluation", "walkForward", "riskFrequency", "costScenarios", "limitations",
+            "probabilityCalibration" })
             Assert.True(root.TryGetProperty(name, out _), $"missing property: {name}");
         Assert.False(root.TryGetProperty("Data", out _));
 
@@ -184,6 +185,8 @@ public sealed class ValidationEndpointTests(AstraHostFixture host) : IClassFixtu
         Assert.Equal("InsufficientSample", overall.GetProperty("verdict").GetString());
         Assert.Equal(JsonValueKind.Null, overall.GetProperty("observedWinRatePercent").ValueKind);
         Assert.NotEmpty(root.GetProperty("evaluation").GetProperty("caveats").EnumerateArray());
+        Assert.Equal(ProbabilityCalibrationEvaluator.InsufficientData,
+            root.GetProperty("probabilityCalibration").GetProperty("status").GetString());
     }
 
     [Fact]

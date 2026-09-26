@@ -33,7 +33,7 @@ public sealed record ValidationReport(DateTimeOffset GeneratedAt, DateTimeOffset
     string EngineVersion, string PolicyHash, ValidationDataAudit Data, LinkAudit Link,
     ValidationEvaluation Evaluation, WalkForwardReport WalkForward,
     RiskFrequencyReport RiskFrequency, IReadOnlyList<CostScenarioResult> CostScenarios,
-    IReadOnlyList<string> Limitations);
+    IReadOnlyList<string> Limitations, ProbabilityCalibrationReport? ProbabilityCalibration = null);
 
 public sealed class ValidationQueryService(ILocalStore store, IStructureObservationStore observations,
     TimeProvider clock, StructurePolicy? policy = null)
@@ -76,6 +76,13 @@ public sealed class ValidationQueryService(ILocalStore store, IStructureObservat
         var walkForward = WalkForwardEvaluator.Evaluate(link.Candidates);
         var riskFrequency = RiskFrequencyEvaluator.Evaluate(link.Candidates);
         var scenarios = CostSensitivity.Evaluate(link.Candidates);
+        var probabilityCalibration = ProbabilityCalibrationEvaluator.Evaluate(link.Candidates
+            .Where(x => x.Trade is { OutcomeKnown: true, ExitAt: not null,
+                Forecast: { SuccessProbability: not null } })
+            .Select(x => new ProbabilityObservation(x.EventId, x.Trade!.Forecast!.AsOf,
+                x.Trade.ExitAt!.Value, x.Trade.Forecast.SuccessProbability!.Value,
+                string.Equals(x.Trade.StatusAsOf, "TARGET", StringComparison.Ordinal)))
+            .ToArray(), now);
 
         var data = audit with
         {
@@ -92,11 +99,12 @@ public sealed class ValidationQueryService(ILocalStore store, IStructureObservat
         var limitations = link.Audit.Limitations
             .Concat(walkForward.Limitations)
             .Concat(riskFrequency.Limitations)
+            .Concat(probabilityCalibration.Limitations)
             .Concat(extra)
             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
 
         return (200, new ValidationReport(now, now, window, _policy.Version, _policy.PolicyHash, data, link.Audit,
-            evaluation, walkForward, riskFrequency, scenarios, limitations));
+            evaluation, walkForward, riskFrequency, scenarios, limitations, probabilityCalibration));
     }
 
     // ── 관측 파일 읽기 ─────────────────────────────────────────────────────────────────────────

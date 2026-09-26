@@ -11,6 +11,14 @@ public sealed record StrategyRegime(StrategyDirection Direction, VolatilityBand 
     public string Key => $"{Direction.ToString().ToUpperInvariant()}_{Volatility.ToString().ToUpperInvariant()}";
 }
 
+public sealed record StrategyRegimeAssessment(string Status, StrategyRegime? Regime, double? Confidence,
+    int CompletedBars, double? AtrToMedianRangeRatio, IReadOnlyList<string> Evidence,
+    IReadOnlyList<string> Limitations)
+{
+    public const string Available = "available";
+    public const string InsufficientData = "insufficient_data";
+}
+
 public static class StrategyRegimeClassifier
 {
     public static StrategyRegime Classify(TrendAssessment trend, IReadOnlyList<StructureBar> bars,
@@ -40,8 +48,46 @@ public static class StrategyRegimeClassifier
         return new(direction, volatility);
     }
 
+    public static StrategyRegimeAssessment Assess(TrendAssessment trend, IReadOnlyList<StructureBar> bars,
+        StructurePolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(trend);
+        ArgumentNullException.ThrowIfNull(bars);
+        ArgumentNullException.ThrowIfNull(policy);
+
+        var lookback = Math.Max(1, policy.RegimeVolatilityLookbackBars);
+        var completed = bars.Where(x => x.End <= trend.AnalysisCutoff).OrderBy(x => x.Start).ToArray();
+        var ranges = completed.TakeLast(lookback).Select(x => (double)(x.High - x.Low))
+            .Where(x => double.IsFinite(x) && x > 0).Order().ToArray();
+        var limitations = new List<string>();
+        if (!trend.Available) limitations.Add("TREND_UNAVAILABLE");
+        if (trend.Atr1m is not > 0 || !double.IsFinite(trend.Atr1m.Value)) limitations.Add("ATR_UNAVAILABLE");
+        if (ranges.Length < lookback) limitations.Add($"INSUFFICIENT_COMPLETED_BARS:{ranges.Length}/{lookback}");
+
+        if (limitations.Count > 0)
+            return new(StrategyRegimeAssessment.InsufficientData, null, null, completed.Length, null,
+                Evidence(trend, ranges.Length, lookback, null), limitations);
+
+        var baseline = ranges[ranges.Length / 2];
+        var ratio = trend.Atr1m!.Value / baseline;
+        var regime = Classify(trend, completed, policy);
+        var magnitude = Math.Clamp(Math.Abs(trend.SignedTrend!.Value) / 100d, 0, 1);
+        var confidence = Math.Round(regime.Direction == StrategyDirection.Range ? 1 - magnitude : magnitude, 6);
+        return new(StrategyRegimeAssessment.Available, regime, confidence, completed.Length, ratio,
+            Evidence(trend, ranges.Length, lookback, ratio), []);
+    }
+
     public static bool IsSideAligned(StrategyRegime regime, TradeSide side) =>
         regime.Direction == StrategyDirection.Range ||
         regime.Direction == StrategyDirection.TrendUp && side == TradeSide.Long ||
         regime.Direction == StrategyDirection.TrendDown && side == TradeSide.Short;
+
+    static string[] Evidence(TrendAssessment trend, int ranges, int lookback, double? ratio) =>
+    [
+        $"TREND_STATE:{trend.State.ToString().ToUpperInvariant()}",
+        $"SIGNED_TREND:{StructureMath.Number(trend.SignedTrend)}",
+        $"COMPLETED_RANGE_BARS:{ranges}/{lookback}",
+        $"ATR_TO_MEDIAN_RANGE:{StructureMath.Number(ratio)}",
+        "CONFIDENCE_BASIS:TREND_MAGNITUDE"
+    ];
 }
