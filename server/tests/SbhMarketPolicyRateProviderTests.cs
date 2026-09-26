@@ -74,6 +74,23 @@ public sealed class SbhMarketPolicyRateProviderTests
         Assert.Equal(1, handler.Calls);
     }
 
+    [Fact]
+    public async Task Retry_After는_재기동_뒤에도_저장상태로_재요청을_막는다()
+    {
+        var now = DateTimeOffset.Parse("2026-09-26T10:00:00Z");
+        var store = new MemoryNewsStore();
+        var throttled = new ThrottledHandler();
+        var first = new SbhMarketPolicyRateProvider(new NewsOptions(), new HttpClient(throttled), store);
+        await first.GetAsync(now, CancellationToken.None);
+
+        var afterRestartHandler = new CountingHandler(Html("2026-09-26T09:20:09Z"));
+        var restarted = new SbhMarketPolicyRateProvider(new NewsOptions(), new HttpClient(afterRestartHandler), store);
+        var delayed = await restarted.GetAsync(now.AddMinutes(1), CancellationToken.None);
+
+        Assert.Equal("unavailable", delayed.Status);
+        Assert.Equal(0, afterRestartHandler.Calls);
+    }
+
     static string Html(string checkedAt) => $$"""<script>\"policyRates\":{\"rates\":[{\"key\":\"fed\",\"label\":\"미 연준\",\"value\":4,\"prev\":3.75,\"asOf\":\"2026-09-16\",\"note\":\"목표범위\"}],\"checkedAt\":\"{{checkedAt}}\"}</script>""";
 
     class FixtureHandler(string body) : HttpMessageHandler

@@ -8,19 +8,23 @@ namespace Astra.Server.Infrastructure;
 public sealed class SbhMarketPolicyRateProvider : IMarketPolicyRateProvider
 {
     const string Url = "https://www.sbhnews.com/markets";
+    const string StateFile = "market-policy-rate-provider.json";
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     readonly HttpClient _http;
+    readonly INewsStore? _store;
     readonly SemaphoreSlim _gate = new(1, 1);
     MarketPolicyRateSnapshot? _cached;
     DateTimeOffset? _cachedAt;
     DateTimeOffset? _retryAfter;
     string? _etag;
     DateTimeOffset? _lastModified;
+    bool _stateLoaded;
 
-    public SbhMarketPolicyRateProvider(NewsOptions options, HttpClient? http = null)
+    public SbhMarketPolicyRateProvider(NewsOptions options, HttpClient? http = null, INewsStore? store = null)
     {
         _ = options;
         _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        _store = store;
     }
 
     public async Task<MarketPolicyRateSnapshot> GetAsync(DateTimeOffset now, CancellationToken ct)
@@ -28,6 +32,7 @@ public sealed class SbhMarketPolicyRateProvider : IMarketPolicyRateProvider
         await _gate.WaitAsync(ct);
         try
         {
+            await LoadStateAsync(ct);
             if (_cached is not null && _cachedAt is not null && now - _cachedAt < TimeSpan.FromMinutes(15)) return _cached;
             if (_retryAfter is not null && now < _retryAfter) return DelayedCached(now, "Retry-After 대기 중입니다.");
             using var request = new HttpRequestMessage(HttpMethod.Get, Url);
@@ -38,11 +43,13 @@ public sealed class SbhMarketPolicyRateProvider : IMarketPolicyRateProvider
             if (response.StatusCode == HttpStatusCode.NotModified && _cached is not null)
             {
                 _cachedAt = now;
+                await SaveStateAsync(ct);
                 return _cached;
             }
             if (response.StatusCode == HttpStatusCode.TooManyRequests)
             {
                 _retryAfter = RetryAfter(response, now);
+                await SaveStateAsync(ct);
                 return DelayedCached(now, "정책금리 제공자의 Retry-After를 따릅니다.");
             }
             if (!response.IsSuccessStatusCode) return Unavailable("SBHNews 표시값", "페이지를 조회하지 못했습니다.");
@@ -61,6 +68,7 @@ public sealed class SbhMarketPolicyRateProvider : IMarketPolicyRateProvider
                 stale ? "표시값은 참고용이며 시장 분위기 점수에 반영하지 않습니다." : null, rates);
             _cachedAt = now;
             _retryAfter = null;
+            await SaveStateAsync(ct);
             return _cached;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -69,6 +77,30 @@ public sealed class SbhMarketPolicyRateProvider : IMarketPolicyRateProvider
         catch (JsonException) { return Unavailable("SBHNews 표시값", "정책금리 표시 형식을 해석하지 못했습니다."); }
         finally { _gate.Release(); }
     }
+
+    async Task LoadStateAsync(CancellationToken ct)
+    {
+        if (_stateLoaded) return;
+        _stateLoaded = true;
+        if (_store is null) return;
+        var text = await _store.ReadTextAsync(StateFile, ct);
+        if (string.IsNullOrWhiteSpace(text)) return;
+        try
+        {
+            var saved = JsonSerializer.Deserialize<PersistedState>(text, Json);
+            if (saved is null) return;
+            _cached = saved.Cached;
+            _cachedAt = saved.CachedAt;
+            _retryAfter = saved.RetryAfter;
+            _etag = saved.ETag;
+            _lastModified = saved.LastModified;
+        }
+        catch (JsonException) { }
+    }
+
+    Task SaveStateAsync(CancellationToken ct)
+        => _store is null ? Task.CompletedTask : _store.WriteTextAsync(StateFile,
+            JsonSerializer.Serialize(new PersistedState(_cached, _cachedAt, _retryAfter, _etag, _lastModified), Json), ct);
 
     MarketPolicyRateSnapshot DelayedCached(DateTimeOffset now, string reason)
         => _cached is null ? Unavailable("SBHNews 표시값", reason) : _cached with
@@ -123,4 +155,6 @@ public sealed class SbhMarketPolicyRateProvider : IMarketPolicyRateProvider
 
     sealed record Payload(List<Rate>? Rates, DateTimeOffset? CheckedAt);
     sealed record Rate(string? Key, string? Label, double Value, double? Previous, string? AsOf, string? Note);
+    sealed record PersistedState(MarketPolicyRateSnapshot? Cached, DateTimeOffset? CachedAt,
+        DateTimeOffset? RetryAfter, string? ETag, DateTimeOffset? LastModified);
 }

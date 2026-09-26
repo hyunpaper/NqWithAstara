@@ -112,6 +112,27 @@ sealed class MemoryNewsStore : INewsStore
         finally { _gate.Release(); }
     }
 
+    public async Task<IReadOnlyDictionary<string, int>> FilterFilesAsync(
+        IReadOnlyList<string> files, Func<string, bool> keep, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var removed = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var file in files.Distinct(StringComparer.Ordinal))
+            {
+                if (!Files.TryGetValue(file, out var lines)) continue;
+                var retained = lines.Where(keep).ToList();
+                var count = lines.Count - retained.Count;
+                if (count == 0) continue;
+                Files[file] = retained;
+                removed[file] = count;
+            }
+            return removed;
+        }
+        finally { _gate.Release(); }
+    }
+
     public async Task AppendAsync(string file, string line, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);

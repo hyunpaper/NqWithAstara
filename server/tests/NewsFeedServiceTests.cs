@@ -81,6 +81,35 @@ public sealed class NewsFeedServiceTests
     }
 
     [Fact]
+    public async Task 공급자_전환_정리는_이미_대기중인_레거시_분류도_폐기한다()
+    {
+        var harness = new Harness();
+        harness.Options.MaxClassificationsPerMinute = 1;
+        harness.Feed.Name = "legacy-feed";
+        harness.Page(1, Item("100", "기준"));
+        await harness.PollAsync();
+        harness.Clock.Now = Start.AddMinutes(1);
+        harness.Page(1, Item("102", "구형 기사 1"), Item("101", "구형 기사 2"), Item("100", "기준"));
+        await harness.PollAsync();
+        Assert.Equal(1, harness.Service.QueueDepth);
+
+        harness.Options.UseSbhNews = true;
+        harness.State.CollectionCompleted(harness.Clock.GetUtcNow(), "ok", true, 1, null,
+            [new NewsProviderFetchStatus(NewsFeedProviders.SbhNews, "ok", 1)]);
+        var migration = new NewsStorageMigrationService(harness.Options, harness.State, harness.Store,
+            feedService: harness.Service);
+        await migration.ExecuteAsync(await migration.PlanAsync(CancellationToken.None), CancellationToken.None);
+        harness.Feed.Name = NewsFeedProviders.SbhNews;
+        harness.Clock.Now = Start.AddMinutes(20);
+        harness.Page(1);
+
+        await harness.PollAsync();
+
+        Assert.Equal(0, harness.Service.QueueDepth);
+        Assert.DoesNotContain(harness.Saved(), x => x.Source != NewsFeedProviders.SbhNewsSource);
+    }
+
+    [Fact]
     public async Task GuidFeedUsesCreatedAtCursorAcrossPolls()
     {
         var harness = new Harness();

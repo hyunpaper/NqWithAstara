@@ -114,6 +114,38 @@ public sealed class NewsFeedService(
         }, ct);
     }
 
+    /// <summary>공급자 전환 정리 시 분류 대기 중인 구형 기사와 사건 팔로어를 폐기한다.</summary>
+    public void DiscardLegacyPendingWork()
+    {
+        bool IsSbh(QueuedArticle item) => string.Equals(item.Article.Source, NewsFeedProviders.SbhNewsSource,
+            StringComparison.Ordinal);
+        lock (_queued)
+        {
+            foreach (var item in _matched.Where(x => !IsSbh(x)).Concat(_other.Where(x => !IsSbh(x))).ToArray())
+                _queued.Remove(item.Article.Id);
+            RemoveLegacy(_matched, IsSbh);
+            RemoveLegacy(_other, IsSbh);
+            foreach (var key in _pendingFollowers.Keys.ToArray())
+            {
+                if (!_pendingFollowers.TryGetValue(key, out var followers)) continue;
+                var kept = followers.Where(IsSbh).ToList();
+                if (kept.Count == 0) _pendingFollowers.Remove(key);
+                else _pendingFollowers[key] = kept;
+            }
+        }
+
+        static void RemoveLegacy(LinkedList<QueuedArticle> queue, Func<QueuedArticle, bool> isSbh)
+        {
+            var node = queue.First;
+            while (node is not null)
+            {
+                var next = node.Next;
+                if (!isSbh(node.Value)) queue.Remove(node);
+                node = next;
+            }
+        }
+    }
+
     /// <summary>재기동 후에도 당일 판정을 조회에 보이게 today jsonl을 한 번만 되읽는다.</summary>
     async Task RestoreAsync(CancellationToken ct)
     {

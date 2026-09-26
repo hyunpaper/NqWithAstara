@@ -34,15 +34,11 @@ public sealed class NewsStorageMigrationService(NewsOptions options, NewsRuntime
 
     async Task<NewsStorageMigrationResult> ExecuteCoreAsync(NewsStorageMigrationPlan plan, CancellationToken ct)
     {
-        var existing = new HashSet<string>((await store.ListFilesAsync(ct)).Where(IsDatedArticleFile), StringComparer.Ordinal);
-        var rewritten = new List<string>();
-        var removed = 0;
-        foreach (var file in plan.ArticleFiles.Where(IsDatedArticleFile).Where(existing.Contains).Distinct(StringComparer.Ordinal))
-        {
-            var removedFromFile = await store.FilterLinesAsync(file, line => !IsLegacyRecord(line), ct);
-            removed += removedFromFile;
-            if (removedFromFile > 0) rewritten.Add(file);
-        }
+        var files = plan.ArticleFiles.Where(IsDatedArticleFile).Distinct(StringComparer.Ordinal).ToArray();
+        var filtered = await store.FilterFilesAsync(files, line => !IsLegacyRecord(line), ct);
+        var rewritten = filtered.Keys.ToArray();
+        var removed = filtered.Values.Sum();
+        feedService?.DiscardLegacyPendingWork();
         if (feedService is not null) await feedService.PreserveSbhStateAsync(ct);
         else await PreserveSbhStateAsync(ct);
         if (translations is null) await store.DeleteAsync(NewsTranslationQueue.CacheFile, ct);

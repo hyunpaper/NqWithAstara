@@ -47,6 +47,59 @@ public sealed class NewsStore(IWebHostEnvironment env) : INewsStore
         finally { _gate.Release(); }
     }
 
+    public async Task<IReadOnlyDictionary<string, int>> FilterFilesAsync(
+        IReadOnlyList<string> files, Func<string, bool> keep, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        var staged = new List<(string File, string Path, string Temp, string[] Original, string[] Retained, int Removed)>();
+        try
+        {
+            foreach (var file in files.Distinct(StringComparer.Ordinal))
+            {
+                var path = Path.Combine(_root, file);
+                if (!File.Exists(path)) continue;
+                var original = await File.ReadAllLinesAsync(path, ct);
+                var retained = original.Where(keep).ToArray();
+                var removed = original.Length - retained.Length;
+                if (removed == 0) continue;
+                staged.Add((file, path, path + ".migration.tmp", original, retained, removed));
+            }
+
+            Directory.CreateDirectory(_root);
+            foreach (var entry in staged)
+                await File.WriteAllTextAsync(entry.Temp, FormatLines(entry.Retained), ct);
+
+            var committed = new List<(string Path, string[] Original)>();
+            try
+            {
+                foreach (var entry in staged)
+                {
+                    File.Move(entry.Temp, entry.Path, true);
+                    committed.Add((entry.Path, entry.Original));
+                }
+            }
+            catch
+            {
+                foreach (var entry in committed.AsEnumerable().Reverse())
+                {
+                    var rollback = entry.Path + ".rollback.tmp";
+                    await File.WriteAllTextAsync(rollback, FormatLines(entry.Original), CancellationToken.None);
+                    File.Move(rollback, entry.Path, true);
+                }
+                throw;
+            }
+            return staged.ToDictionary(x => x.File, x => x.Removed, StringComparer.Ordinal);
+        }
+        finally
+        {
+            foreach (var entry in staged)
+                if (File.Exists(entry.Temp)) File.Delete(entry.Temp);
+            _gate.Release();
+        }
+    }
+
+    static string FormatLines(string[] lines) => string.Join("\n", lines) + (lines.Length > 0 ? "\n" : "");
+
     public async Task AppendAsync(string file, string line, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
