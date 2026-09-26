@@ -97,7 +97,8 @@ public sealed record NewsRecord(
     string ContentTranslationStatus = "not_requested",
     string ClassificationTranslationStatus = "not_requested",
     string? ClassificationTextKo = null,
-    string? TranslationContentHash = null);
+    string? TranslationContentHash = null,
+    NewsRelevanceAssessment? Relevance = null);
 
 public sealed record NewsProviderRuntimeStatus(
     string Provider,

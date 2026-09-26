@@ -190,7 +190,8 @@ public sealed class NewsFeedService(
             if (!NeedsReclassification(record) || IsQueued(record.Id)) continue;
             var headlineOnly = string.Equals(record.InputKind, NewsInputKinds.Headline, StringComparison.OrdinalIgnoreCase);
             var article = new NewsArticle(record.Id, record.Title, record.Summary, record.Source, record.CreatedAt,
-                record.Tickers, headlineOnly ? record.Title : "", headlineOnly, null, record.Entities, record.Content, record.InputKind, record.Url);
+                record.Tickers, headlineOnly ? record.Title : "", headlineOnly, null, record.Entities, record.Content, record.InputKind, record.Url,
+                record.Relevance);
             Enqueue(article, record.MatchedSymbols, record.CollectedAt ?? record.ClassifiedAt, record);
             queued++;
         }
@@ -258,7 +259,7 @@ public sealed class NewsFeedService(
                 providerStatuses.AddRange(batch.Providers);
                 break;
             }
-            var freshBefore = fresh.Count;
+            var observedThisPage = 0;
             var newByProvider = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             foreach (var item in items)
             {
@@ -276,10 +277,12 @@ public sealed class NewsFeedService(
                 var alreadySeen = keys.Any(seenKeys.Contains)
                     || (known?.Inbox is null && known?.SeenIds?.Contains(item.Id, StringComparer.Ordinal) == true);
                 if (alreadySeen) continue;
-                var entry = new NewsInboxEntry(keys, item, requestedAt, known is null || providerBaseline);
+                observedThisPage++;
+                var eligible = item.Relevance?.Included ?? true;
+                var entry = new NewsInboxEntry(keys, item, requestedAt, known is null || providerBaseline || !eligible);
                 inbox.Add(entry);
                 foreach (var key in keys) seenKeys.Add(key);
-                if (known is not null)
+                if (known is not null && eligible)
                 {
                     fresh.Add(entry);
                     var provider = string.IsNullOrWhiteSpace(item.Provider) ? feed.Name : item.Provider;
@@ -291,7 +294,7 @@ public sealed class NewsFeedService(
                 NewCount = newByProvider.GetValueOrDefault(x.Provider)
             }));
             if (known is null) break;
-            if (fresh.Count - freshBefore < items.Count) break;
+            if (observedThisPage < items.Count) break;
             var cutoff = requestedAt - TimeSpan.FromHours(24);
             if (!items.Any(x => x.CreatedAt == DateTimeOffset.MinValue || x.CreatedAt >= cutoff)) break;
             page++;
@@ -306,18 +309,20 @@ public sealed class NewsFeedService(
             await SaveStateAsync(new NewsFeedState(maxId, maxCreatedAt, _dailyFeedRequests.ToArray(), maxKey,
                 seenIds.TakeLast(Math.Max(options.InboxCapacity, 1)).ToArray(), inbox, feed.Name,
                 fetched ? now : known?.LastFeedRequestAt, baselinedProviders.ToArray(), retryAfterUntil), ct);
+        var providerSummary = providerStatuses.GroupBy(x => x.Provider, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new NewsProviderFetchStatus(group.Key, group.Last().Status,
+                group.Sum(x => x.Count), group.Sum(x => x.NewCount), group.Last().RetryAfter,
+                group.Sum(x => x.IncludedCount), group.Sum(x => x.ExcludedCount), group.Sum(x => x.ReviewCount),
+                group.Select(x => x.FilterPolicyVersion).LastOrDefault(x => x is not null))).ToArray();
         if (known is null || providerBaseline)
             return new CollectionResult(budget, fetched && status is "ok" or "empty" ? "baseline" : status,
-                fetched, 0, latestPublishedAt, providerStatuses);
+                fetched, 0, latestPublishedAt, providerSummary);
         if (fresh.Count == 0)
-            return new CollectionResult(budget, status, fetched, 0, latestPublishedAt, providerStatuses);
+            return new CollectionResult(budget, status, fetched, 0, latestPublishedAt, providerSummary);
 
         state.SeenArticles(fresh.Count);
         QueueInboxArticles(fresh, watchlist);
         state.QueueDepth(QueueDepth);
-        var providerSummary = providerStatuses.GroupBy(x => x.Provider, StringComparer.OrdinalIgnoreCase)
-            .Select(group => new NewsProviderFetchStatus(group.Key, group.Last().Status,
-                group.Sum(x => x.Count), group.Sum(x => x.NewCount))).ToArray();
         return new CollectionResult(budget, status == "empty" ? "ok" : status, fetched, fresh.Count,
             latestPublishedAt, providerSummary);
     }
@@ -330,7 +335,7 @@ public sealed class NewsFeedService(
         var queued = entries.OrderBy(x => x.Item.CreatedAt).ThenBy(x => x.Item.Id, StringComparer.Ordinal)
             .Select(x => (Entry: x, Article: new NewsArticle(x.Item.Id, x.Item.Title, x.Item.Summary, x.Item.Source,
                 x.Item.CreatedAt, x.Item.Tickers, x.Item.Headline, x.Item.HeadlineOnly, x.Item.GroupId,
-                x.Item.Entities, x.Item.Content, Url: x.Item.Url))).ToArray();
+                x.Item.Entities, x.Item.Content, Url: x.Item.Url, Relevance: x.Item.Relevance))).ToArray();
         var followerIds = GroupFollowerArticles(queued, watchlist);
         foreach (var item in queued)
         {
@@ -565,7 +570,8 @@ public sealed class NewsFeedService(
             translationQueue is null ? entry.Prior?.ContentTranslationStatus ?? "not_requested" : "pending",
             translationQueue is null ? entry.Prior?.ClassificationTranslationStatus ?? "not_requested" : "pending",
             entry.Prior?.ClassificationTextKo,
-            entry.Prior?.TranslationContentHash);
+            entry.Prior?.TranslationContentHash,
+            entry.Article.Relevance ?? entry.Prior?.Relevance);
     }
 
     async Task SaveAsync(NewsRecord record, CancellationToken ct)

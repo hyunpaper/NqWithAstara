@@ -1,0 +1,104 @@
+using Astra.Server.Application;
+using Astra.Server.Domain.News;
+using Xunit;
+
+namespace Astra.Server.Tests;
+
+public sealed class NewsRelevancePolicyTests
+{
+    readonly NewsRelevancePolicy _policy = new();
+
+    [Theory]
+    [InlineData("Trump imposes tariffs on China, stocks fall", "macro_policy")]
+    [InlineData("트럼프, 중국 관세 인상 발표…증시 하락", "macro_policy")]
+    [InlineData("Iran missile strike threatens Strait of Hormuz oil supply", "geopolitical")]
+    [InlineData("이란 미사일 공습으로 호르무즈 원유 공급 차질", "geopolitical")]
+    [InlineData("Treasury yields rise after Fed holds interest rates", "monetary_policy")]
+    [InlineData("연준 금리 동결 뒤 국채 금리 상승", "monetary_policy")]
+    [InlineData("Saudi Arabia cuts crude supply and oil prices rise", "macro_policy")]
+    [InlineData("후티가 예멘에서 선박을 공격해 유가가 상승", "geopolitical")]
+    [InlineData("CPI beats forecast and bond yields surge", "macro_release")]
+    public void 거시_지정학_대상과_사건동사가_함께_있으면_포함한다(string title, string kind)
+    {
+        var result = _policy.Evaluate(Item(title));
+
+        Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
+        Assert.Equal(kind, result.EventKind);
+        Assert.NotEmpty(result.Action);
+        Assert.NotEmpty(result.Targets);
+        Assert.NotEmpty(result.EvidenceSpan);
+    }
+
+    [Theory]
+    [InlineData("NVIDIA Corp signs a supply contract with Dell Technologies", "company_contract")]
+    [InlineData("Samsung Electronics raises chip prices as demand expands", "company_action")]
+    [InlineData("ACME Inc reports earnings and cuts guidance", "guidance_earnings")]
+    [InlineData("Cloudflare Inc discloses cybersecurity breach", "cybersecurity")]
+    [InlineData("MicroStrategy Inc announces convertible offering", "financing")]
+    [InlineData("Tesla Inc faces regulator lawsuit", "regulatory")]
+    public void 다양한_기업_행위자는_명시대상과_사건을_보존한다(string title, string kind)
+    {
+        var result = _policy.Evaluate(Item(title));
+
+        Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
+        Assert.Equal(kind, result.EventKind);
+        Assert.All(result.Targets, target => Assert.Equal("direct", target.Relation));
+    }
+
+    [Theory]
+    [InlineData("United striker scores winning goal in Premier League", "non_market_context")]
+    [InlineData("배우가 새 영화에서 강렬한 연기를 선보였다", "non_market_context")]
+    [InlineData("Workers strike during football match", "non_market_context")]
+    [InlineData("Bond actor appears at film concert", "non_market_context")]
+    public void 스포츠_연예와_다의어는_제외한다(string title, string reason)
+    {
+        var result = _policy.Evaluate(Item(title));
+
+        Assert.Equal(NewsRelevanceDecisions.Exclude, result.Decision);
+        Assert.Equal(reason, result.Reason);
+    }
+
+    [Theory]
+    [InlineData("Market reaction remains unclear")]
+    [InlineData("Fed official gives a general interview")]
+    [InlineData("ACME Inc considers its options")]
+    public void 사건_동사나_시장경로가_불충분하면_review로_보류한다(string title)
+    {
+        var result = _policy.Evaluate(Item(title));
+
+        Assert.Equal(NewsRelevanceDecisions.Review, result.Decision);
+        Assert.Equal("insufficient_actor_action_target_context", result.Reason);
+    }
+
+    [Fact]
+    public void ticker가_있는_계약은_명시기업대상으로_포함한다()
+    {
+        var result = _policy.Evaluate(Item("Supplier signs multi-year contract") with { Tickers = ["NVDA"] });
+
+        Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
+        Assert.Equal("NVDA", Assert.Single(result.Targets).Id);
+    }
+
+    static NewsFeedItem Item(string title) => new("id", title, "", "SBH", DateTimeOffset.UtcNow, []);
+}
+
+public sealed class NewsScoreCoreBridgeTests
+{
+    [Fact]
+    public void 관련성_판정은_방향을_추정하지_않고_ScoreCore_unknown_shadow로_연결한다()
+    {
+        var now = new DateTimeOffset(2026, 9, 27, 1, 0, 0, TimeSpan.Zero);
+        var relevance = new NewsRelevanceAssessment(NewsRelevancePolicy.CurrentVersion,
+            NewsRelevanceDecisions.Include, "company_contract", "NVDA", "signs", [new("NVDA", "company", "direct", "NVDA")],
+            "NVDA signs a contract", "company_event_confirmed");
+        var record = new NewsRecord("one", "title", "SBH", now.AddMinutes(-1), [], [], ["NVDA"],
+            NewsSentiments.Positive, 4, "감성 긍정", "model", 1, now, Relevance: relevance);
+
+        var snapshot = Assert.Single(NewsScoreCoreBridge.Snapshots(record, now));
+
+        Assert.Equal("insufficient_data", snapshot.Status);
+        Assert.Equal(1, snapshot.UnknownCount);
+        Assert.Equal(0, snapshot.IncludedCount);
+        Assert.Contains(snapshot.ExcludedEvidence, x => x.Reason == "impact_direction_unknown");
+    }
+}

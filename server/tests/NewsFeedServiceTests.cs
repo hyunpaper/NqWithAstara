@@ -908,4 +908,63 @@ public sealed class NewsFeedServiceTests
         Assert.Equal("marketaux", Assert.Single(harness.State.Providers).Provider);
     }
 
+    [Fact]
+    public async Task 제외와_review는_cursor에_영속되지만_분류큐와_사용자뉴스에는_들어가지_않는다()
+    {
+        var harness = new Harness();
+        harness.Feed.Name = NewsFeedProviders.SbhNews;
+        harness.Page(1, Relevant("base", "Fed raises interest rates", NewsRelevanceDecisions.Include));
+        await harness.PollAsync();
+        harness.Page(1,
+            Relevant("sports", "United striker scores a goal", NewsRelevanceDecisions.Exclude),
+            Relevant("unclear", "Market reaction remains unclear", NewsRelevanceDecisions.Review),
+            Relevant("base", "Fed raises interest rates", NewsRelevanceDecisions.Include));
+
+        await harness.PollAsync();
+
+        Assert.Empty(harness.Classifier.Requests);
+        Assert.Empty(harness.Saved());
+        var savedState = JsonSerializer.Deserialize<NewsFeedState>(harness.Store.Texts[NewsFeedService.StateFile],
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.Contains("sports", savedState.SeenIds!);
+        Assert.Contains("unclear", savedState.SeenIds!);
+        Assert.All(savedState.Inbox!.Where(x => x.Item.Id is "sports" or "unclear"), x => Assert.True(x.Processed));
+
+        var restarted = new Harness();
+        restarted.Feed.Name = NewsFeedProviders.SbhNews;
+        restarted.Store.Texts[NewsFeedService.StateFile] = harness.Store.Texts[NewsFeedService.StateFile];
+        restarted.Page(1,
+            Relevant("sports", "United striker scores a goal", NewsRelevanceDecisions.Exclude),
+            Relevant("unclear", "Market reaction remains unclear", NewsRelevanceDecisions.Review));
+        await restarted.PollAsync();
+        Assert.Empty(restarted.Classifier.Requests);
+    }
+
+    [Fact]
+    public async Task 상위_page가_제외기사뿐이어도_다음_page의_관련기사를_수집한다()
+    {
+        var harness = new Harness();
+        harness.Options.MaxPages = 2;
+        harness.Feed.Name = NewsFeedProviders.SbhNews;
+        harness.Page(1, Relevant("base", "Fed raises interest rates", NewsRelevanceDecisions.Include));
+        await harness.PollAsync();
+        harness.Page(1,
+            Relevant("sports-2", "Football match result", NewsRelevanceDecisions.Exclude),
+            Relevant("sports-1", "Premier League goal", NewsRelevanceDecisions.Exclude));
+        harness.Page(2, Relevant("market-2", "Iran strike disrupts oil supply", NewsRelevanceDecisions.Include));
+
+        await harness.PollAsync();
+
+        Assert.Equal("Iran strike disrupts oil supply", Assert.Single(harness.Classifier.Requests).Title);
+        Assert.Equal("market-2", Assert.Single(harness.Saved()).Id);
+    }
+
+    static NewsFeedItem Relevant(string id, string title, string decision)
+        => Item(id, title) with
+        {
+            Provider = NewsFeedProviders.SbhNews,
+            Relevance = new NewsRelevanceAssessment(NewsRelevancePolicy.CurrentVersion, decision, "test", "actor",
+                "action", [new("MARKET", "market", "direct", "evidence")], "evidence", "test")
+        };
+
 }
