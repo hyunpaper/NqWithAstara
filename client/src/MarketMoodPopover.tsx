@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { absoluteTimeKst } from "./newsFormat";
-import { marketMoodBadge, marketMoodDirectionLabel, type MarketMoodResponse } from "./marketMoodTypes";
+import { marketMoodBadge, marketMoodDirectionLabel, policyRateDelayLabel, policyRateStatusLabel, type MarketMoodResponse } from "./marketMoodTypes";
+
+const rateValue = (value: number | null) => value == null ? "미제공" : `${value.toLocaleString("ko-KR", { maximumFractionDigits: 4 })}%`;
+const rateDate = (value: string | null) => value || "기준일 미제공";
 
 export default function MarketMoodPopover({ mood }: { mood: MarketMoodResponse }) {
   const [open, setOpen] = useState(false);
@@ -88,6 +91,17 @@ export default function MarketMoodPopover({ mood }: { mood: MarketMoodResponse }
         <small>{asset.reason ?? `${absoluteTimeKst(asset.asOf)} · ${asset.source}`}</small>
       </li>)}
     </ul>
+    <strong>주요 정책금리 · {policyRateStatusLabel(mood.policyRates.status)}</strong>
+    <span className="market-mood-summary">{mood.policyRates.source} · 검사 {absoluteTimeKst(mood.policyRates.checkedAt)}</span>
+    {mood.policyRates.rates.length === 0
+      ? <span className="market-mood-limit">{mood.policyRates.reason ?? "표시할 정책금리가 없습니다."}</span>
+      : <ul>{mood.policyRates.rates.map((rate) => <li key={rate.key} className={rate.delayStatus === "fresh" ? "" : "excluded"}>
+        <span><b>{rate.label}</b>{rate.note ? ` · ${rate.note}` : ""}</span>
+        <span>{rateValue(rate.value)} · {policyRateDelayLabel(rate.delayStatus)}</span>
+        <small>이전 {rateValue(rate.previous)} · 기준일 {rateDate(rate.asOf)} · 검사 {absoluteTimeKst(rate.checkedAt ?? mood.policyRates.checkedAt)} · {rate.source}{rate.reason ? ` · ${rate.reason}` : ""}</small>
+      </li>)}</ul>}
+    <small className="market-mood-limit">정책금리는 원천 미확인 참고 데이터이며 시장 분위기 점수에 반영하지 않습니다.</small>
+    {mood.policyRates.reason && mood.policyRates.rates.length > 0 && <small className="market-mood-limit">{mood.policyRates.reason}</small>}
     <strong>오늘의 미국 경제 일정</strong>
     {mood.economicCalendar.events.length === 0
       ? <span className="market-mood-limit">{mood.economicCalendar.reason ?? "등록된 일정이 없습니다."}</span>
