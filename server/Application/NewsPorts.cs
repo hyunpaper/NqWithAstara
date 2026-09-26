@@ -5,6 +5,7 @@ namespace Astra.Server.Application;
 public static class NewsFeedProviders
 {
     public const string FoxNewsRss = "fox-news-rss";
+    public const string SbhNews = "sbhnews";
 }
 
 /// <summary>

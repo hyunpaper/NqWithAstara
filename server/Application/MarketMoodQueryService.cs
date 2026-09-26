@@ -30,7 +30,27 @@ public sealed record MarketMoodResponse(
     IReadOnlyList<string> Limitations,
     IReadOnlyList<string> Evidence,
     EconomicCalendarSnapshot EconomicCalendar,
-    IReadOnlyList<MarketMoodAsset> Assets);
+    IReadOnlyList<MarketMoodAsset> Assets,
+    MarketPolicyRateSnapshot PolicyRates);
+
+public sealed record MarketPolicyRate(
+    string Key, string Label, double Value, double? Previous, DateOnly? AsOf, string? Note,
+    DateTimeOffset CheckedAt, string Source, string DelayStatus, string? Reason);
+
+public sealed record MarketPolicyRateSnapshot(
+    string Status, DateTimeOffset? CheckedAt, string Source, string? Reason,
+    IReadOnlyList<MarketPolicyRate> Rates);
+
+public interface IMarketPolicyRateProvider
+{
+    Task<MarketPolicyRateSnapshot> GetAsync(DateTimeOffset now, CancellationToken ct);
+}
+
+public sealed class UnsupportedMarketPolicyRateProvider : IMarketPolicyRateProvider
+{
+    public Task<MarketPolicyRateSnapshot> GetAsync(DateTimeOffset now, CancellationToken ct) =>
+        Task.FromResult(new MarketPolicyRateSnapshot("unsupported", null, "미연결", "검증된 공개 제공자가 연결되지 않았습니다.", []));
+}
 
 public sealed record EconomicCalendarEvent(
     string Id, string Kind, string Title, DateTimeOffset ScheduledAt, string Status,
@@ -68,7 +88,8 @@ public sealed class UnsupportedEconomicCalendarProvider : IEconomicCalendarProvi
 public sealed class MarketMoodQueryService(
     IMarketDataGateway marketData,
     IEconomicCalendarProvider economicCalendar,
-    TimeProvider clock)
+    TimeProvider clock,
+    IMarketPolicyRateProvider? policyRates = null)
 {
     internal static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(60);
     internal static readonly TimeSpan StaleAfter = TimeSpan.FromMinutes(5);
@@ -115,6 +136,7 @@ public sealed class MarketMoodQueryService(
     {
         var marketDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeBySystemTimeZoneId(now, "America/New_York").DateTime);
         EconomicCalendarSnapshot calendar;
+        MarketPolicyRateSnapshot rateSnapshot;
         try
         {
             calendar = NormalizeCalendar(await economicCalendar.GetAsync(marketDate, now, ct));
@@ -127,6 +149,17 @@ public sealed class MarketMoodQueryService(
         {
             calendar = new(marketDate, "America/New_York", "delayed", "제공자 오류", now,
                 "경제 일정 제공자 응답을 확인하지 못해 임의 값을 표시하지 않습니다.", []);
+        }
+        try
+        {
+            rateSnapshot = policyRates is null
+                ? new MarketPolicyRateSnapshot("unsupported", null, "미연결", "정책금리 제공자가 연결되지 않았습니다.", [])
+                : await policyRates.GetAsync(now, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch
+        {
+            rateSnapshot = new MarketPolicyRateSnapshot("delayed", null, "SBHNews 표시값", "정책금리 제공자 응답을 확인하지 못했습니다.", []);
         }
 
         MarketSession? session;
@@ -176,7 +209,8 @@ public sealed class MarketMoodQueryService(
             Limitations,
             included.Select(asset => asset.Key).ToArray(),
             calendar,
-            assets);
+            assets,
+            rateSnapshot);
     }
 
     static EconomicCalendarSnapshot NormalizeCalendar(EconomicCalendarSnapshot calendar) =>

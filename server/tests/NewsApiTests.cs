@@ -179,6 +179,17 @@ public sealed class NewsQueryServiceTests
 
         Assert.Equal(NewsFeedProviders.FoxNewsRss, health.GetProperty("feed").GetString());
     }
+
+    [Fact]
+    public void SBHNews_설정은_다른_뉴스_공급자보다_우선한다()
+    {
+        var (query, _, options) = Build();
+        options.UseSaveTicker = true;
+        options.UseFoxNewsRss = true;
+        options.UseSbhNews = true;
+
+        Assert.Equal(NewsFeedProviders.SbhNews, Serialize(query.Health()).GetProperty("feed").GetString());
+    }
 }
 
 public sealed class NewsHostContractTests(AstraHostFixture host) : IClassFixture<AstraHostFixture>
