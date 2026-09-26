@@ -3,10 +3,19 @@ using Astra.Server.Application;
 namespace Astra.Server.Infrastructure;
 
 /// <summary>뉴스 전용 파일 어댑터(#151 §5). `App_Data/news` 아래에만 쓴다.</summary>
-public sealed class NewsStore(IWebHostEnvironment env) : INewsStore
+public sealed class NewsStore : INewsStore
 {
-    readonly string _root = Path.Combine(env.ContentRootPath, "App_Data", "news");
+    readonly string _root;
     readonly SemaphoreSlim _gate = new(1, 1);
+    readonly Action<string, string, bool> _move;
+
+    public NewsStore(IWebHostEnvironment env) : this(env, File.Move) { }
+
+    internal NewsStore(IWebHostEnvironment env, Action<string, string, bool> move)
+    {
+        _root = Path.Combine(env.ContentRootPath, "App_Data", "news");
+        _move = move;
+    }
 
     public async Task<long> SizeAsync(string file, CancellationToken ct)
     {
@@ -74,7 +83,7 @@ public sealed class NewsStore(IWebHostEnvironment env) : INewsStore
             {
                 foreach (var entry in staged)
                 {
-                    File.Move(entry.Temp, entry.Path, true);
+                    _move(entry.Temp, entry.Path, true);
                     committed.Add((entry.Path, entry.Original));
                 }
             }
@@ -84,7 +93,7 @@ public sealed class NewsStore(IWebHostEnvironment env) : INewsStore
                 {
                     var rollback = entry.Path + ".rollback.tmp";
                     await File.WriteAllTextAsync(rollback, FormatLines(entry.Original), CancellationToken.None);
-                    File.Move(rollback, entry.Path, true);
+                    _move(rollback, entry.Path, true);
                 }
                 throw;
             }
