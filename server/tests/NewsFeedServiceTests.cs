@@ -89,24 +89,31 @@ public sealed class NewsFeedServiceTests
         harness.Page(1, Item("100", "기준"));
         await harness.PollAsync();
         harness.Clock.Now = Start.AddMinutes(1);
-        harness.Page(1, Item("102", "구형 기사 1"), Item("101", "구형 기사 2"), Item("100", "기준"));
+        harness.Page(1, new NewsFeedItem("102", "구형 기사 1", new string('x', 5000), "legacy-source",
+            harness.Clock.GetUtcNow(), []), Item("101", "구형 기사 2"), Item("100", "기준"));
         await harness.PollAsync();
         Assert.Equal(1, harness.Service.QueueDepth);
 
         harness.Options.UseSbhNews = true;
         harness.State.CollectionCompleted(harness.Clock.GetUtcNow(), "ok", true, 1, null,
             [new NewsProviderFetchStatus(NewsFeedProviders.SbhNews, "ok", 1)]);
+        var oldBytes = await harness.Store.SizeAsync("2026-09-12.jsonl", CancellationToken.None);
+        Assert.True(oldBytes > 1000, $"Expected legacy bytes before cleanup, got {oldBytes}; saved={harness.Saved().Count}");
         var migration = new NewsStorageMigrationService(harness.Options, harness.State, harness.Store,
             feedService: harness.Service);
         await migration.ExecuteAsync(await migration.PlanAsync(CancellationToken.None), CancellationToken.None);
+        harness.Options.MaxDailyBytes = 1500;
         harness.Feed.Name = NewsFeedProviders.SbhNews;
         harness.Clock.Now = Start.AddMinutes(20);
-        harness.Page(1);
+        harness.Page(1, new NewsFeedItem("103", "새 SBH 기사", "내용", NewsFeedProviders.SbhNewsSource,
+            harness.Clock.GetUtcNow(), [], Provider: NewsFeedProviders.SbhNews));
 
         await harness.PollAsync();
 
         Assert.Equal(0, harness.Service.QueueDepth);
-        Assert.DoesNotContain(harness.Saved(), x => x.Source != NewsFeedProviders.SbhNewsSource);
+        Assert.Empty(harness.Diagnostics.Failures);
+        Assert.Contains(harness.Classifier.Requests, x => x.Title == "새 SBH 기사");
+        Assert.Equal("103", Assert.Single(harness.Saved()).Id);
     }
 
     [Fact]

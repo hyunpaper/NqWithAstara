@@ -146,6 +146,13 @@ public sealed class NewsFeedService(
         }
     }
 
+    /// <summary>뉴스 정리 뒤 당일 저장량을 다시 읽어 용량 판단을 최신화한다.</summary>
+    public async Task RefreshDailyStorageAccountingAsync(CancellationToken ct)
+    {
+        _dayFile = DayFile(clock.GetUtcNow());
+        _dayBytes = await store.SizeAsync(_dayFile, ct);
+    }
+
     /// <summary>재기동 후에도 당일 판정을 조회에 보이게 today jsonl을 한 번만 되읽는다.</summary>
     async Task RestoreAsync(CancellationToken ct)
     {

@@ -39,6 +39,7 @@ public sealed class NewsStorageMigrationService(NewsOptions options, NewsRuntime
         var rewritten = filtered.Keys.ToArray();
         var removed = filtered.Values.Sum();
         feedService?.DiscardLegacyPendingWork();
+        if (feedService is not null) await feedService.RefreshDailyStorageAccountingAsync(ct);
         if (feedService is not null) await feedService.PreserveSbhStateAsync(ct);
         else await PreserveSbhStateAsync(ct);
         if (translations is null) await store.DeleteAsync(NewsTranslationQueue.CacheFile, ct);

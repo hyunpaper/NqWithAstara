@@ -37,6 +37,31 @@ public sealed class NewsStoreFileTests : IDisposable
             await store.ReadLinesAsync(file, CancellationToken.None));
     }
 
+    [Fact]
+    public async Task 여러_파일_정리에서_후속_교체가_실패하면_앞선_파일도_복구한다()
+    {
+        var store = new NewsStore(new FakeEnv(_contentRoot));
+        const string first = "2026-09-25.jsonl";
+        const string second = "2026-09-26.jsonl";
+        await store.AppendAsync(first, "legacy-first", CancellationToken.None);
+        await store.AppendAsync(first, "sbh-first", CancellationToken.None);
+        await store.AppendAsync(second, "legacy-second", CancellationToken.None);
+        var secondPath = Path.Combine(_contentRoot, "App_Data", "news", second);
+        File.SetAttributes(secondPath, File.GetAttributes(secondPath) | FileAttributes.ReadOnly);
+
+        try
+        {
+            await Assert.ThrowsAnyAsync<Exception>(() => store.FilterFilesAsync([first, second],
+                line => !line.StartsWith("legacy-", StringComparison.Ordinal), CancellationToken.None));
+            Assert.Equal(["legacy-first", "sbh-first"], await store.ReadLinesAsync(first, CancellationToken.None));
+            Assert.Equal(["legacy-second"], await store.ReadLinesAsync(second, CancellationToken.None));
+        }
+        finally
+        {
+            File.SetAttributes(secondPath, FileAttributes.Normal);
+        }
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(_contentRoot, recursive: true); } catch { }
