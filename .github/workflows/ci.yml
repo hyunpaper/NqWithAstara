@@ -99,6 +99,7 @@ jobs:
         run: dotnet build server/tests/Astra.Server.Tests.csproj --configuration Release
 
       - name: Upload compiled server tests
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: server-tests
@@ -132,16 +133,11 @@ jobs:
           node .github/scripts/repository-policy.mjs
           node --test .github/scripts/repository-policy.test.mjs
 
-      # coverlet 수집기는 dotnet test의 어댑터 경로 배선이 필요해, 빌드 산출물을
-      # 원래 bin 위치로 되돌린 뒤 --no-build로 실행한다 (빌드 1회 원칙 유지).
-      - name: Download compiled server tests
-        uses: actions/download-artifact@v4
-        with:
-          name: server-tests
-          path: server/tests/bin/Release/net9.0
-
       - name: Restore server dependencies
         run: dotnet restore server/tests/Astra.Server.Tests.csproj
+
+      - name: Build server tests
+        run: dotnet build server/tests/Astra.Server.Tests.csproj --configuration Release --no-restore
 
       - name: Run server tests with coverage
         run: >-
@@ -165,6 +161,7 @@ jobs:
 
       - name: Upload client coverage
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: coverage-client
@@ -174,6 +171,7 @@ jobs:
 
       - name: Upload server coverage
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: coverage-server
@@ -183,6 +181,7 @@ jobs:
 
       - name: Upload test results
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: test-results
