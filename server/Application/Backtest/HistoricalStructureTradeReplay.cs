@@ -16,7 +16,8 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
         CandidateDisposition Disposition, bool StructuralReady, bool FinalApproved,
         bool CostComplete, bool CostModeled, string CostSource,
         double? ExpectedNetR, ImmutableArray<string> RejectionReasons, ImmutableArray<string> FeatureContributions,
-        double? RealizedNetR = null);
+        double? RealizedNetR = null, ConditionalReturnForecast? Forecast = null,
+        StrategyRegimeAssessment? RegimeAssessment = null);
 
     public sealed record ReplaySourceCoverage(string Symbol, int Sessions, int ExpectedBars, int ActualBars,
         int MissingBars, double CoverageRate, double SourceBarMinutes, string GranularityStatus,
@@ -184,7 +185,8 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                             costComplete, liquiditySource?.IsModeled == true,
                             liquiditySource?.SourceName ?? "MISSING",
                             candidate.Evidence?.ExpectedNetR,
-                            reasons, contributions);
+                            reasons, contributions, Forecast: candidate.Evidence?.Forecast,
+                            RegimeAssessment: candidate.Evidence?.RegimeAssessment);
                     }
                     var preferred = CandidateSelection.SelectPreferred(candidates);
 

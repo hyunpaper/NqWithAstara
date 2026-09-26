@@ -63,7 +63,8 @@ public sealed record HistoricalReplayRun(string Id, DateOnly From, DateOnly To, 
     string? TimeframeNotice = null, string SelectedCostPolicy = HistoricalReplayCostPolicies.ModeledV2,
     ImmutableArray<HistoricalReplayCostResult>? CostResults = null,
     HistoricalReplaySelectionDiagnostics? SelectionDiagnostics = null,
-    RegimeValidationReport? RegimeValidation = null);
+    RegimeValidationReport? RegimeValidation = null,
+    ProbabilityCalibrationReport? ProbabilityCalibration = null);
 
 public sealed record HistoricalReplayStartResult(int HttpStatus, HistoricalReplayRun? Run, string? Message);
 
@@ -312,7 +313,8 @@ public sealed class HistoricalReplayService
                     $"훈련 구간만 사용, 최소 {ReplaySelectionPolicy.MinimumTrainingRows}행 및 " +
                     $"{ReplaySelectionPolicy.SymbolSessionsPerRequiredEntry} symbol-session당 1행"),
                 RegimeValidation = BuildRegimeValidation(selectedRun, queued.From, trainTo,
-                    evaluationFrom, queued.To)
+                    evaluationFrom, queued.To),
+                ProbabilityCalibration = BuildProbabilityCalibration(selectedRun, _clock.GetUtcNow())
             } : current);
         }
         catch (Exception) when (work.Cancellation.IsCancellationRequested)
@@ -365,6 +367,25 @@ public sealed class HistoricalReplayService
                 trade?.PnlPercent);
         }).ToArray();
         return RegimeValidationEvaluator.Evaluate(samples, trainFrom, trainTo, evaluationFrom, evaluationTo);
+    }
+
+    static ProbabilityCalibrationReport BuildProbabilityCalibration(
+        HistoricalStructureTradeReplay.ReplayRun run, DateTimeOffset asOf)
+    {
+        var trades = run.Trades.Values.SelectMany(x => x)
+            .Where(x => x.Structure?.EntryEventId is not null && x.ExitAt is not null && x.Status != "OPEN")
+            .GroupBy(x => x.Structure!.EntryEventId, StringComparer.Ordinal)
+            .ToDictionary(x => x.Key, x => x.OrderBy(t => t.EnteredAt).First(), StringComparer.Ordinal);
+        var rows = run.Candidates
+            .Where(x => x.Forecast?.SuccessProbability is not null && trades.ContainsKey(x.EventId))
+            .Select(x =>
+            {
+                var trade = trades[x.EventId];
+                return new ProbabilityObservation(x.EventId, x.Forecast!.AsOf, trade.ExitAt!.Value,
+                    x.Forecast.SuccessProbability!.Value,
+                    string.Equals(trade.Status, "TARGET", StringComparison.Ordinal));
+            }).ToArray();
+        return ProbabilityCalibrationEvaluator.Evaluate(rows, asOf);
     }
 
     static HistoricalReplaySymbolResult Result(string symbol, int signals, ImmutableArray<SimTrade> trades)

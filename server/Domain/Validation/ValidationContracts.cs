@@ -1,3 +1,5 @@
+using Astra.Server.Domain.Structure;
+
 namespace Astra.Server.Domain.Validation;
 
 // 이슈 #28 — v5 유효성 검증의 데이터 계약(Domain 절반).
@@ -66,7 +68,8 @@ public sealed record LinkedTrade(string TradeId, string Symbol, string StatusAsO
     DateTimeOffset EnteredAt, DateTimeOffset? ExitAt, double? PnlPercent, bool OutcomeKnown, bool? ExitEstimated,
     bool MissingLiquidityCost, decimal? ValidSpread, decimal PlannedNetR, string EligibilityCostModelVersion,
     string RealizedFillCostModelVersion, string EngineVersion, string PolicyHash, string Kind, string TrendAtEntry,
-    double? EntryQualityAtEntry, string EntryEventId);
+    double? EntryQualityAtEntry, string EntryEventId, ConditionalReturnForecast? Forecast = null,
+    StrategyRegimeAssessment? RegimeAssessment = null);
 
 /// <summary>
 /// 후보 → 결정 → 거래 → 결과 체인 하나. <b>EventId 기준으로 한 건</b>이며 같은 이벤트의 반복 poll은
