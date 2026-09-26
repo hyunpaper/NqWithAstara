@@ -143,9 +143,8 @@ public static class EventImpactScorer
                     reasons.Add("neutral_fact_unverified");
                 if (evidence.MarketExpectationStatus != MarketExpectationStatus.InLine)
                     reasons.Add("neutral_expectation_not_inline");
-                if (evidence.Severity is null) reasons.Add("neutral_materiality_unknown");
-                else if (!double.IsFinite(evidence.Severity.Value) || evidence.Severity.Value is < 0 or > .1)
-                    reasons.Add("neutral_materiality_not_low");
+                if (evidence.Severity is null || !double.IsFinite(evidence.Severity.Value) || evidence.Severity.Value != 0)
+                    reasons.Add("neutral_materiality_unverified");
                 break;
         }
 

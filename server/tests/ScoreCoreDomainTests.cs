@@ -202,8 +202,8 @@ public sealed class ScoreCoreDomainTests
     [InlineData(FactVerification.Unverified, MarketExpectationStatus.InLine, 0.0, "neutral_fact_unverified")]
     [InlineData(FactVerification.Verified, MarketExpectationStatus.Unknown, 0.0, "neutral_expectation_not_inline")]
     [InlineData(FactVerification.Verified, MarketExpectationStatus.Above, 0.0, "neutral_expectation_not_inline")]
-    [InlineData(FactVerification.Verified, MarketExpectationStatus.InLine, null, "neutral_materiality_unknown")]
-    [InlineData(FactVerification.Verified, MarketExpectationStatus.InLine, 0.2, "neutral_materiality_not_low")]
+    [InlineData(FactVerification.Verified, MarketExpectationStatus.InLine, null, "neutral_materiality_unverified")]
+    [InlineData(FactVerification.Verified, MarketExpectationStatus.InLine, 0.2, "neutral_materiality_unverified")]
     public void neutral은_확인된_인라인_저중대도_근거만_허용한다(FactVerification fact,
         MarketExpectationStatus expectation, double? severity, string reason)
     {
@@ -213,6 +213,23 @@ public sealed class ScoreCoreDomainTests
         };
 
         Assert.Contains(reason, EventImpactScorer.Score(evidence, AsOf).ExclusionReasons);
+    }
+
+    [Theory]
+    [InlineData("company_contract")]
+    [InlineData("macro_release")]
+    public void 미보정_v1은_사건종류와_무관하게_nonzero를_neutral로_간주하지_않는다(string eventKind)
+    {
+        var evidence = Evidence("neutral", "g1", ImpactDirection.Neutral, severity: .05) with
+        {
+            EventKind = eventKind, FactVerification = FactVerification.Verified,
+            MarketExpectationStatus = MarketExpectationStatus.InLine
+        };
+
+        var scored = EventImpactScorer.Score(evidence, AsOf);
+
+        Assert.False(scored.Included);
+        Assert.Contains("neutral_materiality_unverified", scored.ExclusionReasons);
     }
 
     [Fact]
