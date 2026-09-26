@@ -142,6 +142,57 @@ public sealed class NewsFeedServiceTests
     }
 
     [Fact]
+    public async Task 공급자를_SBHNews로_바꾸면_첫_피드는_기준점만_저장하고_재기동뒤_신규만_분류한다()
+    {
+        var harness = new Harness();
+        harness.Feed.Name = "fox-news-rss";
+        harness.Page(1, Item("fox-1", "기존 기사") with { Provider = "fox-news-rss" });
+        await harness.PollAsync();
+
+        harness.Feed.Name = NewsFeedProviders.SbhNews;
+        var sbhBaseline = Item("sbh-1", "SBH 기존 기사") with { Provider = NewsFeedProviders.SbhNews };
+        harness.Page(1, sbhBaseline);
+        await harness.PollAsync();
+
+        Assert.Empty(harness.Classifier.Requests);
+        var state = JsonSerializer.Deserialize<NewsFeedState>(harness.Store.Texts[NewsFeedService.StateFile],
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.Contains(NewsFeedProviders.SbhNews, state.BaselinedProviders!);
+
+        var restarted = new Harness();
+        restarted.Store.Texts[NewsFeedService.StateFile] = harness.Store.Texts[NewsFeedService.StateFile];
+        restarted.Clock.Now = Start.AddMinutes(1);
+        restarted.Feed.Name = NewsFeedProviders.SbhNews;
+        restarted.Page(1, Item("sbh-2", "SBH 신규 기사") with { Provider = NewsFeedProviders.SbhNews }, sbhBaseline);
+        await restarted.PollAsync();
+
+        Assert.Equal("SBH 신규 기사", Assert.Single(restarted.Classifier.Requests).Title);
+    }
+
+    [Fact]
+    public async Task 첫_실패_뒤_성공한_SBHNews_피드는_기준점만_저장한다()
+    {
+        var harness = new Harness();
+        harness.Feed.Name = NewsFeedProviders.SbhNews;
+        harness.Feed.BatchStatus = "failed";
+        harness.Feed.ProviderStatuses = [new NewsProviderFetchStatus(NewsFeedProviders.SbhNews, "failed", 0)];
+        await harness.PollAsync();
+
+        var baseline = Item("sbh-1", "성공 기준") with { Provider = NewsFeedProviders.SbhNews };
+        harness.Feed.BatchStatus = null;
+        harness.Feed.ProviderStatuses = null;
+        harness.Page(1, baseline);
+        await harness.PollAsync();
+        Assert.Empty(harness.Classifier.Requests);
+
+        harness.Clock.Now = harness.Clock.Now.AddMinutes(1);
+        harness.Page(1, Item("sbh-2", "신규") with { Provider = NewsFeedProviders.SbhNews }, baseline);
+        await harness.PollAsync();
+
+        Assert.Equal("신규", Assert.Single(harness.Classifier.Requests).Title);
+    }
+
+    [Fact]
     public async Task FeedRequestMinuteLimitResetsAfterTimeAdvances()
     {
         var harness = new Harness();
@@ -157,6 +208,23 @@ public sealed class NewsFeedServiceTests
         harness.Clock.Now = harness.Clock.Now.AddMinutes(1).AddSeconds(1);
         await harness.PollAsync();
         Assert.Equal(3, harness.Feed.ListCalls.Count);
+    }
+
+    [Fact]
+    public async Task 공급자_Retry_After는_저장돼_다음_폴링_호출을_막는다()
+    {
+        var harness = new Harness();
+        harness.Feed.Name = NewsFeedProviders.SbhNews;
+        harness.Feed.BatchStatus = "quota_wait";
+        harness.Feed.ProviderStatuses = [new NewsProviderFetchStatus(NewsFeedProviders.SbhNews, "quota_wait", 0, RetryAfter: TimeSpan.FromMinutes(20))];
+        harness.Page(1, Item("sbh-1", "기준") with { Provider = NewsFeedProviders.SbhNews });
+        await harness.PollAsync();
+        harness.Clock.Now = harness.Clock.Now.AddMinutes(16);
+        await harness.PollAsync();
+
+        Assert.Single(harness.Feed.ListCalls);
+        var state = JsonSerializer.Deserialize<NewsFeedState>(harness.Store.Texts[NewsFeedService.StateFile], new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.Equal(Start.AddMinutes(20), state.FeedRetryAfterUntil);
     }
 
     [Fact]

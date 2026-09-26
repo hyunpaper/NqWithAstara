@@ -109,7 +109,23 @@ sealed class MemoryNewsStore : INewsStore
 
     public Task WriteTextAsync(string file, string content, CancellationToken ct)
     {
+        if (file.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase))
+        {
+            Files[file] = content.Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList();
+            Texts.Remove(file);
+            return Task.CompletedTask;
+        }
         Texts[file] = content;
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<string>> ListFilesAsync(CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<string>>(Files.Keys.Concat(Texts.Keys).Distinct(StringComparer.Ordinal).ToArray());
+
+    public Task DeleteAsync(string file, CancellationToken ct)
+    {
+        Files.Remove(file);
+        Texts.Remove(file);
         return Task.CompletedTask;
     }
 }

@@ -101,6 +101,7 @@ builder.Services.AddSingleton<INewsClassifier>(x => new OllamaNewsClassifier(x.G
 builder.Services.AddSingleton<INewsTranslator>(x => new PapagoNewsTranslator(x.GetRequiredService<NewsOptions>()));
 builder.Services.AddSingleton<NewsRuntimeState>();
 builder.Services.AddSingleton<NewsTranslationQueue>();
+builder.Services.AddSingleton<NewsStorageMigrationService>();
 builder.Services.AddSingleton<NewsFeedService>(); builder.Services.AddSingleton<NewsQueryService>();
 builder.Services.AddHostedService(x => x.GetRequiredService<MonitorService>());
 builder.Services.AddHostedService<NewsService>();

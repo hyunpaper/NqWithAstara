@@ -46,11 +46,61 @@ public sealed class SbhMarketPolicyRateProviderTests
         Assert.Empty(snapshot.Rates);
     }
 
+    [Fact]
+    public async Task 십오분_내_성공_응답은_다시_요청하지_않는다()
+    {
+        var handler = new CountingHandler(Html("2026-09-26T09:20:09Z"));
+        var provider = new SbhMarketPolicyRateProvider(new NewsOptions(), new HttpClient(handler));
+        var now = DateTimeOffset.Parse("2026-09-26T10:00:00Z");
+
+        await provider.GetAsync(now, CancellationToken.None);
+        await provider.GetAsync(now.AddMinutes(14), CancellationToken.None);
+
+        Assert.Equal(1, handler.Calls);
+    }
+
+    [Fact]
+    public async Task Retry_After_동안에는_재요청하지_않는다()
+    {
+        var handler = new ThrottledHandler();
+        var provider = new SbhMarketPolicyRateProvider(new NewsOptions(), new HttpClient(handler));
+        var now = DateTimeOffset.Parse("2026-09-26T10:00:00Z");
+
+        var first = await provider.GetAsync(now, CancellationToken.None);
+        var second = await provider.GetAsync(now.AddMinutes(1), CancellationToken.None);
+
+        Assert.Equal("unavailable", first.Status);
+        Assert.Equal("unavailable", second.Status);
+        Assert.Equal(1, handler.Calls);
+    }
+
     static string Html(string checkedAt) => $$"""<script>\"policyRates\":{\"rates\":[{\"key\":\"fed\",\"label\":\"미 연준\",\"value\":4,\"prev\":3.75,\"asOf\":\"2026-09-16\",\"note\":\"목표범위\"}],\"checkedAt\":\"{{checkedAt}}\"}</script>""";
 
-    sealed class FixtureHandler(string body) : HttpMessageHandler
+    class FixtureHandler(string body) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) });
+    }
+
+    sealed class CountingHandler(string body) : FixtureHandler(body)
+    {
+        public int Calls { get; private set; }
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Calls++;
+            return base.SendAsync(request, cancellationToken);
+        }
+    }
+
+    sealed class ThrottledHandler : HttpMessageHandler
+    {
+        public int Calls { get; private set; }
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Calls++;
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromMinutes(5));
+            return Task.FromResult(response);
+        }
     }
 }

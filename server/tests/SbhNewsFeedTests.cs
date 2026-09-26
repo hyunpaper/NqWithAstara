@@ -41,6 +41,17 @@ public sealed class SbhNewsFeedTests
     public void 공개_피드_TTL에_맞춰_15분_간격을_강제한다()
         => Assert.Equal(TimeSpan.FromMinutes(15), new SbhNewsFeed(new NewsOptions()).MinimumInterval);
 
+    [Fact]
+    public async Task 두번째_페이지는_외부_요청없이_빈_응답이다()
+    {
+        var handler = new FixtureHandler(HttpStatusCode.OK, "<rss><channel /></rss>");
+        var feed = new SbhNewsFeed(new NewsOptions(), new HttpClient(handler));
+
+        var batch = await feed.FetchAsync(2, CancellationToken.None);
+
+        Assert.Equal("empty", batch.Status);
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.TooManyRequests, "quota_wait")]
     [InlineData(HttpStatusCode.NotModified, "empty")]
@@ -51,6 +62,16 @@ public sealed class SbhNewsFeedTests
 
         Assert.Equal(expected, batch.Status);
         Assert.Equal(expected, Assert.Single(batch.Providers).Status);
+    }
+
+    [Fact]
+    public async Task Retry_After를_공급자_상태에_보존한다()
+    {
+        var handler = new RetryHandler();
+        var batch = await new SbhNewsFeed(new NewsOptions(), new HttpClient(handler)).FetchAsync(1, CancellationToken.None);
+
+        Assert.Equal("quota_wait", batch.Status);
+        Assert.Equal(TimeSpan.FromMinutes(7), Assert.Single(batch.Providers).RetryAfter);
     }
 
     [Fact]
@@ -99,6 +120,16 @@ public sealed class SbhNewsFeedTests
                 ? "<rss><channel><item><guid>article-1</guid><link>https://www.sbhnews.com/news/a</link></item></channel></rss>"
                 : "<meta name=\"description\" content=\"요약 문장\"><script>dangerouslySetInnerHTML\\\":{\\\"__html\\\":\\\"\\u003cp\\u003e첫 문단\\u003c/p\\u003e\\n\\u003cp\\u003e둘째 문단\\u003c/p\\u003e\\\"}</script>";
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) });
+        }
+    }
+
+    sealed class RetryHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromMinutes(7));
+            return Task.FromResult(response);
         }
     }
 }

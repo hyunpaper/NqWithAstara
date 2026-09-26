@@ -29,6 +29,17 @@ public sealed class NewsTranslationQueue(
     readonly SemaphoreSlim _cacheGate = new(1, 1);
     NewsTranslationCacheDocument? _cache;
 
+    public async Task ClearCacheAsync(CancellationToken ct)
+    {
+        await _cacheGate.WaitAsync(ct);
+        try
+        {
+            _cache = null;
+            await store.DeleteAsync(CacheFile, ct);
+        }
+        finally { _cacheGate.Release(); }
+    }
+
     sealed record TranslationWork(string Id, string Hash);
     sealed record TextResult(string? Value, string Status);
 

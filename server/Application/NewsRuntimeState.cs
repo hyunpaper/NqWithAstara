@@ -106,7 +106,8 @@ public sealed record NewsProviderRuntimeStatus(
     int NewCount,
     DateTimeOffset LastAttemptAt,
     DateTimeOffset? LastSuccessAt,
-    DateTimeOffset? LastNewArticleAt);
+    DateTimeOffset? LastNewArticleAt,
+    TimeSpan? RetryAfter = null);
 
 /// <summary>health·조회가 함께 보는 뉴스 런타임 상태(#151 §6). 스레드 안전하다.</summary>
 public sealed class NewsRuntimeState
@@ -155,7 +156,7 @@ public sealed class NewsRuntimeState
                 var succeeded = x.Status is "ok" or "empty" or "partial";
                 return new NewsProviderRuntimeStatus(x.Provider, x.Status, x.Count, x.NewCount, at,
                     succeeded ? at : prior?.LastSuccessAt,
-                    x.NewCount > 0 ? at : prior?.LastNewArticleAt);
+                    x.NewCount > 0 ? at : prior?.LastNewArticleAt, x.RetryAfter);
             }).ToArray();
         }
     }

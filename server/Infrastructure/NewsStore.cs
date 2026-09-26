@@ -61,4 +61,22 @@ public sealed class NewsStore(IWebHostEnvironment env) : INewsStore
         }
         finally { _gate.Release(); }
     }
+
+    public async Task<IReadOnlyList<string>> ListFilesAsync(CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try { return Directory.Exists(_root) ? Directory.GetFiles(_root).Select(Path.GetFileName).Where(x => x is not null).Cast<string>().ToArray() : []; }
+        finally { _gate.Release(); }
+    }
+
+    public async Task DeleteAsync(string file, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var path = Path.Combine(_root, file);
+            if (File.Exists(path)) File.Delete(path);
+        }
+        finally { _gate.Release(); }
+    }
 }

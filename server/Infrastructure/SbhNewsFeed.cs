@@ -11,7 +11,7 @@ namespace Astra.Server.Infrastructure;
 public sealed class SbhNewsFeed : INewsFeed
 {
     public const int DetailBodyLimit = 4000;
-    public const string SourceName = "SBHNews / 센서스튜디오 (CC BY 4.0)";
+    public const string SourceName = NewsFeedProviders.SbhNewsSource;
     static readonly Regex HtmlTags = new("<[^>]*>", RegexOptions.Compiled);
     static readonly Regex Description = new("<meta\\s+name=[\"']description[\"']\\s+content=[\"'](?<value>.*?)[\"']", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     const string ContentMarker = "__html\\\":\\\"";
@@ -37,6 +37,7 @@ public sealed class SbhNewsFeed : INewsFeed
 
     public async Task<NewsFeedBatch> FetchAsync(int page, CancellationToken ct)
     {
+        if (page > 1) return Failed("empty");
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, _options.SbhNewsRssUrl);
@@ -44,7 +45,7 @@ public sealed class SbhNewsFeed : INewsFeed
             if (!string.IsNullOrWhiteSpace(_etag)) request.Headers.TryAddWithoutValidation("If-None-Match", _etag);
             if (_lastModified is not null) request.Headers.IfModifiedSince = _lastModified;
             using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
-            if (response.StatusCode == HttpStatusCode.TooManyRequests) return Failed("quota_wait");
+            if (response.StatusCode == HttpStatusCode.TooManyRequests) return Failed("quota_wait", RetryAfter(response));
             if (response.StatusCode == HttpStatusCode.NotModified) return Failed("empty");
             if (!response.IsSuccessStatusCode) return Failed("failed");
             _etag = response.Headers.ETag?.Tag;
@@ -125,6 +126,10 @@ public sealed class SbhNewsFeed : INewsFeed
     static string? ValidUrl(string? value)
         => Uri.TryCreate(value?.Trim(), UriKind.Absolute, out var uri) && IsSbhArticleUrl(uri.ToString()) ? uri.ToString() : null;
 
-    NewsFeedBatch Failed(string status)
-        => new([], status, [new NewsProviderFetchStatus(Name, status, 0)]);
+    static TimeSpan? RetryAfter(HttpResponseMessage response)
+        => response.Headers.RetryAfter?.Delta ?? (response.Headers.RetryAfter?.Date is { } at
+            ? at - DateTimeOffset.UtcNow : null);
+
+    NewsFeedBatch Failed(string status, TimeSpan? retryAfter = null)
+        => new([], status, [new NewsProviderFetchStatus(Name, status, 0, RetryAfter: retryAfter)]);
 }
