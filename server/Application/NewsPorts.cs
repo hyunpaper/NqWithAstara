@@ -94,6 +94,7 @@ public interface INewsStore
 {
     Task<long> SizeAsync(string file, CancellationToken ct);
     Task<IReadOnlyList<string>> ReadLinesAsync(string file, CancellationToken ct);
+    Task<int> FilterLinesAsync(string file, Func<string, bool> keep, CancellationToken ct);
     Task AppendAsync(string file, string line, CancellationToken ct);
     Task<string?> ReadTextAsync(string file, CancellationToken ct);
     Task WriteTextAsync(string file, string content, CancellationToken ct);

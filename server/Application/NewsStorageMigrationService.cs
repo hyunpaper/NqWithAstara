@@ -4,7 +4,7 @@ namespace Astra.Server.Application;
 
 /// <summary>검증된 SBHNews 전환 뒤 뉴스 전용 저장소만 정리한다(#304).</summary>
 public sealed class NewsStorageMigrationService(NewsOptions options, NewsRuntimeState state, INewsStore store,
-    NewsTranslationQueue? translations = null)
+    NewsTranslationQueue? translations = null, NewsFeedService? feedService = null)
 {
     public async Task<NewsStorageMigrationPlan> PlanAsync(CancellationToken ct)
     {
@@ -18,23 +18,35 @@ public sealed class NewsStorageMigrationService(NewsOptions options, NewsRuntime
 
     public async Task<NewsStorageMigrationResult> ExecuteAsync(NewsStorageMigrationPlan plan, CancellationToken ct)
     {
+        if (feedService is not null)
+            return await feedService.RunExclusiveMaintenanceAsync(token => ExecuteExclusiveAsync(plan, token), ct);
+        return await ExecuteExclusiveAsync(plan, ct);
+    }
+
+    async Task<NewsStorageMigrationResult> ExecuteExclusiveAsync(NewsStorageMigrationPlan plan, CancellationToken ct)
+    {
         if (!plan.CanExecute || !IsHealthy()) return new NewsStorageMigrationResult(false,
             plan.Reason ?? "SBHNews 수집 성공 상태가 유지되지 않아 정리할 수 없습니다.", [], 0);
+        if (translations is not null)
+            return await translations.RunExclusiveMaintenanceAsync(token => ExecuteCoreAsync(plan, token), ct);
+        return await ExecuteCoreAsync(plan, ct);
+    }
+
+    async Task<NewsStorageMigrationResult> ExecuteCoreAsync(NewsStorageMigrationPlan plan, CancellationToken ct)
+    {
         var existing = new HashSet<string>((await store.ListFilesAsync(ct)).Where(IsDatedArticleFile), StringComparer.Ordinal);
         var rewritten = new List<string>();
         var removed = 0;
         foreach (var file in plan.ArticleFiles.Where(IsDatedArticleFile).Where(existing.Contains).Distinct(StringComparer.Ordinal))
         {
-            var lines = await store.ReadLinesAsync(file, ct);
-            var kept = lines.Where(line => !IsLegacyRecord(line)).ToArray();
-            removed += lines.Count - kept.Length;
-            if (kept.Length == lines.Count) continue;
-            await store.WriteTextAsync(file, string.Join("\n", kept) + (kept.Length > 0 ? "\n" : ""), ct);
-            rewritten.Add(file);
+            var removedFromFile = await store.FilterLinesAsync(file, line => !IsLegacyRecord(line), ct);
+            removed += removedFromFile;
+            if (removedFromFile > 0) rewritten.Add(file);
         }
-        await PreserveSbhStateAsync(ct);
-        if (translations is not null) await translations.ClearCacheAsync(ct);
-        else await store.DeleteAsync(NewsTranslationQueue.CacheFile, ct);
+        if (feedService is not null) await feedService.PreserveSbhStateAsync(ct);
+        else await PreserveSbhStateAsync(ct);
+        if (translations is null) await store.DeleteAsync(NewsTranslationQueue.CacheFile, ct);
+        state.ClearLegacyRecords();
         return new NewsStorageMigrationResult(true, null, rewritten, removed);
     }
 

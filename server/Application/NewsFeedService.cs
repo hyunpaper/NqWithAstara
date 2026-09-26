@@ -89,6 +89,31 @@ public sealed class NewsFeedService(
         finally { _gate.Release(); }
     }
 
+    public async Task<TResult> RunExclusiveMaintenanceAsync<TResult>(
+        Func<CancellationToken, Task<TResult>> operation, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try { return await operation(ct); }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>공급자 전환 정리 뒤 디스크와 메모리의 inbox 상태를 SBHNews로 동기화한다.</summary>
+    public async Task PreserveSbhStateAsync(CancellationToken ct)
+    {
+        var current = await LoadStateAsync(ct);
+        if (current is null) return;
+        var inbox = current.Inbox?.Where(x => string.Equals(x.Item.Provider, NewsFeedProviders.SbhNews,
+            StringComparison.OrdinalIgnoreCase)).ToArray() ?? [];
+        var baselines = (current.BaselinedProviders ?? []).Append(NewsFeedProviders.SbhNews)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        await SaveStateAsync(current with
+        {
+            Inbox = inbox,
+            RequestProvider = NewsFeedProviders.SbhNews,
+            BaselinedProviders = baselines
+        }, ct);
+    }
+
     /// <summary>재기동 후에도 당일 판정을 조회에 보이게 today jsonl을 한 번만 되읽는다.</summary>
     async Task RestoreAsync(CancellationToken ct)
     {

@@ -162,6 +162,20 @@ public sealed class NewsRuntimeState
     }
     public void PollFailed(DateTimeOffset at, string error) { lock (_gate) { LastPollAt = at; LastError = error; FeedStatus = "failed"; } }
     public void QueueDepth(int depth) { lock (_gate) Queue = depth; }
+    public void ClearLegacyRecords()
+    {
+        lock (_gate)
+        {
+            var retained = _recent.Where(x => string.Equals(x.Source, NewsFeedProviders.SbhNewsSource, StringComparison.Ordinal)).ToArray();
+            _recent.Clear();
+            _index.Clear();
+            foreach (var record in retained.Reverse())
+            {
+                var node = _recent.AddFirst(record);
+                _index[record.Id] = node;
+            }
+        }
+    }
     public void Drop(int count) { lock (_gate) Dropped += count; }
     public void SeenArticles(int count) { lock (_gate) Seen += count; }
     public void Ollama(bool ok) { lock (_gate) OllamaOk = ok; }

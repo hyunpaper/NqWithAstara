@@ -26,6 +26,27 @@ public sealed class NewsStore(IWebHostEnvironment env) : INewsStore
         finally { _gate.Release(); }
     }
 
+    public async Task<int> FilterLinesAsync(string file, Func<string, bool> keep, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var path = Path.Combine(_root, file);
+            if (!File.Exists(path)) return 0;
+            var lines = await File.ReadAllLinesAsync(path, ct);
+            var retained = lines.Where(keep).ToArray();
+            var removed = lines.Length - retained.Length;
+            if (removed == 0) return 0;
+            Directory.CreateDirectory(_root);
+            var temporary = path + ".tmp";
+            await File.WriteAllTextAsync(temporary,
+                string.Join("\n", retained) + (retained.Length > 0 ? "\n" : ""), ct);
+            File.Move(temporary, path, true);
+            return removed;
+        }
+        finally { _gate.Release(); }
+    }
+
     public async Task AppendAsync(string file, string line, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);

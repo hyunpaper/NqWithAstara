@@ -1,4 +1,5 @@
 using System.Net;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml;
@@ -18,7 +19,7 @@ public sealed class SbhNewsFeed : INewsFeed
     const string ContentEndMarker = "\\\"}";
     readonly NewsOptions _options;
     readonly HttpClient _http;
-    readonly Dictionary<string, string> _articleUrls = new(StringComparer.Ordinal);
+    readonly ConcurrentDictionary<string, string> _articleUrls = new(StringComparer.Ordinal);
     string? _etag;
     DateTimeOffset? _lastModified;
 

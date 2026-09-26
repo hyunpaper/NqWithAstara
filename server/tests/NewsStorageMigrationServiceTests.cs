@@ -48,4 +48,21 @@ public sealed class NewsStorageMigrationServiceTests
         Assert.False(store.Texts.ContainsKey(NewsTranslationQueue.CacheFile));
         Assert.Equal("보존", store.Texts["other.json"]);
     }
+
+    [Fact]
+    public async Task 정리_뒤_런타임에는_SBHNews_기사만_남는다()
+    {
+        var options = new NewsOptions { UseSbhNews = true };
+        var state = new NewsRuntimeState();
+        state.CollectionCompleted(DateTimeOffset.UtcNow, "ok", true, 1, null, [new NewsProviderFetchStatus(NewsFeedProviders.SbhNews, "ok", 1)]);
+        var sbh = new NewsRecord("sbh", "", NewsFeedProviders.SbhNewsSource, DateTimeOffset.UtcNow, [], [], [], "", 0, "", "", 0, DateTimeOffset.UtcNow);
+        var legacy = sbh with { Id = "old", Source = "Fox News" };
+        state.Add(sbh, 10);
+        state.Add(legacy, 10);
+        var service = new NewsStorageMigrationService(options, state, new MemoryNewsStore());
+
+        await service.ExecuteAsync(await service.PlanAsync(CancellationToken.None), CancellationToken.None);
+
+        Assert.Equal("sbh", Assert.Single(state.Recent()).Id);
+    }
 }

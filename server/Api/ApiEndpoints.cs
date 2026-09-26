@@ -1,5 +1,6 @@
 ﻿using Astra.Server.Application;
 using Astra.Server.Application.Backtest;
+using System.Net;
 
 namespace Astra.Server.Api;
 
@@ -21,6 +22,8 @@ public static class ApiEndpoints
         app.MapPost("/api/news/translation", (string? id, NewsQueryService q) => q.RequestTranslation(id) ? Results.Accepted() : Results.NotFound());
         app.MapGet("/api/news/{id}/evidence", (string id, NewsQueryService q) => q.Evidence(id) is { } value ? Results.Ok(value) : Results.NotFound());
         app.MapGet("/api/news/sentiment", (NewsQueryService q) => Results.Ok(q.Sentiment()));
+        app.MapPost("/api/news/migration/preview", NewsMigrationPreviewAsync);
+        app.MapPost("/api/news/migration/execute", NewsMigrationExecuteAsync);
         app.MapGet("/api/market-mood", async (MarketMoodQueryService q, CancellationToken ct) => Results.Ok(await q.GetAsync(ct)));
         app.MapGet("/api/state", async (StateQueryService q) => Results.Ok(await q.GetAsync())); app.MapGet("/api/search", SearchAsync);
         app.MapPost("/api/watchlist", AddWatchAsync);
@@ -67,6 +70,24 @@ public static class ApiEndpoints
         app.MapPut("/api/positions/{symbol}", PutPositionAsync);
         app.MapDelete("/api/positions/{symbol}", async (string symbol, PositionService service, CancellationToken ct) => { await service.RemoveAsync(symbol, ct); return Results.NoContent(); });
         app.Map("/api/{**path}", () => Results.NotFound(new { message = "API endpoint not found." })); return app;
+    }
+    static async Task<IResult> NewsMigrationPreviewAsync(HttpContext context, NewsStorageMigrationService service, CancellationToken ct)
+        => IsLoopback(context) ? Results.Ok(await service.PlanAsync(ct)) : Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    static async Task<IResult> NewsMigrationExecuteAsync(HttpContext context, NewsStorageMigrationService service, CancellationToken ct)
+        => IsLoopback(context) ? Results.Ok(await service.ExecuteAsync(await service.PlanAsync(ct), ct)) : Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    internal static bool IsLoopback(HttpContext context)
+    {
+        if (context.Connection.RemoteIpAddress is not { } remote || !IPAddress.IsLoopback(remote)) return false;
+        var host = context.Request.Host.Host;
+        if (!string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
+            && (!IPAddress.TryParse(host, out var address) || !IPAddress.IsLoopback(address))) return false;
+        var origin = context.Request.Headers.Origin.ToString();
+        if (string.IsNullOrWhiteSpace(origin)) return true;
+        if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri)) return false;
+        return string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase)
+            || IPAddress.TryParse(uri.Host, out var originAddress) && IPAddress.IsLoopback(originAddress);
     }
     /// <summary>관심종목 표시 순서 저장. 집합 불일치는 400으로 알려 클라가 최신 state로 재동기화한다 (#224).</summary>
     static async Task<IResult> ReorderWatchAsync(WatchlistOrderRequest? body, MonitorControlService c, CancellationToken ct)
