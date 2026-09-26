@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { NewsArticle } from "./newsTypes";
 import { absoluteTimeKst, inputKindLabel, sentimentBadge } from "./newsFormat";
-import type { NewsDetailState } from "./useNewsDetail";
+import type { NewsDetailState, NewsTranslationRequestState } from "./useNewsDetail";
 
 const translationStateText = (status: string | null | undefined, hasKorean: boolean) => {
   if (hasKorean) return null;
@@ -28,7 +28,7 @@ const translationStatusLabel = (status: string | null | undefined) => {
   return "원문만 제공";
 };
 
-export default function NewsDetailPanel({ article, state = "idle", onClose }: { article: NewsArticle; state?: NewsDetailState; onClose: () => void }) {
+export default function NewsDetailPanel({ article, state = "idle", translationState = "idle", onRetryTranslation, onClose }: { article: NewsArticle; state?: NewsDetailState; translationState?: NewsTranslationRequestState; onRetryTranslation?: () => void; onClose: () => void }) {
   const [translated, setTranslated] = useState(true);
   const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -57,7 +57,8 @@ export default function NewsDetailPanel({ article, state = "idle", onClose }: { 
     {state === "loading" && <p className="news-state">기사를 불러오는 중…</p>}
     {state === "error" && <p className="news-state news-error" role="alert">기사 상세를 불러오지 못했습니다. 목록 정보만 표시합니다.</p>}
     {state === "not-found" && <p className="news-state news-error" role="alert">저장된 기사 상세를 찾을 수 없습니다.</p>}
-    {showStoredDetail && <><p className="news-detail-body">{translated ? (korean ?? koreanState) : (original ?? "원문 본문이 제공되지 않았습니다.")}</p>
+    {showStoredDetail && <><div className="news-detail-body">{translated ? (korean ?? <><p className="news-translation-state">{koreanState}</p>{original && <><p className="news-original-label">원문</p><p>{original}</p></>}</>) : (original ?? "원문 본문이 제공되지 않았습니다.")}</div>
+      {translated && !korean && onRetryTranslation && <button className="news-translation-retry" type="button" onClick={onRetryTranslation} disabled={translationState === "requesting" || translationState === "queued"}>{translationState === "requesting" ? "번역 요청 중…" : translationState === "queued" ? "번역 처리 대기 중…" : translationState === "error" ? "번역 다시 요청" : "번역 요청"}</button>}
       {classificationText && <p className="news-reason">판정 근거: {classificationText}</p>}
       {article.evidence && article.evidence.length > 0 && <section className="news-detail-evidence"><h4>동일 시점 감성 근거</h4><ul>{article.evidence.map((item) => <li key={item.id}>{item.titleKo ?? item.title} · {item.contribution == null ? "점수 기여 없음" : `점수 기여 ${item.contribution >= 0 ? "+" : ""}${item.contribution.toFixed(2)}`}</li>)}</ul></section>}
       <dl className="news-detail-meta"><div><dt>분석 입력</dt><dd>{inputKindLabel(article.inputKind) ?? "알 수 없음"}</dd></div><div><dt>근거 원천</dt><dd>{article.evidenceSource ?? article.classificationSource ?? "알 수 없음"}</dd></div><div><dt>번역</dt><dd>{translationStatusLabel(contentStatus)}</dd></div>{article.collectedAt && <div><dt>수집 시각</dt><dd>{absoluteTimeKst(article.collectedAt)}</dd></div>}{article.classifiedAt && <div><dt>분석 시각</dt><dd>{absoluteTimeKst(article.classifiedAt)}</dd></div>}</dl></>}
