@@ -8,13 +8,16 @@ public sealed record ConditionalReturnModelSample(string EventId, string Symbol,
     ConditionalReturnForecastInput Features, bool TargetHit, double NetReturnPercent);
 
 public sealed record ConditionalReturnTrainingPolicy(int MinimumTrainingSamples, int MinimumValidationSamples,
-    double RidgePenalty, int MaximumIterations, double ConvergenceTolerance, int EceBins)
+    double RidgePenalty, int MaximumIterations, double ConvergenceTolerance, int EceBins,
+    double MaximumValidationEce)
 {
-    public static readonly ConditionalReturnTrainingPolicy Default = new(30, 15, 1d, 100, 1e-7, 10);
+    // 사전 고정: 확률 보정 오차 10%p를 넘는 모델은 관측용으로도 수용하지 않는다.
+    public static readonly ConditionalReturnTrainingPolicy Default = new(30, 15, 1d, 100, 1e-7, 10, .10d);
 }
 
 public sealed record ConditionalReturnPerformance(int TradeCount, double? ExpectedNetReturnPercent,
-    double? ProfitFactor, double? MaximumDrawdownPercent, ProbabilityCalibrationReport Calibration);
+    double? ProfitFactor, string ProfitFactorStatus, double? MaximumDrawdownPercent,
+    ProbabilityCalibrationReport Calibration, double? NoSkillBrier, double? BrierSkill);
 
 public sealed record ConditionalReturnModelEvaluation(string Status, string ModelVersion,
     string FeatureSchemaHash, DateTimeOffset AsOf, int TrainingInputRows, int ValidationInputRows,
@@ -127,15 +130,17 @@ public static class ConditionalReturnWalkForwardTrainer
         var rawModel = Model(fit.Coefficients, means, scales, trainedThrough, validatedThrough,
             trainRows.Count, validationRows.Count, limits.MinimumValidationSamples,
             ConditionalForecastStatus.ExperimentalUncalibrated);
-        var performance = Measure(validationRows, rawModel, asOf, limits);
-        var accepted = performance.ExpectedNetReturnPercent is > 0 && performance.ProfitFactor is > 1 &&
-                       performance.Calibration.Status == ProbabilityCalibrationEvaluator.Ok;
+        var trainingTargetPrevalence = trainRows.Count(x => x.TargetHit) / (double)trainRows.Count;
+        var performance = Measure(validationRows, rawModel, asOf, limits, trainingTargetPrevalence);
+        var calibrationPassed = CalibrationPasses(performance, limits.MaximumValidationEce);
+        var profitFactorPassed = performance.ProfitFactor is > 1 ||
+                                 performance.ProfitFactorStatus == "no-losses";
+        var accepted = performance.ExpectedNetReturnPercent is > 0 && profitFactorPassed && calibrationPassed;
         if (performance.ExpectedNetReturnPercent is not > 0)
             limitations.Add("VALIDATION_EXPECTED_VALUE_NOT_POSITIVE");
-        if (performance.ProfitFactor is not > 1)
+        if (!profitFactorPassed)
             limitations.Add("VALIDATION_PROFIT_FACTOR_NOT_ABOVE_ONE");
-        if (performance.Calibration.Status != ProbabilityCalibrationEvaluator.Ok)
-            limitations.Add("VALIDATION_CALIBRATION_INSUFFICIENT");
+        AddCalibrationLimitations(limitations, performance, limits.MaximumValidationEce);
         var model = rawModel with
         {
             CalibrationStatus = accepted ? ConditionalForecastStatus.Calibrated :
@@ -146,7 +151,8 @@ public static class ConditionalReturnWalkForwardTrainer
     }
 
     static ConditionalReturnPerformance Measure(IReadOnlyList<ConditionalReturnModelSample> rows,
-        ConditionalReturnModel model, DateTimeOffset asOf, ConditionalReturnTrainingPolicy policy)
+        ConditionalReturnModel model, DateTimeOffset asOf, ConditionalReturnTrainingPolicy policy,
+        double trainingTargetPrevalence)
     {
         var ordered = rows.OrderBy(x => x.OutcomeAt).ThenBy(x => x.EventId, StringComparer.Ordinal).ToArray();
         var probabilities = ordered.Select(x => new ProbabilityObservation(x.EventId, x.FeatureAt, x.OutcomeAt,
@@ -157,6 +163,9 @@ public static class ConditionalReturnWalkForwardTrainer
             new ProbabilityCalibrationPolicy(policy.MinimumValidationSamples, baseline, recent, recent,
                 policy.EceBins));
         var returns = ordered.Select(x => x.NetReturnPercent).ToArray();
+        var noSkillBrier = MeasurementStatistics.Brier(ordered
+            .Select(x => (trainingTargetPrevalence, x.TargetHit)).ToArray());
+        double? brierSkill = calibration.Overall.Brier is { } brier ? Round(noSkillBrier - brier) : null;
         var gains = returns.Where(x => x > 0).Sum();
         var losses = -returns.Where(x => x < 0).Sum();
         double equity = 0, peak = 0, drawdown = 0;
@@ -166,8 +175,35 @@ public static class ConditionalReturnWalkForwardTrainer
             peak = Math.Max(peak, equity);
             drawdown = Math.Max(drawdown, peak - equity);
         }
-        return new(returns.Length, Round(returns.Average()), losses > 0 ? Round(gains / losses) : null,
-            Round(drawdown), calibration);
+        double? profitFactor = losses > 0 ? Round(gains / losses) : null;
+        var profitFactorStatus = losses > 0 ? "finite" : gains > 0 ? "no-losses" : "no-gains";
+        return new(returns.Length, Round(returns.Average()), profitFactor, profitFactorStatus, Round(drawdown),
+            calibration, Round(noSkillBrier), brierSkill);
+    }
+
+    static bool CalibrationPasses(ConditionalReturnPerformance performance, double maximumEce)
+    {
+        var calibration = performance.Calibration;
+        var metrics = calibration.Overall;
+        if (calibration.Status != ProbabilityCalibrationEvaluator.Ok || metrics.Brier is not { } brier ||
+            metrics.Ece is not { } ece || performance.NoSkillBrier is not { } noSkillBrier) return false;
+        return brier < noSkillBrier && ece <= maximumEce;
+    }
+
+    static void AddCalibrationLimitations(List<string> limitations, ConditionalReturnPerformance performance,
+        double maximumEce)
+    {
+        var calibration = performance.Calibration;
+        var metrics = calibration.Overall;
+        if (calibration.Status != ProbabilityCalibrationEvaluator.Ok)
+        {
+            limitations.Add("VALIDATION_CALIBRATION_INSUFFICIENT");
+            return;
+        }
+        if (metrics.Brier is not { } brier || performance.NoSkillBrier is not { } noSkillBrier ||
+            brier >= noSkillBrier) limitations.Add("VALIDATION_BRIER_NOT_BETTER_THAN_NO_SKILL");
+        if (metrics.Ece is not { } ece || ece > maximumEce)
+            limitations.Add($"VALIDATION_ECE_ABOVE_POLICY:{maximumEce:0.00}");
     }
 
     static (string Status, int Iterations, double[]? Coefficients) Fit(
@@ -335,7 +371,8 @@ public static class ConditionalReturnWalkForwardTrainer
         if (policy.MinimumTrainingSamples < 2 || policy.MinimumValidationSamples < 10 ||
             !double.IsFinite(policy.RidgePenalty) || policy.RidgePenalty <= 0 ||
             policy.MaximumIterations < 1 || !double.IsFinite(policy.ConvergenceTolerance) ||
-            policy.ConvergenceTolerance <= 0 || policy.EceBins < 2)
+            policy.ConvergenceTolerance <= 0 || policy.EceBins < 2 ||
+            !double.IsFinite(policy.MaximumValidationEce) || policy.MaximumValidationEce is < 0 or > 1)
             throw new ArgumentOutOfRangeException(nameof(policy));
     }
 

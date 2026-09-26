@@ -1,6 +1,7 @@
 using Astra.Server.Domain;
 using Astra.Server.Domain.Structure;
 using Astra.Server.Domain.Validation;
+using System.Text.Json;
 using Xunit;
 
 namespace Astra.Server.Tests;
@@ -12,12 +13,13 @@ public sealed class ConditionalReturnModelTrainingTests
     [Fact]
     public void 시간순_훈련과_검증으로_명시적_모델과_성과를_만든다()
     {
-        var training = Rows("train", 60, Start, targetOffset: 0);
-        var validation = Rows("validation", 20, Start.AddDays(10), targetOffset: 1);
+        var training = SeparableRows("train", 60, Start);
+        var validation = SeparableRows("validation", 20, Start.AddDays(10));
 
         var result = ConditionalReturnWalkForwardTrainer.Evaluate(training, validation, Start.AddDays(20));
 
-        Assert.Equal(ConditionalReturnWalkForwardTrainer.Validated, result.Status);
+        Assert.True(result.Status == ConditionalReturnWalkForwardTrainer.Validated,
+            $"{string.Join(',', result.Limitations)}; brier={result.Validation?.Calibration.Overall.Brier}; ece={result.Validation?.Calibration.Overall.Ece}; noSkill={result.Validation?.NoSkillBrier}");
         Assert.NotNull(result.Model);
         Assert.NotNull(result.Validation);
         Assert.Equal(60, result.Model.TrainingSamples);
@@ -29,6 +31,59 @@ public sealed class ConditionalReturnModelTrainingTests
         Assert.NotNull(result.Validation.Calibration.Overall.Brier);
         Assert.NotNull(result.Validation.Calibration.Overall.Ece);
         Assert.NotNull(result.Validation.Calibration.Overall.Wilson95);
+    }
+
+    [Fact]
+    public void 양수_수익이어도_no_skill_Brier보다_나쁘면_모델을_거부한다()
+    {
+        var training = SeparableRows("train", 60, Start);
+        var validation = SeparableRows("validation", 20, Start.AddDays(10))
+            .Select(x => x with { TargetHit = false, NetReturnPercent = 1.2 }).ToArray();
+
+        var result = ConditionalReturnWalkForwardTrainer.Evaluate(training, validation, Start.AddDays(20));
+
+        Assert.Equal(ConditionalReturnWalkForwardTrainer.Rejected, result.Status);
+        Assert.NotNull(result.Model);
+        Assert.NotNull(result.Validation);
+        Assert.True(result.Validation.ExpectedNetReturnPercent > 0);
+        Assert.Contains("VALIDATION_BRIER_NOT_BETTER_THAN_NO_SKILL", result.Limitations);
+    }
+
+    [Fact]
+    public void 손실이_없는_검증은_JSON_안전한_상태값으로_수익계수를_표현한다()
+    {
+        var training = SeparableRows("train", 60, Start);
+        var validation = SeparableRows("validation", 20, Start.AddDays(10))
+            .Select(x => x with { NetReturnPercent = 1.2 }).ToArray();
+
+        var result = ConditionalReturnWalkForwardTrainer.Evaluate(training, validation, Start.AddDays(20));
+
+        Assert.True(result.Status == ConditionalReturnWalkForwardTrainer.Validated,
+            $"{string.Join(',', result.Limitations)}; brier={result.Validation?.Calibration.Overall.Brier}; ece={result.Validation?.Calibration.Overall.Ece}; noSkill={result.Validation?.NoSkillBrier}");
+        Assert.NotNull(result.Validation);
+        Assert.Null(result.Validation.ProfitFactor);
+        Assert.Equal("no-losses", result.Validation.ProfitFactorStatus);
+        Assert.True(result.Validation.NoSkillBrier > result.Validation.Calibration.Overall.Brier);
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(result.Validation,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("profitFactor").ValueKind);
+        Assert.Equal("no-losses", json.RootElement.GetProperty("profitFactorStatus").GetString());
+        Assert.True(json.RootElement.GetProperty("noSkillBrier").GetDouble() > 0);
+        Assert.True(json.RootElement.GetProperty("brierSkill").GetDouble() > 0);
+    }
+
+    [Fact]
+    public void Brier_skill이_있어도_ECE_사전정책을_넘으면_모델을_거부한다()
+    {
+        var result = ConditionalReturnWalkForwardTrainer.Evaluate(SeparableRows("train", 60, Start),
+            EceFailureRows("validation", 40, Start.AddDays(10)), Start.AddDays(20));
+
+        Assert.Equal(ConditionalReturnWalkForwardTrainer.Rejected, result.Status);
+        Assert.NotNull(result.Validation);
+        Assert.True(result.Validation.BrierSkill > 0);
+        Assert.True(result.Validation.Calibration.Overall.Ece > .10);
+        Assert.Contains("VALIDATION_ECE_ABOVE_POLICY:0.10", result.Limitations);
+        Assert.DoesNotContain("VALIDATION_BRIER_NOT_BETTER_THAN_NO_SKILL", result.Limitations);
     }
 
     [Fact]
@@ -115,6 +170,22 @@ public sealed class ConditionalReturnModelTrainingTests
             var quality = .15 + (i % 10) * .08;
             var target = (i + targetOffset) % 3 != 0;
             return Sample($"{prefix}-{i}", signal, target, quality);
+        }).ToArray();
+
+    static ConditionalReturnModelSample[] SeparableRows(string prefix, int count, DateTimeOffset start) =>
+        Enumerable.Range(0, count).Select(i =>
+        {
+            var signal = start.AddMinutes(i * 2);
+            var target = i % 2 == 0;
+            return Sample($"{prefix}-{i}", signal, target, target ? .9 : .1);
+        }).ToArray();
+
+    static ConditionalReturnModelSample[] EceFailureRows(string prefix, int count, DateTimeOffset start) =>
+        Enumerable.Range(0, count).Select(i =>
+        {
+            var highSignal = i % 2 == 0;
+            var target = highSignal ? i % 8 != 6 : i % 8 == 1;
+            return Sample($"{prefix}-{i}", start.AddMinutes(i * 2), target, highSignal ? .9 : .1);
         }).ToArray();
 
     static ConditionalReturnModelSample Sample(string id, DateTimeOffset signal, bool target, double quality) =>
