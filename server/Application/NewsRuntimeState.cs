@@ -11,6 +11,8 @@ public sealed class NewsOptions
     public bool UseSaveTicker { get; set; }
     public bool UseFoxNewsRss { get; set; }
     public string FoxNewsRssUrl { get; set; } = "https://moxie.foxnews.com/google-publisher/latest.xml";
+    public bool UseSbhNews { get; set; }
+    public string SbhNewsRssUrl { get; set; } = "https://www.sbhnews.com/feed.xml";
     public string MarketauxApiKey { get; set; } = "";
     public string MarketauxUrl { get; set; } = "https://api.marketaux.com/v1/news/all";
     public string GoogleNewsUrl { get; set; } = "https://news.google.com/rss/search?q=stock%20market%20OR%20semiconductor%20OR%20earnings&hl=en-US&gl=US&ceid=US:en";
@@ -104,7 +106,8 @@ public sealed record NewsProviderRuntimeStatus(
     int NewCount,
     DateTimeOffset LastAttemptAt,
     DateTimeOffset? LastSuccessAt,
-    DateTimeOffset? LastNewArticleAt);
+    DateTimeOffset? LastNewArticleAt,
+    TimeSpan? RetryAfter = null);
 
 /// <summary>health·조회가 함께 보는 뉴스 런타임 상태(#151 §6). 스레드 안전하다.</summary>
 public sealed class NewsRuntimeState
@@ -153,12 +156,26 @@ public sealed class NewsRuntimeState
                 var succeeded = x.Status is "ok" or "empty" or "partial";
                 return new NewsProviderRuntimeStatus(x.Provider, x.Status, x.Count, x.NewCount, at,
                     succeeded ? at : prior?.LastSuccessAt,
-                    x.NewCount > 0 ? at : prior?.LastNewArticleAt);
+                    x.NewCount > 0 ? at : prior?.LastNewArticleAt, x.RetryAfter);
             }).ToArray();
         }
     }
     public void PollFailed(DateTimeOffset at, string error) { lock (_gate) { LastPollAt = at; LastError = error; FeedStatus = "failed"; } }
     public void QueueDepth(int depth) { lock (_gate) Queue = depth; }
+    public void ClearLegacyRecords()
+    {
+        lock (_gate)
+        {
+            var retained = _recent.Where(x => string.Equals(x.Source, NewsFeedProviders.SbhNewsSource, StringComparison.Ordinal)).ToArray();
+            _recent.Clear();
+            _index.Clear();
+            foreach (var record in retained.Reverse())
+            {
+                var node = _recent.AddFirst(record);
+                _index[record.Id] = node;
+            }
+        }
+    }
     public void Drop(int count) { lock (_gate) Dropped += count; }
     public void SeenArticles(int count) { lock (_gate) Seen += count; }
     public void Ollama(bool ok) { lock (_gate) OllamaOk = ok; }

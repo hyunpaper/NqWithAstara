@@ -179,6 +179,17 @@ public sealed class NewsQueryServiceTests
 
         Assert.Equal(NewsFeedProviders.FoxNewsRss, health.GetProperty("feed").GetString());
     }
+
+    [Fact]
+    public void SBHNews_설정은_다른_뉴스_공급자보다_우선한다()
+    {
+        var (query, _, options) = Build();
+        options.UseSaveTicker = true;
+        options.UseFoxNewsRss = true;
+        options.UseSbhNews = true;
+
+        Assert.Equal(NewsFeedProviders.SbhNews, Serialize(query.Health()).GetProperty("feed").GetString());
+    }
 }
 
 public sealed class NewsHostContractTests(AstraHostFixture host) : IClassFixture<AstraHostFixture>
@@ -252,5 +263,17 @@ public sealed class NewsHostContractTests(AstraHostFixture host) : IClassFixture
         Assert.Equal(id, json.RootElement.GetProperty("id").GetString());
         Assert.Equal("AAPL", json.RootElement.GetProperty("evidenceSymbol").GetString());
         Assert.Equal(System.Net.HttpStatusCode.NotFound, missing.StatusCode);
+    }
+
+    [Fact]
+    public async Task 뉴스_정리_실행_API는_원격_요청을_거부한다()
+    {
+        using var client = host.Factory.CreateClient();
+
+        using var preview = await client.PostAsync("/api/news/migration/preview", null);
+        using var execute = await client.PostAsync("/api/news/migration/execute", null);
+
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, preview.StatusCode);
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, execute.StatusCode);
     }
 }

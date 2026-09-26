@@ -17,7 +17,9 @@ public sealed record NewsFeedState(long LastId, DateTimeOffset? LastCreatedAt,
     IReadOnlyList<string>? SeenIds = null,
     IReadOnlyList<NewsInboxEntry>? Inbox = null,
     string? RequestProvider = null,
-    DateTimeOffset? LastFeedRequestAt = null);
+    DateTimeOffset? LastFeedRequestAt = null,
+    IReadOnlyList<string>? BaselinedProviders = null,
+    DateTimeOffset? FeedRetryAfterUntil = null);
 
 /// <summary>
 /// 뉴스 수집·큐·분류 파이프라인(#151 §1·§3·§5). 호스트 타이머가 <see cref="PollAsync"/>만 호출한다.
@@ -87,6 +89,70 @@ public sealed class NewsFeedService(
         finally { _gate.Release(); }
     }
 
+    public async Task<TResult> RunExclusiveMaintenanceAsync<TResult>(
+        Func<CancellationToken, Task<TResult>> operation, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try { return await operation(ct); }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>공급자 전환 정리 뒤 디스크와 메모리의 inbox 상태를 SBHNews로 동기화한다.</summary>
+    public async Task PreserveSbhStateAsync(CancellationToken ct)
+    {
+        var current = await LoadStateAsync(ct);
+        if (current is null) return;
+        var inbox = current.Inbox?.Where(x => string.Equals(x.Item.Provider, NewsFeedProviders.SbhNews,
+            StringComparison.OrdinalIgnoreCase)).ToArray() ?? [];
+        var baselines = (current.BaselinedProviders ?? []).Append(NewsFeedProviders.SbhNews)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        await SaveStateAsync(current with
+        {
+            Inbox = inbox,
+            RequestProvider = NewsFeedProviders.SbhNews,
+            BaselinedProviders = baselines
+        }, ct);
+    }
+
+    /// <summary>공급자 전환 정리 시 분류 대기 중인 구형 기사와 사건 팔로어를 폐기한다.</summary>
+    public void DiscardLegacyPendingWork()
+    {
+        bool IsSbh(QueuedArticle item) => string.Equals(item.Article.Source, NewsFeedProviders.SbhNewsSource,
+            StringComparison.Ordinal);
+        lock (_queued)
+        {
+            foreach (var item in _matched.Where(x => !IsSbh(x)).Concat(_other.Where(x => !IsSbh(x))).ToArray())
+                _queued.Remove(item.Article.Id);
+            RemoveLegacy(_matched, IsSbh);
+            RemoveLegacy(_other, IsSbh);
+            foreach (var key in _pendingFollowers.Keys.ToArray())
+            {
+                if (!_pendingFollowers.TryGetValue(key, out var followers)) continue;
+                var kept = followers.Where(IsSbh).ToList();
+                if (kept.Count == 0) _pendingFollowers.Remove(key);
+                else _pendingFollowers[key] = kept;
+            }
+        }
+
+        static void RemoveLegacy(LinkedList<QueuedArticle> queue, Func<QueuedArticle, bool> isSbh)
+        {
+            var node = queue.First;
+            while (node is not null)
+            {
+                var next = node.Next;
+                if (!isSbh(node.Value)) queue.Remove(node);
+                node = next;
+            }
+        }
+    }
+
+    /// <summary>뉴스 정리 뒤 당일 저장량을 다시 읽어 용량 판단을 최신화한다.</summary>
+    public async Task RefreshDailyStorageAccountingAsync(CancellationToken ct)
+    {
+        _dayFile = DayFile(clock.GetUtcNow());
+        _dayBytes = await store.SizeAsync(_dayFile, ct);
+    }
+
     /// <summary>재기동 후에도 당일 판정을 조회에 보이게 today jsonl을 한 번만 되읽는다.</summary>
     async Task RestoreAsync(CancellationToken ct)
     {
@@ -140,7 +206,8 @@ public sealed class NewsFeedService(
         if (budget <= 0) return new CollectionResult(budget, "quota_wait", false, 0, null, []);
         var watchlist = await WatchlistAsync(ct);
         var known = await LoadStateAsync(ct);
-        QueuePendingInbox(known?.Inbox ?? [], watchlist);
+        QueuePendingInbox((known?.Inbox ?? []).Where(x => string.IsNullOrWhiteSpace(x.Item.Provider)
+            || string.Equals(x.Item.Provider, feed.Name, StringComparison.OrdinalIgnoreCase)).ToArray(), watchlist);
 
         var fresh = new List<NewsInboxEntry>();
         var page = 1;
@@ -149,6 +216,9 @@ public sealed class NewsFeedService(
         var maxKey = known?.LastKey;
         var seenIds = new HashSet<string>(known?.SeenIds ?? [], StringComparer.Ordinal);
         var inbox = new List<NewsInboxEntry>(known?.Inbox ?? []);
+        var baselinedProviders = new HashSet<string>(known?.BaselinedProviders ?? [], StringComparer.OrdinalIgnoreCase);
+        var providerBaseline = !baselinedProviders.Contains(feed.Name);
+        var retryAfterUntil = known?.FeedRetryAfterUntil;
         var seenKeys = new HashSet<string>(inbox.SelectMany(x => x.Keys), StringComparer.Ordinal);
         var providerStatuses = new List<NewsProviderFetchStatus>();
         var status = "empty";
@@ -158,6 +228,12 @@ public sealed class NewsFeedService(
         while (page <= Math.Max(1, options.MaxPages) && budget > 0)
         {
             var requestedAt = clock.GetUtcNow();
+            if (retryAfterUntil is not null && requestedAt < retryAfterUntil)
+            {
+                status = "quota_wait";
+                providerStatuses.Add(new NewsProviderFetchStatus(feed.Name, "quota_wait", 0, RetryAfter: retryAfterUntil - requestedAt));
+                break;
+            }
             if (!ReserveFeedRequest(requestedAt))
             {
                 status = "quota_wait";
@@ -166,12 +242,15 @@ public sealed class NewsFeedService(
             // 공급자 호출은 빈 응답이나 예외에서도 쿼터를 소비할 수 있다.
             // 호출 직후 시각을 저장해 재기동으로 일일 한도를 우회하지 않게 한다.
             await SaveStateAsync(new NewsFeedState(maxId, maxCreatedAt, _dailyFeedRequests.ToArray(), maxKey,
-                seenIds.ToArray(), inbox, feed.Name, requestedAt), ct);
+                seenIds.ToArray(), inbox, feed.Name, requestedAt, baselinedProviders.ToArray(), retryAfterUntil), ct);
             NewsFeedBatch batch;
             try { batch = await feed.FetchAsync(page, ct); }
             finally { budget--; }
             fetched = true;
             status = batch.Status;
+            var retry = batch.Providers.Where(x => x.RetryAfter is { } value && value > TimeSpan.Zero)
+                .Select(x => x.RetryAfter!.Value).DefaultIfEmpty().Max();
+            if (retry > TimeSpan.Zero) retryAfterUntil = requestedAt + retry;
             var items = batch.Items;
 
             if (items.Count == 0)
@@ -197,7 +276,7 @@ public sealed class NewsFeedService(
                 var alreadySeen = keys.Any(seenKeys.Contains)
                     || (known?.Inbox is null && known?.SeenIds?.Contains(item.Id, StringComparer.Ordinal) == true);
                 if (alreadySeen) continue;
-                var entry = new NewsInboxEntry(keys, item, requestedAt, known is null);
+                var entry = new NewsInboxEntry(keys, item, requestedAt, known is null || providerBaseline);
                 inbox.Add(entry);
                 foreach (var key in keys) seenKeys.Add(key);
                 if (known is not null)
@@ -219,14 +298,15 @@ public sealed class NewsFeedService(
         }
 
         var now = clock.GetUtcNow();
+        if (fetched && status is "ok" or "empty" or "partial") baselinedProviders.Add(feed.Name);
         var inboxCutoff = now - TimeSpan.FromHours(Math.Max(24, options.InboxRetentionHours));
         inbox = inbox.Where(x => !x.Processed || x.CollectedAt >= inboxCutoff)
             .TakeLast(Math.Max(1, options.InboxCapacity)).ToList();
         if (maxId > 0 || maxCreatedAt is not null || inbox.Count > 0 || fetched)
             await SaveStateAsync(new NewsFeedState(maxId, maxCreatedAt, _dailyFeedRequests.ToArray(), maxKey,
                 seenIds.TakeLast(Math.Max(options.InboxCapacity, 1)).ToArray(), inbox, feed.Name,
-                fetched ? now : known?.LastFeedRequestAt), ct);
-        if (known is null)
+                fetched ? now : known?.LastFeedRequestAt, baselinedProviders.ToArray(), retryAfterUntil), ct);
+        if (known is null || providerBaseline)
             return new CollectionResult(budget, fetched && status is "ok" or "empty" ? "baseline" : status,
                 fetched, 0, latestPublishedAt, providerStatuses);
         if (fresh.Count == 0)

@@ -53,7 +53,7 @@ builder.Services.AddSingleton<StructuralPendingEntryService>();
 // 이슈 #41: 폴링 → 구조 엔진 호가 배선. 새 게이트웨이가 아니라 LiquidityQueryService 캐시를 공유한다.
 builder.Services.AddSingleton<StructureLiquidityFeed>();
 builder.Services.AddSingleton<MonitorRuntimeState>(); builder.Services.AddSingleton<MonitorPollingService>(); builder.Services.AddSingleton<MonitorService>(); builder.Services.AddSingleton<IMonitorSignals>(x => x.GetRequiredService<MonitorPollingService>());
-builder.Services.AddSingleton<MonitorControlService>(); builder.Services.AddSingleton<MetricsQueryService>(); builder.Services.AddSingleton<LiquidityQueryService>(); builder.Services.AddSingleton<EntryObservabilityQueryService>(); builder.Services.AddSingleton<SimulationReportQueryService>(); builder.Services.AddSingleton<SimulationResetService>(); builder.Services.AddSingleton<ValidationQueryService>(); builder.Services.AddSingleton<CatalogQueryService>(); builder.Services.AddSingleton<PositionService>(); builder.Services.AddSingleton<StateQueryService>(); builder.Services.AddSingleton<IEconomicCalendarProvider, UnsupportedEconomicCalendarProvider>(); builder.Services.AddSingleton<MarketMoodQueryService>(); builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<MonitorControlService>(); builder.Services.AddSingleton<MetricsQueryService>(); builder.Services.AddSingleton<LiquidityQueryService>(); builder.Services.AddSingleton<EntryObservabilityQueryService>(); builder.Services.AddSingleton<SimulationReportQueryService>(); builder.Services.AddSingleton<SimulationResetService>(); builder.Services.AddSingleton<ValidationQueryService>(); builder.Services.AddSingleton<CatalogQueryService>(); builder.Services.AddSingleton<PositionService>(); builder.Services.AddSingleton<StateQueryService>(); builder.Services.AddSingleton<IEconomicCalendarProvider, UnsupportedEconomicCalendarProvider>(); builder.Services.AddSingleton<IMarketPolicyRateProvider>(x => x.GetRequiredService<NewsOptions>().UseSbhNews ? new SbhMarketPolicyRateProvider(x.GetRequiredService<NewsOptions>(), store: x.GetRequiredService<INewsStore>()) : new UnsupportedMarketPolicyRateProvider()); builder.Services.AddSingleton<MarketMoodQueryService>(); builder.Services.AddSingleton(TimeProvider.System);
 // 이슈 #130: 실계좌 US 왕복 수수료와 StructurePolicy.RoundTripFeePercent 정합 확인.
 builder.Services.AddSingleton<FeeRateCheckService>();
 // 이슈 #213: 코드 기본 수수료 단일 출처와 설정 바인딩 결과가 갈라지면 기동 시 경고한다.
@@ -93,6 +93,7 @@ builder.Services.AddSingleton<INewsStore, NewsStore>();
 builder.Services.AddSingleton<INewsFeed>(x =>
 {
     var options = x.GetRequiredService<NewsOptions>();
+    if (options.UseSbhNews) return new SbhNewsFeed(options);
     if (options.UseFoxNewsRss) return new FoxNewsRssFeed(options);
     return options.UseSaveTicker ? new SaveTickerNewsFeed(options) : new MarketauxNewsFeed(options);
 });
@@ -100,6 +101,7 @@ builder.Services.AddSingleton<INewsClassifier>(x => new OllamaNewsClassifier(x.G
 builder.Services.AddSingleton<INewsTranslator>(x => new PapagoNewsTranslator(x.GetRequiredService<NewsOptions>()));
 builder.Services.AddSingleton<NewsRuntimeState>();
 builder.Services.AddSingleton<NewsTranslationQueue>();
+builder.Services.AddSingleton<NewsStorageMigrationService>();
 builder.Services.AddSingleton<NewsFeedService>(); builder.Services.AddSingleton<NewsQueryService>();
 builder.Services.AddHostedService(x => x.GetRequiredService<MonitorService>());
 builder.Services.AddHostedService<NewsService>();
