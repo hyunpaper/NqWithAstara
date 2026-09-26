@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using Astra.Server.Application;
 using Astra.Server.Application.Backtest;
 using Astra.Server.Domain;
+using Astra.Server.Domain.Validation;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -134,6 +135,9 @@ public sealed class HistoricalReplayApiTests : IDisposable
         Assert.Equal(2, result.GetProperty("costResults").GetArrayLength());
         Assert.Equal("insufficient-training-sample",
             result.GetProperty("selectionDiagnostics").GetProperty("status").GetString());
+        Assert.Equal(ProbabilityCalibrationEvaluator.InsufficientData,
+            result.GetProperty("probabilityCalibration").GetProperty("status").GetString());
+        Assert.Equal(0, result.GetProperty("probabilityCalibration").GetProperty("usableRows").GetInt32());
         using var diagnosticsResponse = await client.GetAsync($"/api/replays/{id}/diagnostics");
         Assert.Equal(HttpStatusCode.OK, diagnosticsResponse.StatusCode);
         using var diagnosticsDocument = JsonDocument.Parse(await diagnosticsResponse.Content.ReadAsStringAsync());

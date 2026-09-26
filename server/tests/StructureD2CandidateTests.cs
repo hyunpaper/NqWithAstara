@@ -92,6 +92,10 @@ public sealed class StructureD2CandidateTests
         Assert.Equal(Fx.At(TriggerMinute), candidate.StructureCutoff);
         Assert.Equal(Fx.At(TriggerMinute + 1), candidate.TriggerConfirmedAt);
         Assert.Equal(Fx.At(TriggerMinute + 1) + P.CandidateTtl(), candidate.ExpiresAt);
+        Assert.Equal(ConditionalForecastStatus.InsufficientData, candidate.Evidence!.Forecast!.Status);
+        Assert.Contains(ConditionalReturnForecaster.NoModel, candidate.Evidence.Forecast.Limitations);
+        Assert.Equal(StrategyRegimeAssessment.Available, candidate.Evidence.RegimeAssessment!.Status);
+        Assert.Equal(candidate.Regime, candidate.Evidence.RegimeAssessment.Regime);
         // 트리거 거래량은 품질에만 쓰인다: RV=2000/1000=2 → 2/(1+2)
         Assert.Equal(2.0 / 3, candidate.Quality.Components.Single(x => x.Name == "triggerVolumeQuality").Value!.Value, 12);
     }

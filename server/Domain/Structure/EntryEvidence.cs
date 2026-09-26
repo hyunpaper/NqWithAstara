@@ -20,7 +20,9 @@ public sealed record EntryEvidence(
     bool CostComplete,
     bool ExecutionReady,
     ImmutableArray<string> GateReasons,
-    ImmutableArray<string> FeatureContributions)
+    ImmutableArray<string> FeatureContributions,
+    ConditionalReturnForecast? Forecast = null,
+    StrategyRegimeAssessment? RegimeAssessment = null)
 {
     public string Fingerprint() => string.Join('|', StructureMath.Iso(SignalAt), StructureMath.Iso(ConfirmationAt),
         Side, Regime.Key, StructureMath.Number(TrendAlignment), StructureMath.Number(DistanceToInvalidationAtr),
@@ -28,5 +30,9 @@ public sealed record EntryEvidence(
         StructureMath.Number(RelativeVolume), StructureMath.Number(VwapDistanceAtr),
         ZoneDistance is null ? "null" : StructureMath.Price(ZoneDistance.Value), TimeOfDay,
         CostComplete ? "1" : "0", ExecutionReady ? "1" : "0",
-        string.Join(',', GateReasons), string.Join(',', FeatureContributions));
+        string.Join(',', GateReasons), string.Join(',', FeatureContributions),
+        Forecast is null ? "null" : string.Join(':', Forecast.Status, Forecast.ModelVersion,
+            StructureMath.Number(Forecast.SuccessProbability), StructureMath.Number(Forecast.ExpectedValuePercent)),
+        RegimeAssessment is null ? "null" : string.Join(':', RegimeAssessment.Status,
+            RegimeAssessment.Regime?.Key ?? "null", StructureMath.Number(RegimeAssessment.Confidence)));
 }
