@@ -165,6 +165,20 @@ public sealed class NewsQueryServiceTests
 
         Assert.Equal("2", first.GetProperty("classifiedFrom").GetString());
     }
+
+    [Fact]
+    public void Fox_RSS_설정은_상태에_선택된_공급자를_노출한다()
+    {
+        var (query, _, options) = Build();
+        Assert.False(options.UseFoxNewsRss);
+        Assert.Equal("rss", Serialize(query.Health()).GetProperty("feed").GetString());
+        options.UseSaveTicker = true;
+        options.UseFoxNewsRss = true;
+
+        var health = Serialize(query.Health());
+
+        Assert.Equal(NewsFeedProviders.FoxNewsRss, health.GetProperty("feed").GetString());
+    }
 }
 
 public sealed class NewsHostContractTests(AstraHostFixture host) : IClassFixture<AstraHostFixture>
