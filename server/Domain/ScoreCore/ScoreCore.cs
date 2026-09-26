@@ -100,9 +100,13 @@ public static class EventImpactScorer
         ArgumentNullException.ThrowIfNull(evidence);
         policy ??= ScoreCorePolicy.ShadowV1;
         var reasons = ImmutableArray.CreateBuilder<string>();
+        ValidateIdentity(evidence, reasons);
         ValidateQuality(evidence.Quality, reasons);
         if (string.IsNullOrWhiteSpace(evidence.Target.Id) || evidence.Target.Directness == TargetDirectness.Unresolved)
             reasons.Add("unresolved_target");
+        if (evidence.Target.Directness == TargetDirectness.Indirect &&
+            string.IsNullOrWhiteSpace(evidence.Target.RelationEvidence))
+            reasons.Add("missing_relation_evidence");
         if (string.IsNullOrWhiteSpace(evidence.Mechanism)) reasons.Add("missing_mechanism");
         if (string.IsNullOrWhiteSpace(evidence.EvidenceSpan) && string.IsNullOrWhiteSpace(evidence.Url))
             reasons.Add("missing_evidence");
@@ -135,8 +139,13 @@ public static class EventImpactScorer
                 negative = Unit(evidence.NegativeSeverity, freshness, reasons, "negative_materiality_unknown");
                 break;
             case ImpactDirection.Neutral:
-                if (evidence.Severity is { } neutralSeverity && (!double.IsFinite(neutralSeverity) || neutralSeverity is < 0 or > 1))
-                    reasons.Add("invalid_materiality");
+                if (evidence.FactVerification is not (FactVerification.Verified or FactVerification.Corroborated))
+                    reasons.Add("neutral_fact_unverified");
+                if (evidence.MarketExpectationStatus != MarketExpectationStatus.InLine)
+                    reasons.Add("neutral_expectation_not_inline");
+                if (evidence.Severity is null) reasons.Add("neutral_materiality_unknown");
+                else if (!double.IsFinite(evidence.Severity.Value) || evidence.Severity.Value is < 0 or > .1)
+                    reasons.Add("neutral_materiality_not_low");
                 break;
         }
 
@@ -144,7 +153,7 @@ public static class EventImpactScorer
         if (exclusions.Length > 0) { positive = 0; negative = 0; }
         var qualityEligible = exclusions.Length == 0 && evidence.SourceVerified &&
                              evidence.FactVerification is FactVerification.Verified or FactVerification.Corroborated &&
-                             evidence.MarketExpectationStatus != MarketExpectationStatus.Unverified;
+                             evidence.MarketExpectationStatus is not (MarketExpectationStatus.Unverified or MarketExpectationStatus.Unknown);
         return new ScoredEvidence(evidence, Round(freshness), Round(positive), Round(negative), qualityEligible, exclusions);
     }
 
@@ -169,7 +178,19 @@ public static class EventImpactScorer
             ("target_link_confidence", quality.TargetLinkConfidence),
             ("impact_direction_confidence", quality.ImpactDirectionConfidence),
         })
-            if (value is { } number && (!double.IsFinite(number) || number is < 0 or > 1)) reasons.Add($"invalid_{name}");
+            if (value is null) reasons.Add($"missing_{name}");
+            else if (!double.IsFinite(value.Value) || value.Value is < 0 or > 1) reasons.Add($"invalid_{name}");
+    }
+
+    static void ValidateIdentity(EventEvidence evidence, ImmutableArray<string>.Builder reasons)
+    {
+        foreach (var (name, value) in new[]
+        {
+            ("evidence_id", evidence.EvidenceId), ("event_group_id", evidence.EventGroupId),
+            ("source_id", evidence.SourceId), ("source", evidence.Source),
+            ("classifier_version", evidence.ClassifierVersion),
+        })
+            if (string.IsNullOrWhiteSpace(value)) reasons.Add($"missing_{name}");
     }
 
     static double Round(double value) => Math.Round(value, 8, MidpointRounding.AwayFromZero);
@@ -185,9 +206,21 @@ public static class ScoreCoreAggregator
         ArgumentException.ThrowIfNullOrWhiteSpace(targetId);
         ArgumentNullException.ThrowIfNull(evidence);
         policy ??= ScoreCorePolicy.ShadowV1;
-        var inputs = evidence.Where(x => string.Equals(x.Target.Id, targetId, StringComparison.OrdinalIgnoreCase))
+        var inputs = evidence.Where(x => x.Target.Kind == targetKind &&
+                                         string.Equals(x.Target.Id, targetId, StringComparison.OrdinalIgnoreCase))
             .OrderBy(x => x.EventGroupId, StringComparer.Ordinal).ThenBy(x => x.EvidenceId, StringComparer.Ordinal).ToArray();
-        var scored = inputs.Select(x => EventImpactScorer.Score(x, evaluationAsOf, policy)).ToArray();
+        var conflictingIds = inputs.GroupBy(x => x.EvidenceId, StringComparer.Ordinal)
+            .Where(group => group.Select(IdentityFingerprint).Distinct(StringComparer.Ordinal).Skip(1).Any())
+            .Select(group => group.Key).ToHashSet(StringComparer.Ordinal);
+        var scored = inputs.Select(x =>
+        {
+            var row = EventImpactScorer.Score(x, evaluationAsOf, policy);
+            return conflictingIds.Contains(x.EvidenceId)
+                ? row with { PositiveUnit = 0, NegativeUnit = 0, QualityEligible = false,
+                    ExclusionReasons = row.ExclusionReasons.Add("duplicate_identity_conflict")
+                        .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToImmutableArray() }
+                : row;
+        }).ToArray();
         var excluded = scored.Where(x => !x.Included)
             .SelectMany(x => x.ExclusionReasons.Select(reason => new ExcludedScoreEvidence(
                 x.Evidence.EvidenceId, x.Evidence.EventGroupId, reason)))
@@ -242,4 +275,19 @@ public static class ScoreCoreAggregator
     }
 
     static double Round(double value) => Math.Round(value, 8, MidpointRounding.AwayFromZero);
+
+    static string IdentityFingerprint(EventEvidence value) => string.Join('|', value.EventGroupId,
+        value.SourceId, value.Source, value.Url, value.Sentiment, value.EventKind, value.ClassifierVersion,
+        value.SourceVerified, value.Target.Id.ToUpperInvariant(), value.Target.Kind,
+        value.Target.Directness, value.Target.RelationEvidence, value.Horizon, value.ImpactDirection, value.Mechanism,
+        value.EvidenceSpan, value.FactVerification, value.MarketExpectationStatus, Format(value.Severity),
+        Format(value.PositiveSeverity), Format(value.NegativeSeverity),
+        value.PublishedAt?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+        value.CollectedAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+        value.ObservedAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+        string.Join(',', value.OpposingChannels.Order(StringComparer.Ordinal)), Format(value.Quality.SourceReliability),
+        Format(value.Quality.ClassifierConfidence), Format(value.Quality.TargetLinkConfidence),
+        Format(value.Quality.ImpactDirectionConfidence));
+
+    static string Format(double? value) => value?.ToString("R", CultureInfo.InvariantCulture) ?? "null";
 }

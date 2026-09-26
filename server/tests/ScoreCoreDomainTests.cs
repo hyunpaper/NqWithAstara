@@ -171,6 +171,84 @@ public sealed class ScoreCoreDomainTests
     }
 
     [Fact]
+    public void 대상_id가_같아도_종류가_다르면_집계하지_않는다()
+    {
+        var company = Evidence("company", "g1", ImpactDirection.Favorable, ImpactTargetKind.Company);
+        var sector = Evidence("sector", "g2", ImpactDirection.Favorable, ImpactTargetKind.Sector);
+
+        var snapshot = ScoreCoreAggregator.Aggregate("NVDA", ImpactTargetKind.Company, AsOf, [company, sector]);
+
+        Assert.Equal(1, snapshot.InputCount);
+        Assert.Equal(1, snapshot.IncludedCount);
+    }
+
+    [Fact]
+    public void 간접_대상은_명시적_관계_근거가_필요하다()
+    {
+        var missing = Evidence("missing", "g1", ImpactDirection.Favorable) with
+        {
+            Target = new ImpactTarget("NVDA", ImpactTargetKind.Company, TargetDirectness.Indirect, " ")
+        };
+        var explained = missing with
+        {
+            EvidenceId = "explained", Target = missing.Target with { RelationEvidence = "공급 계약의 상대방으로 명시" }
+        };
+
+        Assert.Contains("missing_relation_evidence", EventImpactScorer.Score(missing, AsOf).ExclusionReasons);
+        Assert.True(EventImpactScorer.Score(explained, AsOf).Included);
+    }
+
+    [Theory]
+    [InlineData(FactVerification.Unverified, MarketExpectationStatus.InLine, 0.0, "neutral_fact_unverified")]
+    [InlineData(FactVerification.Verified, MarketExpectationStatus.Unknown, 0.0, "neutral_expectation_not_inline")]
+    [InlineData(FactVerification.Verified, MarketExpectationStatus.Above, 0.0, "neutral_expectation_not_inline")]
+    [InlineData(FactVerification.Verified, MarketExpectationStatus.InLine, null, "neutral_materiality_unknown")]
+    [InlineData(FactVerification.Verified, MarketExpectationStatus.InLine, 0.2, "neutral_materiality_not_low")]
+    public void neutral은_확인된_인라인_저중대도_근거만_허용한다(FactVerification fact,
+        MarketExpectationStatus expectation, double? severity, string reason)
+    {
+        var evidence = Evidence("neutral", "g1", ImpactDirection.Neutral, severity: severity) with
+        {
+            FactVerification = fact, MarketExpectationStatus = expectation
+        };
+
+        Assert.Contains(reason, EventImpactScorer.Score(evidence, AsOf).ExclusionReasons);
+    }
+
+    [Fact]
+    public void 필수_식별자와_quality_축_결측은_제외하고_unknown_기대는_품질적격이_아니다()
+    {
+        var missing = Evidence(" ", " ", ImpactDirection.Favorable) with
+        {
+            SourceId = " ", Source = " ", ClassifierVersion = " ",
+            Quality = new EvidenceQuality(null, null, null, null)
+        };
+        var unknownExpectation = Evidence("valid", "g1", ImpactDirection.Favorable) with
+        {
+            MarketExpectationStatus = MarketExpectationStatus.Unknown
+        };
+
+        var rejected = EventImpactScorer.Score(missing, AsOf);
+        Assert.Contains("missing_evidence_id", rejected.ExclusionReasons);
+        Assert.Contains("missing_source_reliability", rejected.ExclusionReasons);
+        Assert.False(EventImpactScorer.Score(unknownExpectation, AsOf).QualityEligible);
+    }
+
+    [Fact]
+    public void 같은_evidence_id의_서로_다른_사실은_입력순서와_무관하게_모두_제외한다()
+    {
+        var first = Evidence("collision", "g1", ImpactDirection.Favorable);
+        var second = first with { EventGroupId = "g2", Mechanism = "반대 사실", ImpactDirection = ImpactDirection.Unfavorable };
+
+        var a = ScoreCoreAggregator.Aggregate("NVDA", ImpactTargetKind.Company, AsOf, [first, second]);
+        var b = ScoreCoreAggregator.Aggregate("NVDA", ImpactTargetKind.Company, AsOf, [second, first]);
+
+        Assert.Equal(0, a.IncludedCount);
+        Assert.Equal(2, a.ExcludedEvidence.Count(x => x.Reason == "duplicate_identity_conflict"));
+        Assert.Equal(JsonSerializer.Serialize(a), JsonSerializer.Serialize(b));
+    }
+
+    [Fact]
     public void 같은_입력과_asOf는_동일한_snapshot을_만든다()
     {
         var rows = new[]
@@ -191,7 +269,8 @@ public sealed class ScoreCoreDomainTests
         new(id, group, "source-1", "검증 출처", "https://example.test/article", sentiment,
             "company_contract", new ImpactTarget("NVDA", targetKind, TargetDirectness.Direct), horizon,
             direction, "현금흐름 변화", "계약 조건 원문", FactVerification.Verified,
-            MarketExpectationStatus.Above, severity, positive, negative, AsOf.AddMinutes(-30),
+            direction == ImpactDirection.Neutral ? MarketExpectationStatus.InLine : MarketExpectationStatus.Above,
+            severity, positive, negative, AsOf.AddMinutes(-30),
             AsOf.AddMinutes(-29), AsOf.AddMinutes(-28), direction == ImpactDirection.Mixed
                 ? ["상승 경로", "하락 경로"] : ImmutableArray<string>.Empty,
             new EvidenceQuality(.8, .8, .9, .8), "fixture-v1");
