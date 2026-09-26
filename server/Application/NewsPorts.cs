@@ -2,6 +2,11 @@ using Astra.Server.Domain.News;
 
 namespace Astra.Server.Application;
 
+public static class NewsFeedProviders
+{
+    public const string FoxNewsRss = "fox-news-rss";
+}
+
 /// <summary>
 /// 피드 목록 한 건(#151 §1). 상세는 매칭 기사에 한해 따로 받는다. <see cref="GroupId"/>가 같은
 /// 기사들은 사건 그룹으로 묶여 대표 1건만 분류된다(#171).

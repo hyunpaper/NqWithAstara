@@ -93,9 +93,8 @@ builder.Services.AddSingleton<INewsStore, NewsStore>();
 builder.Services.AddSingleton<INewsFeed>(x =>
 {
     var options = x.GetRequiredService<NewsOptions>();
-    return options.UseSaveTicker
-        ? new SaveTickerNewsFeed(options)
-        : new MarketauxNewsFeed(options);
+    if (options.UseFoxNewsRss) return new FoxNewsRssFeed(options);
+    return options.UseSaveTicker ? new SaveTickerNewsFeed(options) : new MarketauxNewsFeed(options);
 });
 builder.Services.AddSingleton<INewsClassifier>(x => new OllamaNewsClassifier(x.GetRequiredService<NewsOptions>()));
 builder.Services.AddSingleton<INewsTranslator>(x => new PapagoNewsTranslator(x.GetRequiredService<NewsOptions>()));

@@ -17,12 +17,25 @@ describe("NewsDetailPanel 표시와 키보드", () => {
     expect(screen.getByText("기사 발췌 번역")).toBeTruthy();
   });
 
-  it("번역이 없을 때 영문 원문을 한국어로 표시하지 않는다", () => {
-    render(<NewsDetailPanel article={article({ body: "Original body", contentKo: null, contentTranslationStatus: "failed" })} onClose={() => undefined} />);
+  it("번역이 없을 때 상태와 영문 원문 fallback을 구분해 표시하고 재시도한다", () => {
+    const retry = vi.fn();
+    render(<NewsDetailPanel article={article({ body: "Original body", contentKo: null, contentTranslationStatus: "failed" })} onRetryTranslation={retry} onClose={() => undefined} />);
     expect(screen.getByText("한국어 번역에 실패했습니다.")).toBeTruthy();
-    expect(screen.queryByText("Original body")).toBeNull();
+    expect(screen.getAllByText("원문")).toHaveLength(2);
+    expect(screen.getByText("Original body")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "번역 요청" }));
+    expect(retry).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole("button", { name: "원문" }));
     expect(screen.getByText("Original body")).toBeTruthy();
+  });
+
+  it("번역 처리 중에는 중복 요청을 막는다", () => {
+    const retry = vi.fn();
+    render(<NewsDetailPanel article={article({ body: "Original body", contentTranslationStatus: "pending" })} translationState="queued" onRetryTranslation={retry} onClose={() => undefined} />);
+    const button = screen.getByRole("button", { name: "번역 처리 대기 중…" });
+    expect(button.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(button);
+    expect(retry).not.toHaveBeenCalled();
   });
 
   it("번역 할당량 대기와 본문 미제공을 구분한다", () => {
