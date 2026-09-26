@@ -138,6 +138,10 @@ public sealed class HistoricalReplayApiTests : IDisposable
         Assert.Equal(ProbabilityCalibrationEvaluator.InsufficientData,
             result.GetProperty("probabilityCalibration").GetProperty("status").GetString());
         Assert.Equal(0, result.GetProperty("probabilityCalibration").GetProperty("usableRows").GetInt32());
+        Assert.Equal(ConditionalReturnWalkForwardTrainer.InsufficientData,
+            result.GetProperty("conditionalReturnModelEvaluation").GetProperty("status").GetString());
+        Assert.Equal(ConditionalReturnWalkForwardTrainer.FeatureSchemaHash,
+            result.GetProperty("conditionalReturnModelEvaluation").GetProperty("featureSchemaHash").GetString());
         using var diagnosticsResponse = await client.GetAsync($"/api/replays/{id}/diagnostics");
         Assert.Equal(HttpStatusCode.OK, diagnosticsResponse.StatusCode);
         using var diagnosticsDocument = JsonDocument.Parse(await diagnosticsResponse.Content.ReadAsStringAsync());
@@ -149,6 +153,8 @@ public sealed class HistoricalReplayApiTests : IDisposable
         using var trades = JsonDocument.Parse(await client.GetStringAsync($"/api/replays/{id}/trades"));
         Assert.Equal(JsonValueKind.Array, trades.RootElement.ValueKind);
         Assert.True(File.Exists(Path.Combine(_root, "App_Data", "replays", id, "trades.jsonl")));
+        Assert.True(File.Exists(Path.Combine(_root, "App_Data", "replays", id,
+            "conditional-model-evaluation.json")));
         using var latest = JsonDocument.Parse(await client.GetStringAsync("/api/replays/latest"));
         Assert.Equal(id, latest.RootElement.GetProperty("id").GetString());
         Assert.True(File.Exists(Path.Combine(_root, "App_Data", "replay-runs.json")));

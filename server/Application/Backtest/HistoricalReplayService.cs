@@ -64,7 +64,8 @@ public sealed record HistoricalReplayRun(string Id, DateOnly From, DateOnly To, 
     ImmutableArray<HistoricalReplayCostResult>? CostResults = null,
     HistoricalReplaySelectionDiagnostics? SelectionDiagnostics = null,
     RegimeValidationReport? RegimeValidation = null,
-    ProbabilityCalibrationReport? ProbabilityCalibration = null);
+    ProbabilityCalibrationReport? ProbabilityCalibration = null,
+    ConditionalReturnModelEvaluation? ConditionalReturnModelEvaluation = null);
 
 public sealed record HistoricalReplayStartResult(int HttpStatus, HistoricalReplayRun? Run, string? Message);
 
@@ -254,8 +255,12 @@ public sealed class HistoricalReplayService
                 .RunDetailedAsync(evaluationFrom, queued.To, queued.Watchlist, work.Cancellation.Token);
             var selectedRun = queued.SelectedCostPolicy == HistoricalReplayCostPolicies.ModeledV2
                 ? modeledRun : observedRun;
+            var modelEvaluation = ConditionalReturnWalkForwardTrainer.Evaluate(
+                BuildConditionalModelSamples(trainingRun), BuildConditionalModelSamples(selectedRun),
+                _clock.GetUtcNow());
             var replayed = selectedRun.Trades;
             await WriteTradesAsync(replayRoot, replayed.Values.SelectMany(x => x), work.Cancellation.Token);
+            await WriteModelEvaluationAsync(replayRoot, modelEvaluation, work.Cancellation.Token);
             ImmutableArray<HistoricalReplaySymbolResult> Results(
                 HistoricalStructureTradeReplay.ReplayRun run) => queued.Watchlist.Select(symbol =>
                 import.Sources.First(x => string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase)).DataStatus == "no-data"
@@ -314,7 +319,9 @@ public sealed class HistoricalReplayService
                     $"{ReplaySelectionPolicy.SymbolSessionsPerRequiredEntry} symbol-session당 1행"),
                 RegimeValidation = BuildRegimeValidation(selectedRun, queued.From, trainTo,
                     evaluationFrom, queued.To),
-                ProbabilityCalibration = BuildProbabilityCalibration(selectedRun, _clock.GetUtcNow())
+                ProbabilityCalibration = modelEvaluation.Validation?.Calibration ??
+                    BuildProbabilityCalibration(selectedRun, _clock.GetUtcNow()),
+                ConditionalReturnModelEvaluation = modelEvaluation
             } : current);
         }
         catch (Exception) when (work.Cancellation.IsCancellationRequested)
@@ -388,6 +395,26 @@ public sealed class HistoricalReplayService
         return ProbabilityCalibrationEvaluator.Evaluate(rows, asOf);
     }
 
+    static ConditionalReturnModelSample[] BuildConditionalModelSamples(
+        HistoricalStructureTradeReplay.ReplayRun run)
+    {
+        var trades = run.Trades.Values.SelectMany(x => x)
+            .Where(x => x.Structure?.EntryEventId is not null && x.ExitAt is not null && x.Status != "OPEN" &&
+                        x.PnlPercent is not null && double.IsFinite(x.PnlPercent.Value))
+            .GroupBy(x => x.Structure!.EntryEventId, StringComparer.Ordinal)
+            .ToDictionary(x => x.Key, x => x.OrderBy(t => t.EnteredAt).First(), StringComparer.Ordinal);
+        return run.Candidates
+            .Where(x => x.ForecastInput is not null && trades.ContainsKey(x.EventId))
+            .Select(x =>
+            {
+                var trade = trades[x.EventId];
+                return new ConditionalReturnModelSample(x.EventId, x.Symbol, x.ForecastInput!.AsOf,
+                    trade.EnteredAt, trade.ExitAt!.Value, x.ForecastInput,
+                    string.Equals(trade.Status, "TARGET", StringComparison.Ordinal), trade.PnlPercent!.Value);
+            })
+            .OrderBy(x => x.FeatureAt).ThenBy(x => x.EventId, StringComparer.Ordinal).ToArray();
+    }
+
     static HistoricalReplaySymbolResult Result(string symbol, int signals, ImmutableArray<SimTrade> trades)
     {
         var closed = trades.Where(x => x.Status != "OPEN" && x.ExitAt.HasValue).ToArray();
@@ -430,6 +457,21 @@ public sealed class HistoricalReplayService
                     x, gross, fee, null, x.PnlPercent));
             });
         await File.WriteAllLinesAsync(Path.Combine(replayRoot, "trades.jsonl"), rows, ct);
+    }
+
+    static async Task WriteModelEvaluationAsync(string replayRoot, ConditionalReturnModelEvaluation evaluation,
+        CancellationToken ct)
+    {
+        Directory.CreateDirectory(replayRoot);
+        var path = Path.Combine(replayRoot, "conditional-model-evaluation.json");
+        var temporary = path + ".tmp";
+        var json = System.Text.Json.JsonSerializer.Serialize(evaluation,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)
+            {
+                WriteIndented = true
+            });
+        await File.WriteAllTextAsync(temporary, json, ct);
+        File.Move(temporary, path, true);
     }
 
     static double Gross(SimTrade trade) => trade.Side == TradeSide.Long

@@ -603,7 +603,7 @@ public static class SetupDetector
             ? (double)Math.Abs(entryReference - stopDistance) / request.Atr1mAtStructureCutoff.Value : (double?)null;
         var planCosts = planning.Plan?.Costs;
         var forecast = ConditionalReturnForecaster.Evaluate(new ConditionalReturnForecastInput(
-            request.AnalysisAsOf, side, quality.Score,
+            request.AnalysisAsOf, side, quality.Score is { } qualityScore ? qualityScore / 100d : null,
             request.Atr1mAtStructureCutoff is > 0 && entryReference > 0
                 ? request.Atr1mAtStructureCutoff.Value / (double)entryReference * 100d : null,
             trendAlignment, regime.Volatility,
