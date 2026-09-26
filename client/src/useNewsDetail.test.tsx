@@ -18,7 +18,7 @@ function Harness() {
 }
 
 describe("useNewsDetail 요청 생명주기", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
   it("불투명 ID와 종목을 질의로 인코딩하고 닫은 뒤 원래 배지에 초점을 복원한다", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ ...article("opaque:a/1"), contentKo: "상세 번역", contentTranslationStatus: "translated" })));
@@ -58,5 +58,39 @@ describe("useNewsDetail 요청 생명주기", () => {
     const signal = fetchMock.mock.calls[1][1].signal as AbortSignal;
     view.unmount();
     expect(signal.aborted).toBe(true);
+  });
+
+  it("상세에 번역 본문이 없으면 한 번만 번역을 요청하고 재조회 결과를 표시한다", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === "POST") return Promise.resolve(new Response(null, { status: 202 }));
+      const detailCalls = fetchMock.mock.calls.filter(([calledUrl, calledInit]) => String(calledUrl).startsWith("/api/news/detail") && !calledInit?.method).length;
+      return Promise.resolve(response({ ...article("opaque:a/1"), body: "Original body", contentKo: detailCalls > 1 ? "재조회 번역 본문" : null, contentTranslationStatus: detailCalls > 1 ? "translated" : "failed" }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "첫 기사" }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    expect(screen.getByText("Original body")).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(800); });
+    expect(screen.getByText("재조회 번역 본문")).toBeTruthy();
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+  });
+
+  it("이미 번역 대기 중이면 중복 요청 없이 상세만 재조회한다", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === "POST") return Promise.resolve(new Response(null, { status: 202 }));
+      const detailCalls = fetchMock.mock.calls.filter(([calledUrl, calledInit]) => String(calledUrl).startsWith("/api/news/detail") && !calledInit?.method).length;
+      return Promise.resolve(response({ ...article("opaque:a/1"), body: "Original body", contentKo: detailCalls > 1 ? "대기 후 번역 본문" : null, contentTranslationStatus: detailCalls > 1 ? "translated" : "pending" }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "첫 기사" }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
+    await act(async () => { await vi.advanceTimersByTimeAsync(800); });
+    expect(screen.getByText("대기 후 번역 본문")).toBeTruthy();
   });
 });
