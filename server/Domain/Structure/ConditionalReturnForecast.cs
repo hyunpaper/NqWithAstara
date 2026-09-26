@@ -1,4 +1,6 @@
 using Astra.Server;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Astra.Server.Domain.Structure;
 
@@ -7,6 +9,14 @@ public static class ConditionalForecastStatus
     public const string Calibrated = "calibrated";
     public const string ExperimentalUncalibrated = "experimental_uncalibrated";
     public const string InsufficientData = "insufficient_data";
+}
+
+public static class ConditionalReturnFeatureSchema
+{
+    public const string Definition =
+        "structureSignal:f64|atrPercent:f64|trendAlignment:f64|volatilityLow:bool|volatilityHigh:bool";
+    public static string Hash { get; } = Convert.ToHexString(
+        SHA256.HashData(Encoding.UTF8.GetBytes(Definition))).ToLowerInvariant();
 }
 
 public sealed record ConditionalReturnForecastInput(DateTimeOffset AsOf, TradeSide Side,
@@ -18,13 +28,15 @@ public sealed record ConditionalReturnModel(string Version, DateTimeOffset Train
     DateTimeOffset ValidatedThrough, int TrainingSamples, int ValidationSamples,
     int MinimumCalibrationSamples, string CalibrationStatus, double Intercept,
     double StructureSignalCoefficient, double AtrPercentCoefficient, double TrendAlignmentCoefficient,
-    double LowVolatilityCoefficient, double HighVolatilityCoefficient);
+    double LowVolatilityCoefficient, double HighVolatilityCoefficient,
+    string FeatureSchemaHash = "unavailable");
 
 public sealed record ConditionalReturnForecast(string Status, string ModelVersion, DateTimeOffset AsOf,
     int CalibrationSamples, DateTimeOffset? ModelTrainedThrough, DateTimeOffset? ModelValidatedThrough,
     double? SuccessProbability, double? ExpectedGrossReturnPercent,
     double? ExpectedNetReturnPercent, double? StopProbability, double? TargetProbability,
-    double? ExpectedValuePercent, IReadOnlyList<string> Evidence, IReadOnlyList<string> Limitations);
+    double? ExpectedValuePercent, IReadOnlyList<string> Evidence, IReadOnlyList<string> Limitations,
+    ConditionalReturnForecastInput? Input = null);
 
 public static class ConditionalReturnForecaster
 {
@@ -32,6 +44,7 @@ public static class ConditionalReturnForecaster
     public const string ModelAfterSignal = "MODEL_TRAINED_AFTER_SIGNAL";
     public const string ValidationAfterSignal = "MODEL_VALIDATED_AFTER_SIGNAL";
     public const string InvalidInput = "INVALID_OR_MISSING_INPUT";
+    public const string FeatureSchemaMismatch = "FEATURE_SCHEMA_MISMATCH";
 
     public static ConditionalReturnForecast Evaluate(ConditionalReturnForecastInput input,
         ConditionalReturnModel? model)
@@ -46,6 +59,8 @@ public static class ConditionalReturnForecaster
             return Missing(input, model, ModelAfterSignal, evidence);
         if (model.ValidatedThrough >= input.AsOf)
             return Missing(input, model, ValidationAfterSignal, evidence);
+        if (!string.Equals(model.FeatureSchemaHash, ConditionalReturnFeatureSchema.Hash, StringComparison.Ordinal))
+            return Missing(input, model, FeatureSchemaMismatch, evidence);
         if (!Valid(model))
             return Missing(input, model, InvalidInput, evidence);
 
@@ -68,14 +83,14 @@ public static class ConditionalReturnForecaster
             model.Version, input.AsOf, model.ValidationSamples, model.TrainedThrough, model.ValidatedThrough,
             Round(targetProbability), Round(expectedGross),
             Round(expectedNet), Round(stopProbability), Round(targetProbability), Round(expectedNet), evidence,
-            calibrated ? [] : ["MODEL_NOT_CALIBRATED"]);
+            calibrated ? [] : ["MODEL_NOT_CALIBRATED"], input);
     }
 
     static ConditionalReturnForecast Missing(ConditionalReturnForecastInput input, ConditionalReturnModel? model,
         string limitation, IReadOnlyList<string> evidence) =>
         new(ConditionalForecastStatus.InsufficientData, model?.Version ?? "unavailable", input.AsOf,
             model?.ValidationSamples ?? 0, model?.TrainedThrough, model?.ValidatedThrough,
-            null, null, null, null, null, null, evidence, [limitation]);
+            null, null, null, null, null, null, evidence, [limitation], input);
 
     static bool Valid(ConditionalReturnForecastInput input) =>
         input.AsOf != default && input.Volatility is not null && Finite(input.StructureSignal, 0, 1) &&
@@ -89,6 +104,7 @@ public static class ConditionalReturnForecaster
         !string.IsNullOrWhiteSpace(model.Version) && model.TrainedThrough != default &&
         model.ValidatedThrough != default && model.ValidatedThrough >= model.TrainedThrough &&
         model.TrainingSamples >= 0 && model.ValidationSamples >= 0 && model.MinimumCalibrationSamples > 0 &&
+        !string.IsNullOrWhiteSpace(model.FeatureSchemaHash) &&
         Coefficients(model).All(double.IsFinite);
 
     static IEnumerable<double> Coefficients(ConditionalReturnModel model)

@@ -17,7 +17,8 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
         bool CostComplete, bool CostModeled, string CostSource,
         double? ExpectedNetR, ImmutableArray<string> RejectionReasons, ImmutableArray<string> FeatureContributions,
         double? RealizedNetR = null, ConditionalReturnForecast? Forecast = null,
-        StrategyRegimeAssessment? RegimeAssessment = null);
+        StrategyRegimeAssessment? RegimeAssessment = null,
+        ConditionalReturnForecastInput? ForecastInput = null);
 
     public sealed record ReplaySourceCoverage(string Symbol, int Sessions, int ExpectedBars, int ActualBars,
         int MissingBars, double CoverageRate, double SourceBarMinutes, string GranularityStatus,
@@ -78,6 +79,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
             StringComparer.OrdinalIgnoreCase).ToBuilder();
         var daily = symbols.ToDictionary(x => x, _ => new List<Candle>(), StringComparer.OrdinalIgnoreCase);
         var candidateDiagnostics = new Dictionary<string, ReplayCandidateDiagnostic>(StringComparer.Ordinal);
+        var forecastInputs = new Dictionary<string, ConditionalReturnForecastInput>(StringComparer.Ordinal);
         var coverage = symbols.ToDictionary(x => x, _ => new CoverageAccumulator(),
             StringComparer.OrdinalIgnoreCase);
 
@@ -169,6 +171,8 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                             evaluated.Zones), snapshot.QuotePrice, now);
                     foreach (var candidate in candidates)
                     {
+                        if (candidate.Evidence?.Forecast?.Input is { } forecastInput)
+                            forecastInputs.TryAdd(candidate.EventId, forecastInput);
                         var reasons = candidate.RejectionCodes
                             .Concat(candidate.Planning.ReasonCodes)
                             .Concat(candidate.Evidence?.GateReasons ?? ImmutableArray<string>.Empty)
@@ -186,7 +190,8 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                             liquiditySource?.SourceName ?? "MISSING",
                             candidate.Evidence?.ExpectedNetR,
                             reasons, contributions, Forecast: candidate.Evidence?.Forecast,
-                            RegimeAssessment: candidate.Evidence?.RegimeAssessment);
+                            RegimeAssessment: candidate.Evidence?.RegimeAssessment,
+                            ForecastInput: forecastInputs.GetValueOrDefault(candidate.EventId));
                     }
                     var preferred = CandidateSelection.SelectPreferred(candidates);
 

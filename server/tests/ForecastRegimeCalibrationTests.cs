@@ -10,7 +10,8 @@ public sealed class ConditionalReturnForecasterTests
 
     static ConditionalReturnModel Model(DateTimeOffset? trainedThrough = null, int samples = 100,
         string status = ConditionalForecastStatus.Calibrated) => new("conditional-v1",
-        trainedThrough ?? Fx.At(20), Fx.At(30), 200, samples, 30, status, 0, 0, 0, 0, 0, 0);
+        trainedThrough ?? Fx.At(20), Fx.At(30), 200, samples, 30, status, 0, 0, 0, 0, 0, 0,
+        ConditionalReturnFeatureSchema.Hash);
 
     [Fact]
     public void 학습모델이_없으면_확률을_만들지_않는다()
@@ -45,6 +46,15 @@ public sealed class ConditionalReturnForecasterTests
     }
 
     [Fact]
+    public void feature_schema가_다른_모델은_거부한다()
+    {
+        var result = ConditionalReturnForecaster.Evaluate(Input(), Model() with { FeatureSchemaHash = "other" });
+
+        Assert.Equal(ConditionalForecastStatus.InsufficientData, result.Status);
+        Assert.Contains(ConditionalReturnForecaster.FeatureSchemaMismatch, result.Limitations);
+    }
+
+    [Fact]
     public void 보정된_모델은_비용후_조건부_기대값을_계산한다()
     {
         var result = ConditionalReturnForecaster.Evaluate(Input(), Model());
@@ -59,6 +69,7 @@ public sealed class ConditionalReturnForecasterTests
         Assert.Equal(100, result.CalibrationSamples);
         Assert.Equal(Fx.At(20), result.ModelTrainedThrough);
         Assert.Equal(Fx.At(30), result.ModelValidatedThrough);
+        Assert.Equal(Input(), result.Input);
     }
 
     [Fact]
