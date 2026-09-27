@@ -79,6 +79,21 @@ public sealed class NewsRelevancePolicyTests
         Assert.Equal("NVDA", Assert.Single(result.Targets).Id);
     }
 
+    [Theory]
+    [InlineData("US imposes sanctions on Iran and oil prices rise", "OIL", "asset")]
+    [InlineData("OPEC cuts oil supply", "OIL", "asset")]
+    [InlineData("NATO announces restrictions after Iran attack", "MARKET", "market")]
+    [InlineData("SEC announces sanctions on Iran as markets fall", "MARKET", "market")]
+    public void 기관_약어는_회사로_간주해_거시대상을_덮지_않는다(string title, string targetId, string targetKind)
+    {
+        var result = _policy.Evaluate(Item(title));
+
+        Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
+        var target = Assert.Single(result.Targets);
+        Assert.Equal(targetId, target.Id);
+        Assert.Equal(targetKind, target.Kind);
+    }
+
     static NewsFeedItem Item(string title) => new("id", title, "", "SBH", DateTimeOffset.UtcNow, []);
 }
 
