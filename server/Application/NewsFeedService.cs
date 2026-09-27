@@ -52,6 +52,7 @@ public sealed class NewsFeedService(
     readonly Channel<string> _relevanceReviews = Channel.CreateBounded<string>(new BoundedChannelOptions(
         Math.Clamp(options.SbhRelevanceAdjudicationQueueCapacity, 1, 500))
     { FullMode = BoundedChannelFullMode.Wait, SingleReader = true, SingleWriter = false });
+    readonly HashSet<string> _queuedRelevanceReviews = new(StringComparer.Ordinal);
 
     /// <summary>대표 기사 id -> 같은 사건 그룹의 나머지 기사(#171). 대표가 분류되면 함께 저장한다.</summary>
     readonly Dictionary<string, List<QueuedArticle>> _pendingFollowers = new(StringComparer.Ordinal);
@@ -347,7 +348,13 @@ public sealed class NewsFeedService(
 
     void TryQueueReview(string id)
     {
-        var queued = _relevanceReviews.Writer.TryWrite(id);
+        bool queued;
+        lock (_queuedRelevanceReviews)
+        {
+            if (!_queuedRelevanceReviews.Add(id)) return;
+            queued = _relevanceReviews.Writer.TryWrite(id);
+            if (!queued) _queuedRelevanceReviews.Remove(id);
+        }
         state.RelevanceAdjudication(queued ? "pending" : "queue_full",
             queued ? "awaiting_worker" : "bounded_queue_full", _relevanceReviews.Reader.Count);
     }
@@ -360,7 +367,11 @@ public sealed class NewsFeedService(
             await _gate.WaitAsync(ct);
             try { item = (await LoadStateAsync(ct))?.Inbox?.FirstOrDefault(x => !x.Processed && x.Item.Id == id)?.Item; }
             finally { _gate.Release(); }
-            if (item is null || !IsSbhReview(item) || relevanceAdjudicator is null) continue;
+            if (item is null || !IsSbhReview(item) || relevanceAdjudicator is null)
+            {
+                lock (_queuedRelevanceReviews) _queuedRelevanceReviews.Remove(id);
+                continue;
+            }
             state.RelevanceAdjudication("running", "ollama_adjudication", _relevanceReviews.Reader.Count);
             NewsRelevanceAssessment? assessment = null;
             try
@@ -374,6 +385,7 @@ public sealed class NewsFeedService(
             if (assessment is null)
             {
                 state.RelevanceAdjudication("pending", "timeout_offline_or_invalid_response", _relevanceReviews.Reader.Count);
+                lock (_queuedRelevanceReviews) _queuedRelevanceReviews.Remove(id);
                 continue;
             }
             await _gate.WaitAsync(ct);
@@ -387,7 +399,11 @@ public sealed class NewsFeedService(
                 await SaveStateAsync(known with { Inbox = inbox }, ct);
                 state.RelevanceAdjudication("completed", assessment.Reason, _relevanceReviews.Reader.Count);
             }
-            finally { _gate.Release(); }
+            finally
+            {
+                _gate.Release();
+                lock (_queuedRelevanceReviews) _queuedRelevanceReviews.Remove(id);
+            }
         }
     }
 

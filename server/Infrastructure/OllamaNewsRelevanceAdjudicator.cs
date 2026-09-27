@@ -9,6 +9,10 @@ namespace Astra.Server.Infrastructure;
 public sealed class OllamaNewsRelevanceAdjudicator : INewsRelevanceAdjudicator
 {
     const string PromptVersion = "sbh-relevance-adjudication-v1";
+    static readonly HashSet<string> EventKinds = ["macro_policy", "macro_release", "monetary_policy", "geopolitical",
+        "company_contract", "guidance_earnings", "cybersecurity", "financing", "regulatory", "company_action", "unknown"];
+    static readonly HashSet<string> TargetKinds = ["company", "market", "asset"];
+    static readonly HashSet<string> Fields = ["decision", "eventKind", "actor", "action", "targetId", "targetKind", "evidence", "reason"];
     readonly NewsOptions _options;
     readonly HttpClient _http;
     readonly SemaphoreSlim _concurrency;
@@ -28,10 +32,12 @@ public sealed class OllamaNewsRelevanceAdjudicator : INewsRelevanceAdjudicator
         await _concurrency.WaitAsync(ct);
         try
         {
-            var evidence = string.Join(" ", new[] { item.Title, item.Summary, item.Content }
-                .Where(x => !string.IsNullOrWhiteSpace(x))).Trim();
+            var title = item.Title.Trim();
+            title = title[..Math.Min(180, title.Length)];
+            var span = item.Relevance?.EvidenceSpan?.Trim() ?? "";
+            span = span[..Math.Min(320, span.Length)];
+            var evidence = string.Join("\n", new[] { title, span }.Where(x => x.Length > 0).Distinct(StringComparer.Ordinal));
             if (evidence.Length == 0) return null;
-            evidence = evidence[..Math.Min(1200, evidence.Length)];
             var prompt = "Return JSON only. Decide whether this SBH article contains an explicit financial-market event. "
                 + "Schema: {\"decision\":\"include|exclude\",\"eventKind\":\"macro_policy|macro_release|monetary_policy|geopolitical|company_contract|guidance_earnings|cybersecurity|financing|regulatory|company_action|unknown\","
                 + "\"actor\":\"exact substring\",\"action\":\"exact substring\",\"targetId\":\"exact substring or MARKET|OIL|TREASURY\",\"targetKind\":\"company|market|asset\",\"evidence\":\"exact contiguous substring\",\"reason\":\"short code\"}. "
@@ -42,15 +48,23 @@ public sealed class OllamaNewsRelevanceAdjudicator : INewsRelevanceAdjudicator
             if (!response.IsSuccessStatusCode) return null;
             var envelope = await response.Content.ReadFromJsonAsync<OllamaEnvelope>(cancellationToken: ct);
             if (string.IsNullOrWhiteSpace(envelope?.Response)) return null;
-            var value = JsonSerializer.Deserialize<AdjudicationDecision>(envelope.Response, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            using var document = JsonDocument.Parse(envelope.Response);
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || document.RootElement.EnumerateObject().Any(x => !Fields.Contains(x.Name))) return null;
+            var value = document.RootElement.Deserialize<AdjudicationDecision>(new JsonSerializerOptions(JsonSerializerDefaults.Web));
             if (value is null || value.Decision is not (NewsRelevanceDecisions.Include or NewsRelevanceDecisions.Exclude)
+                || !EventKinds.Contains(value.EventKind ?? "")
                 || string.IsNullOrWhiteSpace(value.Evidence) || !evidence.Contains(value.Evidence, StringComparison.Ordinal)) return null;
             if (value.Decision == NewsRelevanceDecisions.Include
                 && (string.IsNullOrWhiteSpace(value.Actor) || string.IsNullOrWhiteSpace(value.Action)
-                    || string.IsNullOrWhiteSpace(value.TargetId) || !ExactOrTyped(value.Actor, evidence)
-                    || !ExactOrTyped(value.Action, evidence) || !ExactOrTyped(value.TargetId, evidence))) return null;
+                    || string.IsNullOrWhiteSpace(value.TargetId) || !TargetKinds.Contains(value.TargetKind ?? "")
+                    || !evidence.Contains(value.Actor, StringComparison.Ordinal)
+                    || !evidence.Contains(value.Action, StringComparison.Ordinal) || !ExactTarget(value.TargetId, evidence))) return null;
+            if (value.Decision == NewsRelevanceDecisions.Exclude
+                && (!string.Equals(value.EventKind, "unknown", StringComparison.Ordinal)
+                    || !string.IsNullOrEmpty(value.TargetKind) || !string.IsNullOrEmpty(value.TargetId))) return null;
             var targets = value.Decision == NewsRelevanceDecisions.Include
-                ? new[] { new NewsEventTarget(value.TargetId!, value.TargetKind is "company" or "asset" or "market" ? value.TargetKind : "unknown", "direct", value.Evidence) }
+                ? new[] { new NewsEventTarget(value.TargetId!, value.TargetKind!, "direct", value.Evidence) }
                 : [];
             return new NewsRelevanceAssessment(NewsRelevancePolicy.CurrentVersion, value.Decision, value.EventKind ?? "unknown",
                 value.Actor ?? "", value.Action ?? "", targets, value.Evidence, value.Reason ?? "ollama_adjudicated",
@@ -61,7 +75,7 @@ public sealed class OllamaNewsRelevanceAdjudicator : INewsRelevanceAdjudicator
         finally { _concurrency.Release(); }
     }
 
-    static bool ExactOrTyped(string value, string evidence)
+    static bool ExactTarget(string value, string evidence)
         => value is NewsSymbols.Market or "OIL" or "TREASURY" || evidence.Contains(value, StringComparison.Ordinal);
 
     sealed record OllamaEnvelope(string Response);

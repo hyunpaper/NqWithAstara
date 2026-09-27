@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Astra.Server.Application;
 using Astra.Server.Domain.News;
 using Astra.Server.Infrastructure;
@@ -30,6 +31,47 @@ public sealed class OllamaNewsRelevanceAdjudicatorTests
         Assert.Null(await Build(response).AdjudicateAsync(Item("Fed raises rates"), CancellationToken.None));
     }
 
+    [Theory]
+    [InlineData("bad_kind", "market", "Fed", "raises")]
+    [InlineData("monetary_policy", "bad_target", "Fed", "raises")]
+    [InlineData("monetary_policy", "market", "MARKET", "raises")]
+    [InlineData("monetary_policy", "market", "Fed", "OIL")]
+    public async Task include는_enum과_actor_action_exact_substring을_엄격히_검증한다(
+        string eventKind, string targetKind, string actor, string action)
+    {
+        var decision = JsonSerializer.Serialize(new { decision = "include", eventKind, actor, action,
+            targetId = "MARKET", targetKind, evidence = "Fed raises rates", reason = "x" });
+        var response = JsonSerializer.Serialize(new { response = decision });
+
+        Assert.Null(await Build(response).AdjudicateAsync(Item("Fed raises rates"), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task unknown_field와_잘못된_exclude_schema는_거부한다()
+    {
+        var unknown = "{\"response\":\"{\\\"decision\\\":\\\"exclude\\\",\\\"eventKind\\\":\\\"unknown\\\",\\\"actor\\\":\\\"\\\",\\\"action\\\":\\\"\\\",\\\"targetId\\\":\\\"\\\",\\\"targetKind\\\":\\\"\\\",\\\"evidence\\\":\\\"Fed raises rates\\\",\\\"reason\\\":\\\"x\\\",\\\"extra\\\":1}\"}";
+        var invalidTarget = "{\"response\":\"{\\\"decision\\\":\\\"exclude\\\",\\\"eventKind\\\":\\\"unknown\\\",\\\"actor\\\":\\\"\\\",\\\"action\\\":\\\"\\\",\\\"targetId\\\":\\\"MARKET\\\",\\\"targetKind\\\":\\\"market\\\",\\\"evidence\\\":\\\"Fed raises rates\\\",\\\"reason\\\":\\\"x\\\"}\"}";
+
+        Assert.Null(await Build(unknown).AdjudicateAsync(Item("Fed raises rates"), CancellationToken.None));
+        Assert.Null(await Build(invalidTarget).AdjudicateAsync(Item("Fed raises rates"), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task prompt는_본문전체를_보내지_않고_제목과_bounded_evidence만_보낸다()
+    {
+        var handler = new CountingHandler("{\"response\":\"not-json\"}");
+        var adjudicator = new OllamaNewsRelevanceAdjudicator(
+            new NewsOptions { SbhRelevanceAdjudicationEnabled = true }, new HttpClient(handler));
+        var item = Item("Fed discusses policy") with { Content = "FULL_ARTICLE_SECRET",
+            Relevance = Item("x").Relevance! with { EvidenceSpan = new string('E', 400) } };
+
+        await adjudicator.AdjudicateAsync(item, CancellationToken.None);
+
+        Assert.DoesNotContain("FULL_ARTICLE_SECRET", handler.LastBody);
+        Assert.Contains(new string('E', 320), handler.LastBody);
+        Assert.DoesNotContain(new string('E', 321), handler.LastBody);
+    }
+
     [Fact]
     public async Task 비활성이나_SBH외_공급자는_HTTP를_호출하지_않는다()
     {
@@ -53,11 +95,13 @@ public sealed class OllamaNewsRelevanceAdjudicatorTests
     sealed class CountingHandler(string response) : HttpMessageHandler
     {
         public int Calls { get; private set; }
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        public string LastBody { get; private set; } = "";
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Calls++;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            { Content = new StringContent(response, Encoding.UTF8, "application/json") });
+            LastBody = await request.Content!.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent(response, Encoding.UTF8, "application/json") };
         }
     }
 }

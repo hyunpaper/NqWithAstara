@@ -144,6 +144,33 @@ public sealed class NewsRelevancePolicyTests
         Assert.Equal("Iran", result.Actor);
     }
 
+    [Fact]
+    public void 선택된_Fed_event는_같은_절의_별도_oil_target으로_덮지_않는다()
+    {
+        var result = _policy.Evaluate(Item("Fed raises interest rates as oil falls"));
+
+        Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
+        Assert.Equal(NewsSymbols.Market, Assert.Single(result.Targets).Id);
+        Assert.Equal("Fed", result.Actor);
+    }
+
+    [Fact]
+    public void 같은_절의_먼_기관보다_event에_인접한_actor를_선택한다()
+    {
+        var result = _policy.Evaluate(Item("SEC observes while Federal Reserve raises interest rates"));
+
+        Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
+        Assert.Equal("Federal Reserve", result.Actor);
+    }
+
+    [Fact]
+    public void 스포츠절과_별도절의_금융명사만으로_review로_우회하지_않는다()
+    {
+        var result = _policy.Evaluate(Item("Football players strike during final. Bond investors watch"));
+
+        Assert.Equal(NewsRelevanceDecisions.Exclude, result.Decision);
+    }
+
     [Theory]
     [InlineData("US imposes sanctions on Iran and oil prices rise", "OIL", "asset")]
     [InlineData("OPEC cuts oil supply", "OIL", "asset")]

@@ -28,6 +28,14 @@ public sealed class NewsFeedServiceTests
 
         public Harness(INewsTranslator? translator, params WatchItem[] watchlist) : this(translator, null, watchlist) { }
 
+        public Harness(INewsRelevanceAdjudicator adjudicator, Action<NewsOptions> configure)
+        {
+            configure(Options);
+            Local = new NewsLocalStore();
+            Service = new NewsFeedService(Options, Feed, Classifier, Store, Local, State, Diagnostics, Clock,
+                null, adjudicator);
+        }
+
         public Harness(INewsTranslator? translator, INewsRelevanceAdjudicator? adjudicator, params WatchItem[] watchlist)
         {
             Local = new NewsLocalStore(watchlist);
@@ -1046,6 +1054,36 @@ public sealed class NewsFeedServiceTests
         Assert.Equal(33, state.Inbox!.Count(x => x.Item.Id.StartsWith("review-") && !x.Processed));
     }
 
+    [Fact]
+    public async Task worker_timeout은_poll을_막지_않고_review_pending과_사유를_유지한다()
+    {
+        var blocking = new BlockingRelevanceAdjudicator();
+        var harness = new Harness(blocking, options =>
+        {
+            options.SbhRelevanceAdjudicationEnabled = true;
+            options.SbhRelevanceAdjudicationTimeoutSeconds = 1;
+        });
+        harness.Feed.Name = NewsFeedProviders.SbhNews;
+        harness.Page(1, Relevant("base", "base", NewsRelevanceDecisions.Include));
+        await harness.PollAsync();
+        harness.Page(1, Relevant("review", "unclear", NewsRelevanceDecisions.Review));
+
+        await harness.PollAsync().WaitAsync(TimeSpan.FromMilliseconds(500));
+        using var stop = new CancellationTokenSource();
+        var worker = harness.Service.RunRelevanceAdjudicationWorkerAsync(stop.Token);
+        await blocking.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        await Task.Delay(1200);
+
+        var state = JsonSerializer.Deserialize<NewsFeedState>(harness.Store.Texts[NewsFeedService.StateFile],
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.False(state.Inbox!.Single(x => x.Item.Id == "review").Processed);
+        Assert.Equal(NewsRelevanceDecisions.Review, state.Inbox.Single(x => x.Item.Id == "review").Item.Relevance!.Decision);
+        Assert.Equal("pending", harness.State.RelevanceAdjudicationStatus);
+        Assert.Equal("timeout_offline_or_invalid_response", harness.State.RelevanceAdjudicationReason);
+        stop.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => worker);
+    }
+
     sealed class FakeRelevanceAdjudicator(NewsRelevanceAssessment? result) : INewsRelevanceAdjudicator
     {
         public TaskCompletionSource Called { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1053,6 +1091,17 @@ public sealed class NewsFeedServiceTests
         {
             Called.TrySetResult();
             return Task.FromResult(result);
+        }
+    }
+
+    sealed class BlockingRelevanceAdjudicator : INewsRelevanceAdjudicator
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async Task<NewsRelevanceAssessment?> AdjudicateAsync(NewsFeedItem item, CancellationToken ct)
+        {
+            Started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return null;
         }
     }
 

@@ -15,7 +15,7 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
     const RegexOptions Options = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled;
 
     static readonly Regex NonMarket = new(@"\b(football|soccer|premier league|champions league|world cup|goal|match|actor|actress|celebrity|movie|film|music|concert)\b|축구|프리미어리그|챔피언스리그|월드컵|골을?\s*(?:넣|기록)|배우|연예|영화|가수|콘서트", Options);
-    static readonly Regex StrongFinancialPath = new(@"\b(stock|equity|investors?|tariff|sanction|economy|economic|inflation|recession|currency|dollar|commodity|futures?|Federal Reserve|Fed|Treasur(?:y|ies)|bond yields?|interest rates?|CPI|PPI|payrolls?|GDP)\b|주가|증시|투자자|무역|관세|제재|경제|물가|경기침체|환율|달러|원자재|선물|연준|국채|채권금리|금리|소비자물가|생산자물가|고용|국내총생산", Options);
+    static readonly Regex FinancialQualifier = new(@"\b(stocks?|equity|investors?|tariffs?|sanctions?|inflation|Federal Reserve|Fed|Treasur(?:y|ies)|bond yields?|interest rates?|CPI|PPI|payrolls?|GDP)\b|주가|증시|투자자|관세|제재|물가|연준|국채|채권금리|금리|소비자물가|생산자물가|고용|국내총생산", Options);
     static readonly Regex MacroTarget = new(@"\b(Trump|China|Chinese|Iran|Iranian|Strait of Hormuz|Hormuz|oil|crude|Treasur(?:y|ies)|bond|yield|interest rates?|Federal Reserve|Fed|Saudi(?: Arabia)?|Houthi(?:s)?|Yemen|CPI|PPI|payrolls?|jobless claims?|durable goods|PMI|GDP)\b|트럼프|중국|이란|호르무즈|유가|원유|국채|채권금리|채권|금리|연준|사우디(?:아라비아)?|후티|예멘|미사일|공습|소비자물가|생산자물가|고용|실업수당|내구재|구매관리자지수|국내총생산", Options);
     static readonly Regex MacroAction = new(@"\b(announce[ds]?|impose[ds]?|raise[ds]?|cut[s]?|hold[s]?|increase[ds]?|decrease[ds]?|rise[sn]?|fall[s]?|surge[ds]?|drop(?:ped|s)?|attack(?:ed|s)?|strike[sd]?|airstrike[sd]?|launch(?:ed|es)?|block(?:ed|s)?|close[sd]?|disrupt(?:ed|s)?|resume[ds]?|release[sd]?|report(?:ed|s)?|beat[s]?|miss(?:ed|es)?|expand(?:ed|s)?|restrict(?:ed|s)?)\b|발표|부과|인상|인하|동결|상승|하락|급등|급락|공격|타격|공습|발사|봉쇄|폐쇄|차질|재개|확대|축소|제한|상회|하회", Options);
     static readonly Regex CompanyAction = new(@"\b(sign(?:ed|s)?|win[s]?|award(?:ed|s)?|cancel(?:led|s)?|terminate[ds]?|renew(?:ed|s)?|price\s+(?:increase|cut)|raise[sd]?\s+prices?|cut[s]?\s+prices?|earnings|revenue|profit|guidance|forecast|invest(?:s|ed|ment)?|capex|launch(?:ed|es)?|recall(?:ed|s)?|discontinue[ds]?|demand|supply|shortage|cyberattack|breach(?:ed)?|vulnerability|regulat(?:or|ion)|lawsuit|settle[ds]?|fine[sd]?|sanction(?:ed|s)?|offering|convertible|capital raise|buyback|dividend|acquire[sd]?|merger)\b|계약|수주|해지|갱신|가격\s*(?:인상|인하)|실적|매출|이익|가이던스|전망|투자|설비투자|출시|리콜|단종|수요|공급|부족|사이버(?:공격|보안)|침해|취약점|규제|소송|벌금|제재|증자|전환사채|자본조달|자사주|배당|인수|합병", Options);
@@ -36,17 +36,16 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
         var companyAction = CompanyAction.Match(text);
         var explicitTargets = Targets(item, text);
         var nonMarket = NonMarket.IsMatch(text);
-        var strongFinancialPath = StrongFinancialPath.IsMatch(text);
 
-        if (nonMarket && (!strongFinancialPath || macroEvent is null))
+        if (nonMarket && macroEvent is null)
             return Result(NewsRelevanceDecisions.Exclude, "non_market", "", "", [], Evidence(text), "non_market_context");
 
         if (macroEvent is not null)
         {
             var kind = MacroKind(macroTarget.Value, text);
-            var targets = MacroTargets(text, macroTarget.Value);
+            var targets = MacroTargets(macroTarget.Value);
             return Result(NewsRelevanceDecisions.Include, kind, ActorInSpan(text, macroEvent.Value.ClauseStart,
-                    macroEvent.Value.ClauseLength, macroTarget.Value), macroAction.Value,
+                    macroEvent.Value.ClauseLength, macroTarget.Value, macroAction.Index), macroAction.Value,
                 targets, Span(text, macroTarget.Index, macroAction.Index), "macro_event_confirmed");
         }
 
@@ -122,6 +121,7 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
     {
         foreach (Match clause in Regex.Matches(text, @"[^.;!?。！？]+", Options))
         {
+            if (NonMarket.IsMatch(clause.Value) && !FinancialQualifier.IsMatch(clause.Value)) continue;
             var targets = MacroTarget.Matches(clause.Value).Cast<Match>().ToArray();
             var actions = MacroAction.Matches(clause.Value).Cast<Match>().ToArray();
             var pair = targets.SelectMany(target => actions.Select(action => (Target: target, Action: action)))
@@ -140,15 +140,15 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
         return !geopoliticalAction || geopoliticalTarget;
     }
 
-    static Match Offset(Match match, int offset) => Regex.Match(new string(' ', offset) + match.Value, Regex.Escape(match.Value), Options);
+    static Match Offset(Match match, int offset) => Regex.Match(new string(' ', offset + match.Index) + match.Value, Regex.Escape(match.Value), Options);
     static bool SameClause(string text, int first, int second)
         => !text[Math.Min(first, second)..Math.Max(first, second)].Any(x => x is '.' or ';' or '!' or '?' or '。' or '！' or '？');
 
-    static IReadOnlyList<NewsEventTarget> MacroTargets(string text, string evidence)
+    static IReadOnlyList<NewsEventTarget> MacroTargets(string evidence)
     {
-        if (Regex.IsMatch(text, @"\b(oil|crude)\b|유가|원유", Options))
+        if (Regex.IsMatch(evidence, @"\b(oil|crude)\b|유가|원유", Options))
             return [new("OIL", "asset", "direct", evidence)];
-        if (Regex.IsMatch(text, @"\b(Treasur(?:y|ies)|bond|yield)\b|국채|채권금리|채권", Options))
+        if (Regex.IsMatch(evidence, @"\b(Treasur(?:y|ies)|bond|yield)\b|국채|채권금리|채권", Options))
             return [new("TREASURY", "asset", "direct", evidence)];
         return [new(NewsSymbols.Market, "market", "direct", evidence)];
     }
@@ -175,11 +175,13 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
         => Institution.Match(text) is { Success: true } institution ? institution.Value
             : Company.Match(text) is { Success: true } company ? company.Value : fallback;
 
-    static string ActorInSpan(string text, int start, int length, string fallback)
+    static string ActorInSpan(string text, int start, int length, string fallback, int eventIndex)
     {
         var clause = text.Substring(start, length);
-        return Institution.Match(clause) is { Success: true } institution ? institution.Value
-            : Company.Match(clause) is { Success: true } company ? company.Value : fallback;
+        var candidates = Institution.Matches(clause).Cast<Match>().Concat(Company.Matches(clause).Cast<Match>())
+            .Select(match => new { Match = match, Distance = Math.Abs(start + match.Index - eventIndex) })
+            .OrderBy(x => x.Distance).ThenBy(x => x.Match.Index).ToArray();
+        return candidates.Length > 0 ? candidates[0].Match.Value : fallback;
     }
 
     static string Span(string text, int first, int second)
