@@ -159,10 +159,14 @@ public sealed class NewsRuntimeState
             {
                 previous.TryGetValue(x.Provider, out var prior);
                 var succeeded = x.Status is "ok" or "empty" or "partial";
+                var preserveFilterSnapshot = x.FilterPolicyVersion is null && prior?.FilterPolicyVersion is not null;
                 return new NewsProviderRuntimeStatus(x.Provider, x.Status, x.Count, x.NewCount, at,
                     succeeded ? at : prior?.LastSuccessAt,
                     x.NewCount > 0 ? at : prior?.LastNewArticleAt, x.RetryAfter,
-                    x.IncludedCount, x.ExcludedCount, x.ReviewCount, x.FilterPolicyVersion);
+                    preserveFilterSnapshot ? prior!.IncludedCount : x.IncludedCount,
+                    preserveFilterSnapshot ? prior!.ExcludedCount : x.ExcludedCount,
+                    preserveFilterSnapshot ? prior!.ReviewCount : x.ReviewCount,
+                    preserveFilterSnapshot ? prior!.FilterPolicyVersion : x.FilterPolicyVersion);
             }).ToArray();
         }
     }

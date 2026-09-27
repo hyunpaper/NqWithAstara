@@ -58,6 +58,24 @@ public sealed class NewsRelevancePolicyTests
         Assert.Equal(reason, result.Reason);
     }
 
+    [Fact]
+    public void 스포츠의_이적_시장은_거시_대상과_동사가_있어도_제외한다()
+    {
+        var result = _policy.Evaluate(Item("중국 축구 이적 시장 확대 발표"));
+
+        Assert.Equal(NewsRelevanceDecisions.Exclude, result.Decision);
+        Assert.Equal("non_market_context", result.Reason);
+    }
+
+    [Fact]
+    public void 스포츠와_금융_사건이_혼재하면_강한_금융_근거로_포함한다()
+    {
+        var result = _policy.Evaluate(Item("월드컵 경기 중 연준 금리 인상 발표로 증시 하락"));
+
+        Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
+        Assert.Equal("monetary_policy", result.EventKind);
+    }
+
     [Theory]
     [InlineData("Market reaction remains unclear")]
     [InlineData("Fed official gives a general interview")]

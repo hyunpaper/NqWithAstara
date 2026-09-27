@@ -15,7 +15,7 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
     const RegexOptions Options = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled;
 
     static readonly Regex NonMarket = new(@"\b(football|soccer|premier league|champions league|world cup|goal|match|actor|actress|celebrity|movie|film|music|concert)\b|축구|프리미어리그|챔피언스리그|월드컵|골을?\s*(?:넣|기록)|배우|연예|영화|가수|콘서트", Options);
-    static readonly Regex MarketPath = new(@"\b(stock|shares?|equity|market|investors?|prices?|supply|demand|trade|tariff|sanction|economy|economic|inflation|recession|currency|dollar|commodity|futures?)\b|주가|증시|시장|투자자|가격|공급|수요|무역|관세|제재|경제|물가|경기침체|환율|달러|원자재|선물", Options);
+    static readonly Regex StrongFinancialPath = new(@"\b(stock|equity|investors?|tariff|sanction|economy|economic|inflation|recession|currency|dollar|commodity|futures?|Federal Reserve|Fed|Treasur(?:y|ies)|bond yields?|interest rates?|CPI|PPI|payrolls?|GDP)\b|주가|증시|투자자|무역|관세|제재|경제|물가|경기침체|환율|달러|원자재|선물|연준|국채|채권금리|금리|소비자물가|생산자물가|고용|국내총생산", Options);
     static readonly Regex MacroTarget = new(@"\b(Trump|China|Chinese|Iran|Iranian|Strait of Hormuz|Hormuz|oil|crude|Treasur(?:y|ies)|bond|yield|interest rates?|Federal Reserve|Fed|Saudi(?: Arabia)?|Houthi(?:s)?|Yemen|CPI|PPI|payrolls?|jobless claims?|durable goods|PMI|GDP)\b|트럼프|중국|이란|호르무즈|유가|원유|국채|채권금리|채권|금리|연준|사우디(?:아라비아)?|후티|예멘|미사일|공습|소비자물가|생산자물가|고용|실업수당|내구재|구매관리자지수|국내총생산", Options);
     static readonly Regex MacroAction = new(@"\b(announce[ds]?|impose[ds]?|raise[ds]?|cut[s]?|hold[s]?|increase[ds]?|decrease[ds]?|rise[sn]?|fall[s]?|surge[ds]?|drop(?:ped|s)?|attack(?:ed|s)?|strike[sd]?|airstrike[sd]?|launch(?:ed|es)?|block(?:ed|s)?|close[sd]?|disrupt(?:ed|s)?|resume[ds]?|release[sd]?|report(?:ed|s)?|beat[s]?|miss(?:ed|es)?|expand(?:ed|s)?|restrict(?:ed|s)?)\b|발표|부과|인상|인하|동결|상승|하락|급등|급락|공격|타격|공습|발사|봉쇄|폐쇄|차질|재개|확대|축소|제한|상회|하회", Options);
     static readonly Regex CompanyAction = new(@"\b(sign(?:ed|s)?|win[s]?|award(?:ed|s)?|cancel(?:led|s)?|terminate[ds]?|renew(?:ed|s)?|price\s+(?:increase|cut)|raise[sd]?\s+prices?|cut[s]?\s+prices?|earnings|revenue|profit|guidance|forecast|invest(?:s|ed|ment)?|capex|launch(?:ed|es)?|recall(?:ed|s)?|discontinue[ds]?|demand|supply|shortage|cyberattack|breach(?:ed)?|vulnerability|regulat(?:or|ion)|lawsuit|settle[ds]?|fine[sd]?|sanction(?:ed|s)?|offering|convertible|capital raise|buyback|dividend|acquire[sd]?|merger)\b|계약|수주|해지|갱신|가격\s*(?:인상|인하)|실적|매출|이익|가이던스|전망|투자|설비투자|출시|리콜|단종|수요|공급|부족|사이버(?:공격|보안)|침해|취약점|규제|소송|벌금|제재|증자|전환사채|자본조달|자사주|배당|인수|합병", Options);
@@ -33,10 +33,13 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
         var macroAction = MacroAction.Match(text);
         var companyAction = CompanyAction.Match(text);
         var explicitTargets = Targets(item, text);
-        var marketPath = MarketPath.IsMatch(text);
         var nonMarket = NonMarket.IsMatch(text);
+        var strongFinancialPath = StrongFinancialPath.IsMatch(text);
 
-        if (macroTarget.Success && macroAction.Success && (!nonMarket || marketPath))
+        if (nonMarket && !strongFinancialPath)
+            return Result(NewsRelevanceDecisions.Exclude, "non_market", "", "", [], Evidence(text), "non_market_context");
+
+        if (macroTarget.Success && macroAction.Success)
         {
             var kind = MacroKind(macroTarget.Value, text);
             var targets = explicitTargets.Count > 0 ? explicitTargets : MacroTargets(text, macroTarget.Value);
@@ -44,13 +47,10 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
                 targets, Span(text, macroTarget.Index, macroAction.Index), "macro_event_confirmed");
         }
 
-        if (companyAction.Success && explicitTargets.Count > 0 && (!nonMarket || marketPath))
+        if (companyAction.Success && explicitTargets.Count > 0)
             return Result(NewsRelevanceDecisions.Include, CompanyKind(companyAction.Value), explicitTargets[0].Id,
                 companyAction.Value, explicitTargets, Span(text, companyAction.Index, companyAction.Index),
                 "company_event_confirmed");
-
-        if (nonMarket && !marketPath)
-            return Result(NewsRelevanceDecisions.Exclude, "non_market", "", "", [], Evidence(text), "non_market_context");
 
         if (macroTarget.Success || companyAction.Success || explicitTargets.Count > 0 || AmbiguousWord.IsMatch(text))
             return Result(NewsRelevanceDecisions.Review, "unknown", Actor(text, macroTarget.Value),

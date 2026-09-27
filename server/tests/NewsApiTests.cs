@@ -160,6 +160,25 @@ public sealed class NewsQueryServiceTests
     }
 
     [Fact]
+    public void HealthPreservesLastSbhFilterSnapshotAfterNotModified()
+    {
+        var state = new NewsRuntimeState();
+        var now = DateTimeOffset.UtcNow;
+        state.CollectionCompleted(now, "ok", true, 2, now,
+            [new NewsProviderFetchStatus(NewsFeedProviders.SbhNews, "ok", 7, 2,
+                IncludedCount: 2, ExcludedCount: 4, ReviewCount: 1,
+                FilterPolicyVersion: NewsRelevancePolicy.CurrentVersion)]);
+        state.CollectionCompleted(now.AddMinutes(15), "empty", true, 0, null,
+            [new NewsProviderFetchStatus(NewsFeedProviders.SbhNews, "empty", 0)]);
+
+        var provider = Assert.Single(state.Providers);
+        Assert.Equal(2, provider.IncludedCount);
+        Assert.Equal(4, provider.ExcludedCount);
+        Assert.Equal(1, provider.ReviewCount);
+        Assert.Equal(NewsRelevancePolicy.CurrentVersion, provider.FilterPolicyVersion);
+    }
+
+    [Fact]
     public void ArticlesExposeThePromptVersion()
     {
         var (query, state, options) = Build();
