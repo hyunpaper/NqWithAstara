@@ -143,6 +143,23 @@ public sealed class NewsQueryServiceTests
     }
 
     [Fact]
+    public void HealthExposesSbhRelevanceFilterCountsAndPolicyVersion()
+    {
+        var (query, state, _) = Build();
+        state.CollectionCompleted(Now, "ok", true, 2, Now,
+            [new NewsProviderFetchStatus(NewsFeedProviders.SbhNews, "ok", 7, 2,
+                IncludedCount: 2, ExcludedCount: 4, ReviewCount: 1,
+                FilterPolicyVersion: NewsRelevancePolicy.CurrentVersion)]);
+
+        var provider = Serialize(query.Health()).GetProperty("providers")[0];
+
+        Assert.Equal(2, provider.GetProperty("includedCount").GetInt32());
+        Assert.Equal(4, provider.GetProperty("excludedCount").GetInt32());
+        Assert.Equal(1, provider.GetProperty("reviewCount").GetInt32());
+        Assert.Equal(NewsRelevancePolicy.CurrentVersion, provider.GetProperty("filterPolicyVersion").GetString());
+    }
+
+    [Fact]
     public void ArticlesExposeThePromptVersion()
     {
         var (query, state, options) = Build();
