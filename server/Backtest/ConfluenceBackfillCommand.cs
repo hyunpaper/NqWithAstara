@@ -54,10 +54,14 @@ public static class ConfluenceBackfillCommand
         throw new ArgumentException($"{name} 값은 yyyy-MM-dd 형식이어야 한다: {value}");
 }
 
-public sealed class TossHistoricalBarSource(TossClient client) : IHistoricalBarSource
+public sealed class TossHistoricalBarSource(TossClient client) : IHistoricalBarPageSource
 {
     public string Name => "Toss";
     public bool Adjusted => true;
     public Task<HistoricalBarReadResult> ReadAsync(string symbol, DateTimeOffset from, DateTimeOffset to,
         CancellationToken ct) => client.HistoricalCandles(symbol, from, to, ct);
+    public IAsyncEnumerable<HistoricalBarPage> ReadPagesAsync(string symbol, DateTimeOffset from,
+        DateTimeOffset to, string? before, int completedPages, IReadOnlyCollection<string> visitedCursors,
+        CancellationToken ct) => client.HistoricalCandlePages(symbol, from, to, before, completedPages,
+        visitedCursors, ct);
 }

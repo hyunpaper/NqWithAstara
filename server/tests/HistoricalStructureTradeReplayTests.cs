@@ -189,7 +189,7 @@ public sealed class HistoricalStructureTradeReplayTests
 
         Assert.Equal(3, summary.Generated);
         Assert.Equal(1, summary.StructuralReady);
-        Assert.Equal(2, summary.Rejected);
+        Assert.Equal(2, summary.GateRejected);
         Assert.True(summary.CountsOverlap);
         Assert.Equal(2, summary.Gates.Sum(x => x.ExclusiveFirstFailures));
         Assert.Equal(1, summary.Gates.Single(x => x.Reason == TrendEvaluator.BlockerMissing5mStructure)
@@ -212,12 +212,88 @@ public sealed class HistoricalStructureTradeReplayTests
         var summary = HistoricalStructureTradeReplay.SummarizeGates(rows);
 
         Assert.Equal(3, summary.StructuralReady);
-        Assert.Equal(1, summary.FinalApproved);
-        Assert.Equal(2, summary.Rejected);
+        Assert.Equal(1, summary.GateApproved);
+        Assert.Equal(2, summary.GateRejected);
         Assert.Equal(1, summary.Gates.Single(x => x.Reason == StructuralPlanner.MissingLiquidityCost)
             .ExclusiveFirstFailures);
         Assert.Equal(1, summary.Gates.Single(x => x.Reason == "EXPECTED_NET_R_NON_POSITIVE")
             .ExclusiveFirstFailures);
+    }
+
+    [Fact]
+    public void 실행퍼널은_EventId별_후보부터_체결까지_서로다른_분모를_보존한다()
+    {
+        var rows = new[]
+        {
+            Diagnostic("candidate-only", CandidateDisposition.Rejected),
+            Diagnostic("preferred", CandidateDisposition.Ready) with { Preferred = true },
+            Diagnostic("pending", CandidateDisposition.Ready) with { Preferred = true, PendingQueued = true },
+            Diagnostic("confirmed", CandidateDisposition.Ready) with
+                { Preferred = true, PendingQueued = true, Confirmed = true },
+            Diagnostic("filled", CandidateDisposition.Ready) with
+                { Preferred = true, PendingQueued = true, Confirmed = true, Filled = true }
+        };
+
+        var funnel = HistoricalStructureTradeReplay.SummarizeGates(rows).ExecutionFunnel!;
+
+        Assert.Equal(5, funnel.Candidates);
+        Assert.Equal(4, funnel.Preferred);
+        Assert.Equal(3, funnel.PendingQueued);
+        Assert.Equal(2, funnel.Confirmed);
+        Assert.Equal(1, funnel.Filled);
+        Assert.True(funnel.Reconciled);
+        Assert.Equal("distinct-entry-event-id", funnel.Unit);
+    }
+
+    [Fact]
+    public void 실행퍼널은_선행단계없는_체결을_불일치로_표시한다()
+    {
+        var row = Diagnostic("broken", CandidateDisposition.Ready) with { Filled = true };
+
+        Assert.False(HistoricalStructureTradeReplay.SummarizeGates([row]).ExecutionFunnel!.Reconciled);
+    }
+
+    [Fact]
+    public void Preferred이후_재평가된_nonReady상태는_승인과_체결단계를_되돌리지않는다()
+    {
+        var attempted = Diagnostic("attempt", CandidateDisposition.Ready) with
+        {
+            Preferred = true,
+            PendingQueued = true,
+            Confirmed = true,
+            Filled = true
+        };
+        var later = Diagnostic("attempt", CandidateDisposition.Expired,
+            ["DISPOSITION_EXPIRED"], costComplete: false, expectedNetR: null);
+
+        var reconciled = HistoricalStructureTradeReplay.ReconcileDiagnostic(attempted, later);
+        var summary = HistoricalStructureTradeReplay.SummarizeGates([reconciled]);
+
+        Assert.True(reconciled.StructuralReady);
+        Assert.True(reconciled.FinalApproved);
+        Assert.True(reconciled.GateApproved);
+        Assert.True(reconciled.Filled);
+        Assert.Equal(1, summary.FinalApproved);
+        Assert.Equal(1, summary.GateApproved);
+        Assert.Equal(0, summary.Rejected);
+        Assert.Equal(0, summary.GateRejected);
+    }
+
+    [Fact]
+    public void 기존후보Json은_FinalApproved를_보존하고_새GateApproved를_기본값으로읽는다()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var json = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(
+            Diagnostic("legacy", CandidateDisposition.Ready), options))!.AsObject();
+        json.Remove("gateApproved");
+
+        var restored = JsonSerializer.Deserialize<HistoricalStructureTradeReplay.ReplayCandidateDiagnostic>(
+            json.ToJsonString(), options);
+
+        Assert.NotNull(restored);
+        Assert.True(restored.FinalApproved);
+        Assert.True(restored.GateApproved);
+        Assert.Equal(1, HistoricalStructureTradeReplay.SummarizeGates([restored]).GateApproved);
     }
 
     [Fact]

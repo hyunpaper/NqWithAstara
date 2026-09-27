@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Astra.Server.Domain;
 namespace Astra.Server;
@@ -9,6 +11,10 @@ public static class TossRateLimitGroups { public const int MarketData = 15; publ
 public sealed class TossClient(HttpClient http)
 {
     readonly SemaphoreSlim _requestGate = new(4, 4); readonly SemaphoreSlim _tokenGate = new(1, 1); string? _token; DateTimeOffset _expires;
+    readonly SemaphoreSlim _chartRateGate = new(1, 1);
+    long _nextChartRequest;
+    const int CandlePageSize = 200;
+    static readonly TimeSpan MaximumHistoricalRange = TimeSpan.FromHours(90 * 24 + 1);
     async Task<(string Id, string Secret)> Credentials()
     {
         var path = Environment.GetEnvironmentVariable("TOSS_CREDENTIALS_PATH") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "tossapi.txt");
@@ -55,39 +61,95 @@ public sealed class TossClient(HttpClient http)
         for (var page = 0; page < 3; page++)
         {
             var path = $"api/v1/candles?symbol={Uri.EscapeDataString(symbol)}&interval=1m&count=200&adjusted=true" + (before is null ? "" : "&before=" + Uri.EscapeDataString(before));
-            using var d = await Get(path, ct); var result = d.RootElement.GetProperty("result");
+            using var d = await GetChart(path, ct); var result = d.RootElement.GetProperty("result");
             bars.AddRange(result.GetProperty("candles").EnumerateArray().Select(x => new Candle(x.GetProperty("timestamp").GetDateTimeOffset(), D(x, "openPrice"), D(x, "highPrice"), D(x, "lowPrice"), D(x, "closePrice"), D(x, "volume"))));
-            before = result.TryGetProperty("nextBefore", out var next) && next.ValueKind == JsonValueKind.String ? next.GetString() : null; if (before is null) break;
+            before = NextBefore(result); if (before is null) break;
         }
         return bars.DistinctBy(x => x.Timestamp).OrderBy(x => x.Timestamp).ToArray();
     }
     public async Task<Application.Backtest.HistoricalBarReadResult> HistoricalCandles(string symbol, DateTimeOffset from,
         DateTimeOffset to, CancellationToken ct)
     {
-        var bars = new List<Candle>(); string? before = null; var rawCount = 0; DateTimeOffset? oldest = null;
+        var bars = new List<Candle>(); var rawCount = 0; DateTimeOffset? oldest = null;
         var reachedStart = false; string? stopReason = null;
-        for (var page = 0; page < 80; page++)
+        await foreach (var page in HistoricalCandlePages(symbol, from, to, null, 0, [], ct))
         {
-            var path = $"api/v1/candles?symbol={Uri.EscapeDataString(symbol)}&interval=1m&count=200&adjusted=true" +
-                       (before is null ? "" : "&before=" + Uri.EscapeDataString(before));
-            using var d = await Get(path, ct); var result = d.RootElement.GetProperty("result");
-            var fetched = result.GetProperty("candles").EnumerateArray()
-                .Select(x => new Candle(x.GetProperty("timestamp").GetDateTimeOffset(), D(x, "openPrice"),
-                    D(x, "highPrice"), D(x, "lowPrice"), D(x, "closePrice"), D(x, "volume"))).ToArray();
-            rawCount += fetched.Length;
-            if (fetched.Length > 0) oldest = oldest is null ? fetched.Min(x => x.Timestamp) :
-                DateTimeOffset.Compare(oldest.Value, fetched.Min(x => x.Timestamp)) <= 0 ? oldest : fetched.Min(x => x.Timestamp);
-            bars.AddRange(fetched.Where(x => x.Timestamp >= from && x.Timestamp < to));
-            if (fetched.Length == 0) { stopReason = "Toss가 빈 페이지를 반환했습니다."; break; }
-            if (fetched.Min(x => x.Timestamp) <= from) { reachedStart = true; break; }
-            before = result.TryGetProperty("nextBefore", out var next) && next.ValueKind == JsonValueKind.String
-                ? next.GetString() : null;
-            if (before is null) { stopReason = "Toss가 다음 페이지 커서를 반환하지 않았습니다."; break; }
-            if (page == 79) stopReason = "Toss 페이지 조회 상한에 도달했습니다.";
+            rawCount += page.RawBarCount;
+            oldest = oldest is null || page.OldestBar < oldest ? page.OldestBar : oldest;
+            reachedStart |= page.ReachedRequestedStart;
+            stopReason = page.StopReason;
+            bars.AddRange(page.Bars.Where(x => x.Timestamp >= from && x.Timestamp < to));
         }
         return new(bars.OrderBy(x => x.Timestamp).ToArray(), rawCount, reachedStart, oldest, stopReason);
     }
-    public async Task<IReadOnlyList<Candle>> DailyCandles(string symbol, CancellationToken ct) { using var d = await Get($"api/v1/candles?symbol={Uri.EscapeDataString(symbol)}&interval=1d&count=30&adjusted=true", ct); return d.RootElement.GetProperty("result").GetProperty("candles").EnumerateArray().Select(x => new Candle(x.GetProperty("timestamp").GetDateTimeOffset(), D(x, "openPrice"), D(x, "highPrice"), D(x, "lowPrice"), D(x, "closePrice"), D(x, "volume"))).DistinctBy(x => x.Timestamp).OrderBy(x => x.Timestamp).ToArray(); }
+
+    public async IAsyncEnumerable<Application.Backtest.HistoricalBarPage> HistoricalCandlePages(string symbol,
+        DateTimeOffset from, DateTimeOffset to, string? resumeBefore, int completedPages,
+        IReadOnlyCollection<string> visitedCursors,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        if (to <= from) throw new ArgumentException("과거 캔들 종료 시각은 시작 시각보다 늦어야 합니다.");
+        var before = string.IsNullOrWhiteSpace(resumeBefore) ? to.ToString("O") : resumeBefore;
+        var seenCursors = visitedCursors.ToHashSet(StringComparer.Ordinal);
+        var pageBudget = HistoricalCandlePageBudget(from, to);
+        for (var page = completedPages; page < pageBudget; page++)
+        {
+            var requestCursor = before;
+            if (!seenCursors.Add(requestCursor)) yield break;
+            var path = $"api/v1/candles?symbol={Uri.EscapeDataString(symbol)}&interval=1m&count={CandlePageSize}&adjusted=true" +
+                       "&before=" + Uri.EscapeDataString(before);
+            using var d = await GetChart(path, ct); var result = d.RootElement.GetProperty("result");
+            var fetched = result.GetProperty("candles").EnumerateArray()
+                .Select(x => new Candle(x.GetProperty("timestamp").GetDateTimeOffset(), D(x, "openPrice"),
+                    D(x, "highPrice"), D(x, "lowPrice"), D(x, "closePrice"), D(x, "volume"))).ToArray();
+            var oldest = fetched.Length == 0 ? (DateTimeOffset?)null : fetched.Min(x => x.Timestamp);
+            var reachedStart = oldest <= from;
+            var nextBefore = NextBefore(result);
+            string? stopReason = null;
+            if (fetched.Length == 0) stopReason = "Toss가 빈 페이지를 반환했습니다.";
+            else if (reachedStart) nextBefore = null;
+            else if (nextBefore is null) stopReason = "Toss 가용 과거 데이터의 끝에 도달했습니다.";
+            else if (string.Equals(nextBefore, requestCursor, StringComparison.Ordinal))
+                stopReason = "Toss가 동일한 다음 페이지 커서를 반복했습니다.";
+            else if (seenCursors.Contains(nextBefore))
+                stopReason = "Toss가 이전 페이지 커서를 순환해서 반환했습니다.";
+            else if (page == pageBudget - 1)
+                stopReason = $"요청 기간 안전 페이지 상한({pageBudget})에 도달했습니다.";
+            yield return new(requestCursor, nextBefore, fetched, fetched.Length, reachedStart, oldest, stopReason);
+            if (reachedStart || nextBefore is null || stopReason is not null) yield break;
+            before = nextBefore;
+        }
+    }
+    public static int HistoricalCandlePageBudget(DateTimeOffset from, DateTimeOffset to)
+    {
+        if (to <= from) throw new ArgumentException("과거 캔들 종료 시각은 시작 시각보다 늦어야 합니다.");
+        if (to - from > MaximumHistoricalRange)
+            throw new ArgumentOutOfRangeException(nameof(to), "과거 캔들 조회 기간은 90일을 초과할 수 없습니다.");
+        return checked((int)Math.Ceiling((to - from).TotalMinutes / CandlePageSize) + 1);
+    }
+    async Task<JsonDocument> GetChart(string path, CancellationToken ct)
+    {
+        await _chartRateGate.WaitAsync(ct);
+        try
+        {
+            var now = Stopwatch.GetTimestamp();
+            var remaining = _nextChartRequest - now;
+            if (remaining > 0)
+                await Task.Delay(TimeSpan.FromSeconds((double)remaining / Stopwatch.Frequency), ct);
+            _nextChartRequest = Stopwatch.GetTimestamp() +
+                (long)Math.Ceiling((double)Stopwatch.Frequency / TossRateLimitGroups.MarketDataChart);
+            return await Get(path, ct);
+        }
+        finally { _chartRateGate.Release(); }
+    }
+    public async Task<IReadOnlyList<Candle>> DailyCandles(string symbol, CancellationToken ct) { using var d = await GetChart($"api/v1/candles?symbol={Uri.EscapeDataString(symbol)}&interval=1d&count=30&adjusted=true", ct); return d.RootElement.GetProperty("result").GetProperty("candles").EnumerateArray().Select(x => new Candle(x.GetProperty("timestamp").GetDateTimeOffset(), D(x, "openPrice"), D(x, "highPrice"), D(x, "lowPrice"), D(x, "closePrice"), D(x, "volume"))).DistinctBy(x => x.Timestamp).OrderBy(x => x.Timestamp).ToArray(); }
+    static string? NextBefore(JsonElement result)
+    {
+        if (!result.TryGetProperty("nextBefore", out var next) || next.ValueKind != JsonValueKind.String)
+            return null;
+        var value = next.GetString();
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
     static double D(JsonElement x, string p) => double.Parse(x.GetProperty(p).GetString()!, System.Globalization.CultureInfo.InvariantCulture);
     static decimal Dec(JsonElement x, string p) => decimal.Parse(x.GetProperty(p).GetString()!, System.Globalization.CultureInfo.InvariantCulture);
     static decimal? DecN(JsonElement x, string p) => x.TryGetProperty(p, out var v) && v.ValueKind == JsonValueKind.String ? decimal.Parse(v.GetString()!, System.Globalization.CultureInfo.InvariantCulture) : null;

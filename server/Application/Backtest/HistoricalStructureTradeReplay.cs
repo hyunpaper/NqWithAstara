@@ -10,7 +10,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
     public const string GateAttributionOrder =
         "data-quality>session-time>direction>structure>entry-quality>risk-cost>expected-value>other.v1";
 
-    /// <summary>replay에서 생성된 후보의 1단계 후보화·2단계 최종 게이트 결과를 보존한다.</summary>
+    /// <summary>replay 후보의 게이트와 실행 단계 누적 결과를 EventId 단위로 보존한다.</summary>
     public sealed record ReplayCandidateDiagnostic(string Symbol, DateOnly SessionDate,
         string EventId, DateTimeOffset SignalAt, TradeSide Side, string Regime,
         CandidateDisposition Disposition, bool StructuralReady, bool FinalApproved,
@@ -18,7 +18,15 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
         double? ExpectedNetR, ImmutableArray<string> RejectionReasons, ImmutableArray<string> FeatureContributions,
         double? RealizedNetR = null, ConditionalReturnForecast? Forecast = null,
         StrategyRegimeAssessment? RegimeAssessment = null,
-        ConditionalReturnForecastInput? ForecastInput = null);
+        ConditionalReturnForecastInput? ForecastInput = null)
+    {
+        public bool GateApproved => FinalApproved;
+        public bool Preferred { get; init; }
+        public bool PendingQueued { get; init; }
+        public bool Confirmed { get; init; }
+        public bool Filled { get; init; }
+        public string? ExecutionStopReason { get; init; }
+    }
 
     public sealed record ReplaySourceCoverage(string Symbol, int Sessions, int ExpectedBars, int ActualBars,
         int MissingBars, double CoverageRate, double SourceBarMinutes, string GranularityStatus,
@@ -26,9 +34,17 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
 
     public sealed record ReplayGateCount(string Reason, int Candidates, int ExclusiveFirstFailures);
 
+    public sealed record ReplayExecutionFunnel(int Candidates, int Preferred, int PendingQueued, int Confirmed,
+        int Filled, bool Reconciled, string Unit, string Definition);
+
     public sealed record ReplayGateSummary(int Generated, int StructuralReady, int FinalApproved, int Rejected,
         int LongCandidates, int ShortCandidates, bool CountsOverlap, string ExclusiveAttributionOrder,
-        ImmutableArray<ReplayGateCount> Gates);
+        ImmutableArray<ReplayGateCount> Gates)
+    {
+        public int GateApproved => FinalApproved;
+        public int GateRejected => Rejected;
+        public ReplayExecutionFunnel? ExecutionFunnel { get; init; }
+    }
 
     public sealed record ReplayRun(ImmutableDictionary<string, ImmutableArray<SimTrade>> Trades,
         ImmutableArray<ReplayCandidateDiagnostic> Candidates, ImmutableArray<ReplaySourceCoverage> Coverage,
@@ -122,12 +138,24 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                         var resolution = ResolvePending(queued.Pending, current, now, barSpan);
                         if (resolution.Confirmation is { Decision: PendingEntryDecision.Confirmed } confirmation)
                         {
+                            UpdateDiagnostic(candidateDiagnostics, queued.Pending.EntryEventId,
+                                row => row with { Confirmed = true });
                             var entered = StructuralSimulation.Enter(result[symbol], new StructuralEntryRequest(symbol,
                                 queued.Candidate.TriggerBarStart, now, sessionEnd, queued.Context,
                                 completedStarts, sessionStart, queued.Candidate.Plan?.TargetZoneSnapshot.Aliases, confirmation,
                                 RequireCompleteLiquidityCost: sessionPolicy.RequireCompleteLiquidityCost), sessionPolicy);
                             result[symbol] = entered.Trades;
+                            UpdateDiagnostic(candidateDiagnostics, queued.Pending.EntryEventId, row => row with
+                            {
+                                Filled = entered.Outcome is StructuralEntryOutcome.Entered or
+                                    StructuralEntryOutcome.AlreadyEntered,
+                                ExecutionStopReason = entered.Outcome is StructuralEntryOutcome.Entered or
+                                    StructuralEntryOutcome.AlreadyEntered ? null : entered.Outcome.ToString()
+                            });
                         }
+                        else
+                            UpdateDiagnostic(candidateDiagnostics, queued.Pending.EntryEventId,
+                                row => row with { ExecutionStopReason = resolution.Reason });
                         pendingEventIds.Add(queued.Pending.EntryEventId);
                         pending = null;
                     }
@@ -137,6 +165,8 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                         if (resolution.Clear)
                         {
                             // exact confirmation 봉을 놓치면 추후 봉으로 소급 체결하지 않는다.
+                            UpdateDiagnostic(candidateDiagnostics, unresolved.Pending.EntryEventId,
+                                row => row with { ExecutionStopReason = resolution.Reason });
                             pendingEventIds.Add(unresolved.Pending.EntryEventId);
                             pending = null;
                         }
@@ -181,19 +211,24 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                         var structuralReady = candidate.Disposition == CandidateDisposition.Ready;
                         var costComplete = candidate.Evidence?.CostComplete == true;
                         var expectedValueReady = candidate.Evidence?.ExpectedNetR is > 0;
-                        candidateDiagnostics[candidate.EventId] = new ReplayCandidateDiagnostic(
+                        var gateApproved = structuralReady && costComplete && expectedValueReady;
+                        var diagnostic = new ReplayCandidateDiagnostic(
                             symbol, MarketRules.TradingDate(sessionStart), candidate.EventId,
                             candidate.TriggerBarStart, candidate.Side, candidate.Regime?.Key ?? "UNCOLLECTED",
                             candidate.Disposition, structuralReady,
-                            structuralReady && costComplete && expectedValueReady,
+                            gateApproved,
                             costComplete, liquiditySource?.IsModeled == true,
                             liquiditySource?.SourceName ?? "MISSING",
                             candidate.Evidence?.ExpectedNetR,
                             reasons, contributions, Forecast: candidate.Evidence?.Forecast,
                             RegimeAssessment: candidate.Evidence?.RegimeAssessment,
                             ForecastInput: forecastInputs.GetValueOrDefault(candidate.EventId));
+                        candidateDiagnostics[candidate.EventId] = ReconcileDiagnostic(
+                            candidateDiagnostics.GetValueOrDefault(candidate.EventId), diagnostic);
                     }
                     var preferred = CandidateSelection.SelectPreferred(candidates);
+                    if (preferred is not null)
+                        UpdateDiagnostic(candidateDiagnostics, preferred.EventId, row => row with { Preferred = true });
 
                     if (!exitedThisPoll && pending is null && preferred is { Disposition: CandidateDisposition.Ready, Plan: not null }
                         && ShouldQueuePending(pendingEventIds, new PendingEntry(preferred.EventId, symbol,
@@ -209,6 +244,8 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                             (double)preferred.Plan.Stop, (double)preferred.Plan.Target,
                             (double)preferred.Plan.EntryReference, preferred.Plan.PlanId, preferred.Plan.PolicyHash);
                         pending = new PendingReplayEntry(pendingEntry, context, preferred);
+                        UpdateDiagnostic(candidateDiagnostics, preferred.EventId,
+                            row => row with { PendingQueued = true, ExecutionStopReason = null });
                     }
                     latch = StructuralLifecycle.Commit(latch, cutoff, candidates, evaluated.RetiredZoneIds,
                         StructuralLifecycle.EventSignature(candidates,
@@ -244,7 +281,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
     public static ReplayGateSummary SummarizeGates(IEnumerable<ReplayCandidateDiagnostic> diagnostics)
     {
         var rows = diagnostics.ToArray();
-        var rejected = rows.Where(x => !x.FinalApproved).ToArray();
+        var rejected = rows.Where(x => !Approved(x)).ToArray();
         var failures = rejected.ToDictionary(x => x.EventId, FailureReasons, StringComparer.Ordinal);
         var exclusive = rejected.Select(x => failures[x.EventId][0]).GroupBy(x => x, StringComparer.Ordinal)
             .ToDictionary(x => x.Key, x => x.Count(), StringComparer.Ordinal);
@@ -254,10 +291,43 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
             .OrderBy(GateOrder).ThenBy(x => x, StringComparer.Ordinal)
             .Select(x => new ReplayGateCount(x, overlapping.GetValueOrDefault(x), exclusive.GetValueOrDefault(x)))
             .ToImmutableArray();
-        return new ReplayGateSummary(rows.Length, rows.Count(x => x.StructuralReady),
-            rows.Count(x => x.FinalApproved), rejected.Length,
+        var funnel = new ReplayExecutionFunnel(rows.Length, rows.Count(x => x.Preferred),
+            rows.Count(x => x.PendingQueued), rows.Count(x => x.Confirmed), rows.Count(x => x.Filled),
+            rows.All(x => !x.Filled || x.Confirmed) && rows.All(x => !x.Confirmed || x.PendingQueued) &&
+            rows.All(x => !x.PendingQueued || x.Preferred), "distinct-entry-event-id",
+            "candidate→preferred→pending-queued→confirmation-accepted→trade-filled");
+        var approved = rows.Count(Approved);
+        return new ReplayGateSummary(rows.Length, rows.Count(x => x.StructuralReady), approved, rejected.Length,
             rows.Count(x => x.Side == TradeSide.Long), rows.Count(x => x.Side == TradeSide.Short),
-            overlapping.Values.Sum() > rejected.Length, GateAttributionOrder, gates);
+            overlapping.Values.Sum() > rejected.Length, GateAttributionOrder, gates)
+            { ExecutionFunnel = funnel };
+    }
+
+    public static ReplayCandidateDiagnostic ReconcileDiagnostic(ReplayCandidateDiagnostic? previous,
+        ReplayCandidateDiagnostic current)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        if (previous is null) return current;
+        if (!string.Equals(previous.EventId, current.EventId, StringComparison.Ordinal))
+            throw new ArgumentException("같은 EventId의 진단만 누적할 수 있습니다.", nameof(previous));
+        return current with
+        {
+            StructuralReady = previous.StructuralReady || current.StructuralReady,
+            FinalApproved = previous.FinalApproved || current.FinalApproved,
+            Preferred = previous.Preferred || current.Preferred,
+            PendingQueued = previous.PendingQueued || current.PendingQueued,
+            Confirmed = previous.Confirmed || current.Confirmed,
+            Filled = previous.Filled || current.Filled,
+            ExecutionStopReason = current.ExecutionStopReason ?? previous.ExecutionStopReason
+        };
+    }
+
+    static bool Approved(ReplayCandidateDiagnostic row) => row.FinalApproved;
+
+    static void UpdateDiagnostic(IDictionary<string, ReplayCandidateDiagnostic> diagnostics, string eventId,
+        Func<ReplayCandidateDiagnostic, ReplayCandidateDiagnostic> update)
+    {
+        if (diagnostics.TryGetValue(eventId, out var row)) diagnostics[eventId] = update(row);
     }
 
     static ImmutableArray<string> FailureReasons(ReplayCandidateDiagnostic row)
