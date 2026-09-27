@@ -116,4 +116,37 @@ public sealed class NewsScoreCoreBridgeTests
         Assert.Equal(0, snapshot.IncludedCount);
         Assert.Contains(snapshot.ExcludedEvidence, x => x.Reason == "impact_direction_unknown");
     }
+
+    [Fact]
+    public void ScoreCore_연결은_간접과_미해결_관계를_직접으로_승격하지_않는다()
+    {
+        var now = new DateTimeOffset(2026, 9, 27, 1, 0, 0, TimeSpan.Zero);
+        var relevance = Assessment([
+            new("NVDA", "company", "indirect", ""),
+            new("SOXX", "sector", "unresolved", "관계 미확인")]);
+
+        var snapshots = NewsScoreCoreBridge.Snapshots(Record(now, relevance), now);
+
+        Assert.Contains(snapshots.Single(x => x.TargetId == "NVDA").ExcludedEvidence,
+            x => x.Reason == "missing_relation_evidence");
+        Assert.Contains(snapshots.Single(x => x.TargetId == "SOXX").ExcludedEvidence,
+            x => x.Reason == "unresolved_target");
+    }
+
+    [Fact]
+    public void ScoreCore_연결은_알수없는_대상종류를_market으로_강등하지_않는다()
+    {
+        var now = new DateTimeOffset(2026, 9, 27, 1, 0, 0, TimeSpan.Zero);
+        var relevance = Assessment([new("MYSTERY", "unknown-kind", "direct", "본문")]);
+
+        Assert.Empty(NewsScoreCoreBridge.Snapshots(Record(now, relevance), now));
+    }
+
+    static NewsRelevanceAssessment Assessment(IReadOnlyList<NewsEventTarget> targets) => new(
+        NewsRelevancePolicy.CurrentVersion, NewsRelevanceDecisions.Include, "company_contract", "actor", "signs",
+        targets, "actor signs a contract", "company_event_confirmed");
+
+    static NewsRecord Record(DateTimeOffset now, NewsRelevanceAssessment relevance) => new(
+        "one", "title", "SBH", now.AddMinutes(-1), [], [], ["NVDA"], NewsSentiments.Positive, 4,
+        "감성 긍정", "model", 1, now, Relevance: relevance);
 }
