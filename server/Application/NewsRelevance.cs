@@ -19,7 +19,8 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
     static readonly Regex MacroTarget = new(@"\b(Trump|China|Chinese|Iran|Iranian|Strait of Hormuz|Hormuz|oil|crude|Treasur(?:y|ies)|bond|yield|interest rates?|Federal Reserve|Fed|Saudi(?: Arabia)?|Houthi(?:s)?|Yemen|CPI|PPI|payrolls?|jobless claims?|durable goods|PMI|GDP)\b|트럼프|중국|이란|호르무즈|유가|원유|국채|채권금리|채권|금리|연준|사우디(?:아라비아)?|후티|예멘|미사일|공습|소비자물가|생산자물가|고용|실업수당|내구재|구매관리자지수|국내총생산", Options);
     static readonly Regex MacroAction = new(@"\b(announce[ds]?|impose[ds]?|raise[ds]?|cut[s]?|hold[s]?|increase[ds]?|decrease[ds]?|rise[sn]?|fall[s]?|surge[ds]?|drop(?:ped|s)?|attack(?:ed|s)?|strike[sd]?|airstrike[sd]?|launch(?:ed|es)?|block(?:ed|s)?|close[sd]?|disrupt(?:ed|s)?|resume[ds]?|release[sd]?|report(?:ed|s)?|beat[s]?|miss(?:ed|es)?|expand(?:ed|s)?|restrict(?:ed|s)?)\b|발표|부과|인상|인하|동결|상승|하락|급등|급락|공격|타격|공습|발사|봉쇄|폐쇄|차질|재개|확대|축소|제한|상회|하회", Options);
     static readonly Regex CompanyAction = new(@"\b(sign(?:ed|s)?|win[s]?|award(?:ed|s)?|cancel(?:led|s)?|terminate[ds]?|renew(?:ed|s)?|price\s+(?:increase|cut)|raise[sd]?\s+prices?|cut[s]?\s+prices?|earnings|revenue|profit|guidance|forecast|invest(?:s|ed|ment)?|capex|launch(?:ed|es)?|recall(?:ed|s)?|discontinue[ds]?|demand|supply|shortage|cyberattack|breach(?:ed)?|vulnerability|regulat(?:or|ion)|lawsuit|settle[ds]?|fine[sd]?|sanction(?:ed|s)?|offering|convertible|capital raise|buyback|dividend|acquire[sd]?|merger)\b|계약|수주|해지|갱신|가격\s*(?:인상|인하)|실적|매출|이익|가이던스|전망|투자|설비투자|출시|리콜|단종|수요|공급|부족|사이버(?:공격|보안)|침해|취약점|규제|소송|벌금|제재|증자|전환사채|자본조달|자사주|배당|인수|합병", Options);
-    static readonly Regex Company = new(@"\b[A-Z][A-Za-z&.-]+(?:\s+[A-Z][A-Za-z&.-]+){0,3}\s+(?:Inc\.?|Corp\.?|Corporation|Ltd\.?|PLC|Holdings|Systems|Technologies|Electronics|Group)\b|(?:주식회사|㈜)\s*[가-힣A-Za-z0-9]+|[가-힣A-Za-z0-9]+\s*(?:그룹|전자|반도체|에너지|은행|증권|바이오)", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    static readonly Regex Company = new(@"\b[A-Z][A-Za-z&.-]+(?:\s+[A-Z][A-Za-z&.-]+){0,3}\s+(?:Inc\.?|Corp\.?|Corporation|Ltd\.?|PLC|Holdings|Systems|Technologies|Electronics|Group)\b|(?:주식회사|㈜)\s*[가-힣A-Za-z0-9]+", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    static readonly Regex Institution = new(@"\b(?:Federal Reserve|Fed|SEC|NATO|OPEC)\b|한국은행|금융위원회|금융감독원", Options);
     static readonly Regex AmbiguousWord = new(@"\b(rate|strike|market|bond)\b|금리|파업|시장|채권", Options);
 
     public string Version => CurrentVersion;
@@ -29,27 +30,29 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
         var text = Normalize(string.Join(' ', item.Title, item.Summary, item.Content));
         if (text.Length == 0) return Result(NewsRelevanceDecisions.Exclude, "unknown", "", "", [], "", "empty_text");
 
-        var macroTarget = MacroTarget.Match(text);
-        var macroAction = MacroAction.Match(text);
+        var macroEvent = MacroEvent(text);
+        var macroTarget = macroEvent?.Target ?? MacroTarget.Match(text);
+        var macroAction = macroEvent?.Action ?? MacroAction.Match(text);
         var companyAction = CompanyAction.Match(text);
         var explicitTargets = Targets(item, text);
         var nonMarket = NonMarket.IsMatch(text);
         var strongFinancialPath = StrongFinancialPath.IsMatch(text);
 
-        if (nonMarket && !strongFinancialPath)
+        if (nonMarket && (!strongFinancialPath || macroEvent is null))
             return Result(NewsRelevanceDecisions.Exclude, "non_market", "", "", [], Evidence(text), "non_market_context");
 
-        if (macroTarget.Success && macroAction.Success)
+        if (macroEvent is not null)
         {
             var kind = MacroKind(macroTarget.Value, text);
-            var targets = explicitTargets.Count > 0 ? explicitTargets : MacroTargets(text, macroTarget.Value);
+            var targets = MacroTargets(text, macroTarget.Value);
             return Result(NewsRelevanceDecisions.Include, kind, Actor(text, macroTarget.Value), macroAction.Value,
                 targets, Span(text, macroTarget.Index, macroAction.Index), "macro_event_confirmed");
         }
 
-        if (companyAction.Success && explicitTargets.Count > 0)
-            return Result(NewsRelevanceDecisions.Include, CompanyKind(companyAction.Value), explicitTargets[0].Id,
-                companyAction.Value, explicitTargets, Span(text, companyAction.Index, companyAction.Index),
+        var companyTargets = CompanyTargetsNearAction(item, text, companyAction);
+        if (companyAction.Success && companyTargets.Count > 0)
+            return Result(NewsRelevanceDecisions.Include, CompanyKind(companyAction.Value), companyTargets[0].Id,
+                companyAction.Value, companyTargets, Span(text, companyAction.Index, companyAction.Index),
                 "company_event_confirmed");
 
         if (macroTarget.Success || companyAction.Success || explicitTargets.Count > 0 || AmbiguousWord.IsMatch(text))
@@ -83,6 +86,46 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
         return targets.DistinctBy(x => x.Id, StringComparer.OrdinalIgnoreCase).Take(8).ToList();
     }
 
+    static IReadOnlyList<NewsEventTarget> CompanyTargetsNearAction(NewsFeedItem item, string text, Match action)
+    {
+        if (!action.Success) return [];
+        var structured = Targets(item with { Title = "", Summary = "", Content = "" }, "");
+        if (structured.Count > 0) return structured;
+
+        var companies = Company.Matches(text).Cast<Match>()
+            .Where(match => match.Index <= action.Index)
+            .OrderBy(match => action.Index - (match.Index + match.Length))
+            .ToArray();
+        if (companies.Length == 0) return [];
+        var nearest = companies[0];
+        if (action.Index - (nearest.Index + nearest.Length) > 80) return [];
+        var value = nearest.Value.Trim();
+        return [new NewsEventTarget(value.ToUpperInvariant(), "company", "direct", value)];
+    }
+
+    static (Match Target, Match Action)? MacroEvent(string text)
+    {
+        var targets = MacroTarget.Matches(text).Cast<Match>().ToArray();
+        var actions = MacroAction.Matches(text).Cast<Match>().ToArray();
+        var forward = targets.SelectMany(target => actions
+                .Where(action => action.Index >= target.Index + target.Length
+                    && action.Index - (target.Index + target.Length) <= 80)
+                .Select(action => (Target: target, Action: action)))
+            .OrderBy(pair => pair.Action.Index - (pair.Target.Index + pair.Target.Length))
+            .FirstOrDefault();
+        if (forward is { Target: not null, Action: not null }) return forward;
+
+        var institution = Institution.Match(text);
+        if (!institution.Success) return null;
+        return actions.Where(action => action.Index >= institution.Index + institution.Length
+                && action.Index - (institution.Index + institution.Length) <= 40)
+            .SelectMany(action => targets.Where(target => target.Index >= action.Index + action.Length
+                    && target.Index - (action.Index + action.Length) <= 80)
+                .Select(target => (Target: target, Action: action)))
+            .OrderBy(pair => pair.Target.Index - (pair.Action.Index + pair.Action.Length))
+            .FirstOrDefault() is { Target: not null, Action: not null } reverse ? reverse : null;
+    }
+
     static IReadOnlyList<NewsEventTarget> MacroTargets(string text, string evidence)
     {
         if (Regex.IsMatch(text, @"\b(oil|crude)\b|유가|원유", Options))
@@ -111,7 +154,8 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
     }
 
     static string Actor(string text, string fallback)
-        => Company.Match(text) is { Success: true } company ? company.Value : fallback;
+        => Institution.Match(text) is { Success: true } institution ? institution.Value
+            : Company.Match(text) is { Success: true } company ? company.Value : fallback;
 
     static string Span(string text, int first, int second)
     {

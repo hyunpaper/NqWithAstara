@@ -76,6 +76,24 @@ public sealed class NewsRelevancePolicyTests
         Assert.Equal("monetary_policy", result.EventKind);
     }
 
+    [Fact]
+    public void 스포츠_동사와_금융_명사를_서로_다른_문맥에서_결합하지_않는다()
+    {
+        var result = _policy.Evaluate(Item("Football players strike as bond investors watch the match"));
+
+        Assert.Equal(NewsRelevanceDecisions.Exclude, result.Decision);
+        Assert.Equal("non_market_context", result.Reason);
+    }
+
+    [Fact]
+    public void 스포츠_기사안의_독립된_금융절은_포함한다()
+    {
+        var result = _policy.Evaluate(Item("World Cup match ends; Federal Reserve raises interest rates, stocks fall"));
+
+        Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
+        Assert.Equal("monetary_policy", result.EventKind);
+    }
+
     [Theory]
     [InlineData("Market reaction remains unclear")]
     [InlineData("Fed official gives a general interview")]
@@ -110,6 +128,29 @@ public sealed class NewsRelevancePolicyTests
         var target = Assert.Single(result.Targets);
         Assert.Equal(targetId, target.Id);
         Assert.Equal(targetKind, target.Kind);
+    }
+
+    [Fact]
+    public void 한국은행은_회사대상이_아니며_통화정책_시장대상으로_남긴다()
+    {
+        var result = _policy.Evaluate(Item("한국은행 금리 인상 발표"));
+
+        Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
+        Assert.Equal("한국은행", result.Actor);
+        var target = Assert.Single(result.Targets);
+        Assert.Equal(NewsSymbols.Market, target.Id);
+        Assert.Equal("market", target.Kind);
+    }
+
+    [Fact]
+    public void 회사사건은_사건동사에_가까운_영향대상만_direct로_남긴다()
+    {
+        var result = _policy.Evaluate(Item("NVIDIA Corp comments as Tesla Inc recalls vehicles"));
+
+        Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
+        var target = Assert.Single(result.Targets);
+        Assert.Equal("TESLA INC", target.Id);
+        Assert.Equal("direct", target.Relation);
     }
 
     static NewsFeedItem Item(string title) => new("id", title, "", "SBH", DateTimeOffset.UtcNow, []);
