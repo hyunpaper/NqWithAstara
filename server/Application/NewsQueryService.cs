@@ -69,6 +69,8 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         providers = state.Providers,
         queue = state.Queue,
         translationQueue = translations?.QueueDepth ?? 0,
+        relevanceAdjudication = new { status = state.RelevanceAdjudicationStatus,
+            reason = state.RelevanceAdjudicationReason, queue = state.RelevanceAdjudicationQueue },
         dropped = state.Dropped,
         seen = state.Seen,
         classified = state.Classified,

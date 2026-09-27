@@ -45,7 +45,8 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
         {
             var kind = MacroKind(macroTarget.Value, text);
             var targets = MacroTargets(text, macroTarget.Value);
-            return Result(NewsRelevanceDecisions.Include, kind, Actor(text, macroTarget.Value), macroAction.Value,
+            return Result(NewsRelevanceDecisions.Include, kind, ActorInSpan(text, macroEvent.Value.ClauseStart,
+                    macroEvent.Value.ClauseLength, macroTarget.Value), macroAction.Value,
                 targets, Span(text, macroTarget.Index, macroAction.Index), "macro_event_confirmed");
         }
 
@@ -71,11 +72,11 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
     {
         var targets = new List<NewsEventTarget>();
         foreach (var ticker in item.Tickers.Where(x => !string.IsNullOrWhiteSpace(x)))
-            targets.Add(new NewsEventTarget(ticker.Trim().ToUpperInvariant(), "company", "direct", ticker.Trim()));
+            targets.Add(new NewsEventTarget(ticker.Trim().ToUpperInvariant(), "company", "unresolved", "provider:ticker:" + ticker.Trim()));
         foreach (var entity in item.Entities ?? [])
         {
             var id = string.IsNullOrWhiteSpace(entity.Symbol) ? entity.Name : entity.Symbol.ToUpperInvariant();
-            if (!string.IsNullOrWhiteSpace(id)) targets.Add(new NewsEventTarget(id, "company", "direct", entity.Name));
+            if (!string.IsNullOrWhiteSpace(id)) targets.Add(new NewsEventTarget(id, "company", "unresolved", "provider:entity:" + entity.Name));
         }
         foreach (Match match in Company.Matches(text))
         {
@@ -90,7 +91,9 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
     {
         if (!action.Success) return [];
         var structured = Targets(item with { Title = "", Summary = "", Content = "" }, "");
-        if (structured.Count > 0) return structured;
+        var evidenced = structured.Where(target => StructuredTargetBeforeAction(item, target, text, action))
+            .Select(target => target with { Relation = "direct", Evidence = "text:" + target.Id }).ToArray();
+        if (evidenced.Length > 0) return evidenced;
 
         var companies = Company.Matches(text).Cast<Match>()
             .Where(match => match.Index <= action.Index)
@@ -103,28 +106,43 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
         return [new NewsEventTarget(value.ToUpperInvariant(), "company", "direct", value)];
     }
 
-    static (Match Target, Match Action)? MacroEvent(string text)
+    static bool StructuredTargetBeforeAction(NewsFeedItem item, NewsEventTarget target, string text, Match action)
     {
-        var targets = MacroTarget.Matches(text).Cast<Match>().ToArray();
-        var actions = MacroAction.Matches(text).Cast<Match>().ToArray();
-        var forward = targets.SelectMany(target => actions
-                .Where(action => action.Index >= target.Index + target.Length
-                    && action.Index - (target.Index + target.Length) <= 80)
-                .Select(action => (Target: target, Action: action)))
-            .OrderBy(pair => pair.Action.Index - (pair.Target.Index + pair.Target.Length))
-            .FirstOrDefault();
-        if (forward is { Target: not null, Action: not null }) return forward;
-
-        var institution = Institution.Match(text);
-        if (!institution.Success) return null;
-        return actions.Where(action => action.Index >= institution.Index + institution.Length
-                && action.Index - (institution.Index + institution.Length) <= 40)
-            .SelectMany(action => targets.Where(target => target.Index >= action.Index + action.Length
-                    && target.Index - (action.Index + action.Length) <= 80)
-                .Select(target => (Target: target, Action: action)))
-            .OrderBy(pair => pair.Target.Index - (pair.Action.Index + pair.Action.Length))
-            .FirstOrDefault() is { Target: not null, Action: not null } reverse ? reverse : null;
+        var aliases = item.Entities?.Where(x => string.Equals(x.Symbol, target.Id, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(x.Name, target.Id, StringComparison.OrdinalIgnoreCase))
+            .SelectMany(x => new[] { x.Symbol, x.Name }).Append(target.Id) ?? [target.Id];
+        return aliases.Where(x => !string.IsNullOrWhiteSpace(x)).Any(alias =>
+        {
+            var index = text.LastIndexOf(alias, action.Index, StringComparison.OrdinalIgnoreCase);
+            return index >= 0 && action.Index - (index + alias.Length) <= 80 && SameClause(text, index, action.Index);
+        });
     }
+
+    static (Match Target, Match Action, int ClauseStart, int ClauseLength)? MacroEvent(string text)
+    {
+        foreach (Match clause in Regex.Matches(text, @"[^.;!?。！？]+", Options))
+        {
+            var targets = MacroTarget.Matches(clause.Value).Cast<Match>().ToArray();
+            var actions = MacroAction.Matches(clause.Value).Cast<Match>().ToArray();
+            var pair = targets.SelectMany(target => actions.Select(action => (Target: target, Action: action)))
+                .Where(x => Math.Abs(x.Action.Index - x.Target.Index) <= 80 && Compatible(x.Target.Value, x.Action.Value))
+                .OrderBy(x => Math.Abs(x.Action.Index - x.Target.Index)).FirstOrDefault();
+            if (pair.Target is not null && pair.Action is not null)
+                return (Offset(pair.Target, clause.Index), Offset(pair.Action, clause.Index), clause.Index, clause.Length);
+        }
+        return null;
+    }
+
+    static bool Compatible(string target, string action)
+    {
+        var geopoliticalAction = Regex.IsMatch(action, @"attack|strike|airstrike|launch|block|close|disrupt|공격|타격|공습|발사|봉쇄|폐쇄|차질", Options);
+        var geopoliticalTarget = Regex.IsMatch(target, @"Iran|Hormuz|Saudi|Houthi|Yemen|oil|crude|이란|호르무즈|사우디|후티|예멘|유가|원유", Options);
+        return !geopoliticalAction || geopoliticalTarget;
+    }
+
+    static Match Offset(Match match, int offset) => Regex.Match(new string(' ', offset) + match.Value, Regex.Escape(match.Value), Options);
+    static bool SameClause(string text, int first, int second)
+        => !text[Math.Min(first, second)..Math.Max(first, second)].Any(x => x is '.' or ';' or '!' or '?' or '。' or '！' or '？');
 
     static IReadOnlyList<NewsEventTarget> MacroTargets(string text, string evidence)
     {
@@ -156,6 +174,13 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
     static string Actor(string text, string fallback)
         => Institution.Match(text) is { Success: true } institution ? institution.Value
             : Company.Match(text) is { Success: true } company ? company.Value : fallback;
+
+    static string ActorInSpan(string text, int start, int length, string fallback)
+    {
+        var clause = text.Substring(start, length);
+        return Institution.Match(clause) is { Success: true } institution ? institution.Value
+            : Company.Match(clause) is { Success: true } company ? company.Value : fallback;
+    }
 
     static string Span(string text, int first, int second)
     {

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Threading.Channels;
 using Astra.Server.Domain;
 using Astra.Server.Domain.News;
 
@@ -34,7 +35,8 @@ public sealed class NewsFeedService(
     NewsRuntimeState state,
     IMonitorDiagnostics diagnostics,
     TimeProvider clock,
-    NewsTranslationQueue? translationQueue = null)
+    NewsTranslationQueue? translationQueue = null,
+    INewsRelevanceAdjudicator? relevanceAdjudicator = null)
 {
     public const string StateFile = "state.json";
 
@@ -47,6 +49,9 @@ public sealed class NewsFeedService(
     readonly Queue<DateTimeOffset> _classifications = new();
     readonly Queue<DateTimeOffset> _dailyFeedRequests = new();
     readonly Queue<DateTimeOffset> _minuteFeedRequests = new();
+    readonly Channel<string> _relevanceReviews = Channel.CreateBounded<string>(new BoundedChannelOptions(
+        Math.Clamp(options.SbhRelevanceAdjudicationQueueCapacity, 1, 500))
+    { FullMode = BoundedChannelFullMode.Wait, SingleReader = true, SingleWriter = false });
 
     /// <summary>대표 기사 id -> 같은 사건 그룹의 나머지 기사(#171). 대표가 분류되면 함께 저장한다.</summary>
     readonly Dictionary<string, List<QueuedArticle>> _pendingFollowers = new(StringComparer.Ordinal);
@@ -207,6 +212,7 @@ public sealed class NewsFeedService(
         if (budget <= 0) return new CollectionResult(budget, "quota_wait", false, 0, null, []);
         var watchlist = await WatchlistAsync(ct);
         var known = await LoadStateAsync(ct);
+        QueuePendingReviews(known?.Inbox ?? []);
         QueuePendingInbox((known?.Inbox ?? []).Where(x => string.IsNullOrWhiteSpace(x.Item.Provider)
             || string.Equals(x.Item.Provider, feed.Name, StringComparison.OrdinalIgnoreCase)).ToArray(), watchlist);
 
@@ -279,8 +285,11 @@ public sealed class NewsFeedService(
                 if (alreadySeen) continue;
                 observedThisPage++;
                 var eligible = item.Relevance?.Included ?? true;
-                var entry = new NewsInboxEntry(keys, item, requestedAt, known is null || providerBaseline || !eligible);
+                var pendingReview = IsSbhReview(item);
+                var entry = new NewsInboxEntry(keys, item, requestedAt,
+                    known is null || providerBaseline || (!eligible && !pendingReview));
                 inbox.Add(entry);
+                if (pendingReview) TryQueueReview(item.Id);
                 foreach (var key in keys) seenKeys.Add(key);
                 if (known is not null && eligible)
                 {
@@ -327,12 +336,72 @@ public sealed class NewsFeedService(
             latestPublishedAt, providerSummary);
     }
 
+    void QueuePendingReviews(IReadOnlyList<NewsInboxEntry> inbox)
+    {
+        if (!options.SbhRelevanceAdjudicationEnabled || relevanceAdjudicator is null
+            || !string.Equals(feed.Name, NewsFeedProviders.SbhNews, StringComparison.OrdinalIgnoreCase)) return;
+        foreach (var entry in inbox.Where(x => !x.Processed && IsSbhReview(x.Item))
+                     .Take(Math.Max(0, options.SbhRelevanceAdjudicationMaxPerPoll)))
+            TryQueueReview(entry.Item.Id);
+    }
+
+    void TryQueueReview(string id)
+    {
+        var queued = _relevanceReviews.Writer.TryWrite(id);
+        state.RelevanceAdjudication(queued ? "pending" : "queue_full",
+            queued ? "awaiting_worker" : "bounded_queue_full", _relevanceReviews.Reader.Count);
+    }
+
+    public async Task RunRelevanceAdjudicationWorkerAsync(CancellationToken ct)
+    {
+        await foreach (var id in _relevanceReviews.Reader.ReadAllAsync(ct))
+        {
+            NewsFeedItem? item;
+            await _gate.WaitAsync(ct);
+            try { item = (await LoadStateAsync(ct))?.Inbox?.FirstOrDefault(x => !x.Processed && x.Item.Id == id)?.Item; }
+            finally { _gate.Release(); }
+            if (item is null || !IsSbhReview(item) || relevanceAdjudicator is null) continue;
+            state.RelevanceAdjudication("running", "ollama_adjudication", _relevanceReviews.Reader.Count);
+            NewsRelevanceAssessment? assessment = null;
+            try
+            {
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeout.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(options.SbhRelevanceAdjudicationTimeoutSeconds, 1, 30)));
+                assessment = await relevanceAdjudicator.AdjudicateAsync(item, timeout.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
+            catch (Exception exception) { diagnostics.PollFailed("sbh-relevance-adjudication", exception); }
+            if (assessment is null)
+            {
+                state.RelevanceAdjudication("pending", "timeout_offline_or_invalid_response", _relevanceReviews.Reader.Count);
+                continue;
+            }
+            await _gate.WaitAsync(ct);
+            try
+            {
+                var known = await LoadStateAsync(ct);
+                if (known?.Inbox is null) continue;
+                var inbox = known.Inbox.Select(x => x.Item.Id == id
+                    ? x with { Item = x.Item with { Relevance = assessment }, Processed = assessment.Decision == NewsRelevanceDecisions.Exclude }
+                    : x).ToArray();
+                await SaveStateAsync(known with { Inbox = inbox }, ct);
+                state.RelevanceAdjudication("completed", assessment.Reason, _relevanceReviews.Reader.Count);
+            }
+            finally { _gate.Release(); }
+        }
+    }
+
+    static bool IsSbhReview(NewsFeedItem item)
+        => string.Equals(item.Provider, NewsFeedProviders.SbhNews, StringComparison.OrdinalIgnoreCase)
+            && item.Relevance?.Decision == NewsRelevanceDecisions.Review;
+
     void QueuePendingInbox(IReadOnlyList<NewsInboxEntry> entries, IReadOnlyList<NewsWatchSymbol> watchlist)
         => QueueInboxArticles(entries.Where(x => !x.Processed).ToArray(), watchlist);
 
     void QueueInboxArticles(IReadOnlyList<NewsInboxEntry> entries, IReadOnlyList<NewsWatchSymbol> watchlist)
     {
-        var queued = entries.OrderBy(x => x.Item.CreatedAt).ThenBy(x => x.Item.Id, StringComparer.Ordinal)
+        var queued = entries.Where(x => !IsSbhReview(x.Item))
+            .OrderBy(x => x.Item.CreatedAt).ThenBy(x => x.Item.Id, StringComparer.Ordinal)
             .Select(x => (Entry: x, Article: new NewsArticle(x.Item.Id, x.Item.Title, x.Item.Summary, x.Item.Source,
                 x.Item.CreatedAt, x.Item.Tickers, x.Item.Headline, x.Item.HeadlineOnly, x.Item.GroupId,
                 x.Item.Entities, x.Item.Content, Url: x.Item.Url, Relevance: x.Item.Relevance))).ToArray();

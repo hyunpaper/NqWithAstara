@@ -107,12 +107,41 @@ public sealed class NewsRelevancePolicyTests
     }
 
     [Fact]
-    public void ticker가_있는_계약은_명시기업대상으로_포함한다()
+    public void 본문에_없는_ticker는_계약의_직접대상으로_승격하지_않는다()
     {
         var result = _policy.Evaluate(Item("Supplier signs multi-year contract") with { Tickers = ["NVDA"] });
 
+        Assert.Equal(NewsRelevanceDecisions.Review, result.Decision);
+        Assert.Equal("unresolved", Assert.Single(result.Targets).Relation);
+    }
+
+    [Fact]
+    public void 본문에서_사건과_연결된_ticker만_직접대상으로_승격한다()
+    {
+        var result = _policy.Evaluate(Item("NVDA signs multi-year contract") with { Tickers = ["NVDA", "AMD"] });
+
         Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
-        Assert.Equal("NVDA", Assert.Single(result.Targets).Id);
+        var target = Assert.Single(result.Targets);
+        Assert.Equal("NVDA", target.Id);
+        Assert.Equal("direct", target.Relation);
+        Assert.StartsWith("text:", target.Evidence);
+    }
+
+    [Fact]
+    public void 스포츠절의_strike와_다음절의_bond를_결합하지_않는다()
+    {
+        var result = _policy.Evaluate(Item("Football players strike during the final; bond investors watch quietly"));
+
+        Assert.Equal(NewsRelevanceDecisions.Exclude, result.Decision);
+    }
+
+    [Fact]
+    public void 선택된_사건절_밖의_기관을_actor로_사용하지_않는다()
+    {
+        var result = _policy.Evaluate(Item("SEC comments on policy. Iran attacks oil supply"));
+
+        Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
+        Assert.Equal("Iran", result.Actor);
     }
 
     [Theory]

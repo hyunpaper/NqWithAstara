@@ -91,6 +91,11 @@ public interface INewsClassifier
     Task<NewsClassificationResult> ClassifyAsync(NewsClassificationRequest request, CancellationToken ct);
 }
 
+public interface INewsRelevanceAdjudicator
+{
+    Task<NewsRelevanceAssessment?> AdjudicateAsync(NewsFeedItem item, CancellationToken ct);
+}
+
 /// <summary>`App_Data/news` 전용 파일 포트(#151 §5). 실거래·v5 관측 파일과 분리한다.</summary>
 public interface INewsStore
 {
