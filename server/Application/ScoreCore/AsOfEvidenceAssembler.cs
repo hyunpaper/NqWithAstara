@@ -10,16 +10,29 @@ public sealed class AsOfEvidenceAssembler(IEnumerable<IScoreEvidenceSource> sour
     public async Task<ScoreEvidenceAssembly> AssembleAsync(ScoreEvidenceRequest request, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(request.TargetId);
-        if (request.Purpose == ScoreCapturePurpose.HistoricalReplay)
-            return Unavailable(request, "historical_point_in_time_unavailable");
-
         var accepted = ImmutableArray.CreateBuilder<EventEvidence>();
         var coverage = ImmutableArray.CreateBuilder<ScoreEvidenceCoverage>();
         var exclusions = ImmutableArray.CreateBuilder<ScoreEvidenceExclusion>();
+        var batches = new List<(IScoreEvidenceSource Source, ScoreEvidenceBatch Batch)>();
 
         foreach (var source in _sources)
         {
             var batch = await source.ReadAsync(request, ct);
+            batches.Add((source, batch));
+        }
+
+        if (request.Purpose == ScoreCapturePurpose.HistoricalReplay &&
+            (batches.Count == 0 || batches.Any(x => !x.Batch.SupportsHistoricalPointInTime)))
+        {
+            foreach (var (source, batch) in batches)
+                coverage.Add(new(source.Name, "unavailable", batch.Evidence.Length, 0,
+                    batch.SupportsHistoricalPointInTime ? batch.Reason : "historical_point_in_time_unavailable"));
+            return new(request, [], coverage.ToImmutable(),
+                [new("capture", "", "historical_point_in_time_unavailable")], "unavailable");
+        }
+
+        foreach (var (source, batch) in batches)
+        {
             var sourceAccepted = 0;
             if (!string.Equals(batch.Source, source.Name, StringComparison.Ordinal))
             {
@@ -66,10 +79,6 @@ public sealed class AsOfEvidenceAssembler(IEnumerable<IScoreEvidenceSource> sour
         if (evidence.PublishedAt > request.AsOf || evidence.CollectedAt > request.AsOf ||
             evidence.ObservedAt > request.AsOf)
             return "future_evidence";
-        if (evidence.ImpactDirection == ImpactDirection.Unknown) return "impact_direction_unknown";
         return null;
     }
-
-    static ScoreEvidenceAssembly Unavailable(ScoreEvidenceRequest request, string reason) => new(
-        request, [], [], [new("capture", "", reason)], "unavailable");
 }

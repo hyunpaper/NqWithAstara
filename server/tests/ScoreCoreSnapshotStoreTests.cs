@@ -57,6 +57,52 @@ public sealed class ScoreCoreSnapshotStoreTests : IDisposable
         Assert.Single(File.ReadAllLines(Directory.GetFiles(_root, "*.jsonl").Single()));
     }
 
+    [Fact]
+    public async Task SeparateStoreInstancesSerializeConcurrentAppends()
+    {
+        var first = new JsonlScoreCoreSnapshotStore(_root);
+        var second = new JsonlScoreCoreSnapshotStore(_root);
+
+        await Task.WhenAll(
+            first.AppendAsync(Snapshot("capture-1", "shadow"), default),
+            second.AppendAsync(Snapshot("capture-2", "shadow"), default));
+
+        var lines = File.ReadAllLines(Directory.GetFiles(_root, "*.jsonl").Single());
+        Assert.Equal(2, lines.Length);
+        Assert.NotNull(await first.FindAsync("capture-1", default));
+        Assert.NotNull(await second.FindAsync("capture-2", default));
+    }
+
+    [Fact]
+    public async Task TruncatedTailIsRemovedBeforeNextAppend()
+    {
+        var store = new JsonlScoreCoreSnapshotStore(_root);
+        await store.AppendAsync(Snapshot("capture-1", "shadow"), default);
+        var path = Directory.GetFiles(_root, "*.jsonl").Single();
+        await File.AppendAllTextAsync(path, "{\"captureId\":\"broken");
+
+        await new JsonlScoreCoreSnapshotStore(_root)
+            .AppendAsync(Snapshot("capture-2", "shadow"), default);
+
+        var lines = File.ReadAllLines(path);
+        Assert.Equal(2, lines.Length);
+        Assert.DoesNotContain(lines, x => x.Contains("broken", StringComparison.Ordinal));
+        Assert.NotNull(await store.FindAsync("capture-2", default));
+    }
+
+    [Fact]
+    public async Task MalformedInteriorRowDoesNotHideLaterSnapshots()
+    {
+        Directory.CreateDirectory(_root);
+        var path = Path.Combine(_root, "2026-09-27.jsonl");
+        await File.WriteAllTextAsync(path, "{invalid}\n");
+        var store = new JsonlScoreCoreSnapshotStore(_root);
+
+        await store.AppendAsync(Snapshot("capture-2", "shadow"), default);
+
+        Assert.NotNull(await store.FindAsync("capture-2", default));
+    }
+
     static ScoreCoreShadowSnapshot Snapshot(string id, string status)
     {
         var asOf = new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.Zero);

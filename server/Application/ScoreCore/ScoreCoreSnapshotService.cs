@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Astra.Server.Domain.ScoreCore;
 
 namespace Astra.Server.Application.ScoreCore;
@@ -19,19 +20,18 @@ public sealed class ScoreCoreSnapshotService(
         var score = ScoreCoreAggregator.Aggregate(request.TargetId, request.TargetKind, request.AsOf,
             assembly.Evidence, _policy);
         var status = assembly.Status == "unavailable" ? "unavailable" : score.Status;
-        var captureId = CaptureId(score, assembly.Coverage, assembly.Exclusions, status);
+        var captureId = CaptureId(score, assembly.Evidence, assembly.Coverage, assembly.Exclusions, status);
         var snapshot = new ScoreCoreShadowSnapshot(captureId, score, assembly.Coverage,
             assembly.Exclusions, status);
         await store.AppendAsync(snapshot, ct);
         return snapshot;
     }
 
-    static string CaptureId(ScoreCoreSnapshot score, ImmutableArray<ScoreEvidenceCoverage> coverage,
+    static string CaptureId(ScoreCoreSnapshot score, ImmutableArray<EventEvidence> evidence,
+        ImmutableArray<ScoreEvidenceCoverage> coverage,
         ImmutableArray<ScoreEvidenceExclusion> exclusions, string status)
     {
-        var canonical = string.Join('|', score.SnapshotId, status,
-            string.Join(';', coverage.Select(x => $"{x.Source}:{x.Status}:{x.ReceivedCount}:{x.AcceptedCount}:{x.Reason}")),
-            string.Join(';', exclusions.Select(x => $"{x.Source}:{x.EvidenceId}:{x.Reason}")));
+        var canonical = JsonSerializer.Serialize(new { score, evidence, coverage, exclusions, status });
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))
             .ToLowerInvariant()[..24];
     }

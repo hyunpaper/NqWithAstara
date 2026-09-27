@@ -26,7 +26,7 @@ public sealed class ScoreCoreApplicationTests
     }
 
     [Fact]
-    public async Task HistoricalReplayWithoutPointInTimeSnapshotIsUnavailableAndDoesNotReadSources()
+    public async Task HistoricalReplayWithoutPointInTimeSnapshotIsUnavailable()
     {
         var calls = 0;
         var source = new StubEvidenceSource("news", request =>
@@ -39,8 +39,43 @@ public sealed class ScoreCoreApplicationTests
             new("NVDA", ImpactTargetKind.Company, AsOf, ScoreCapturePurpose.HistoricalReplay));
 
         Assert.Equal("unavailable", result.Status);
-        Assert.Equal(0, calls);
+        Assert.Equal(1, calls);
         Assert.Contains(result.Exclusions, x => x.Reason == "historical_point_in_time_unavailable");
+    }
+
+    [Fact]
+    public async Task HistoricalReplayWithPointInTimeSourcePreservesEvidence()
+    {
+        var source = new StubEvidenceSource("event-archive", request => new(
+            "event-archive", request.AsOf, true, [Evidence("archived", request.AsOf.AddMinutes(-5))], "ready"));
+
+        var result = await new AsOfEvidenceAssembler([source]).AssembleAsync(
+            new("NVDA", ImpactTargetKind.Company, AsOf, ScoreCapturePurpose.HistoricalReplay));
+
+        Assert.Equal("shadow", result.Status);
+        Assert.Single(result.Evidence);
+        Assert.Equal(1, result.Coverage[0].AcceptedCount);
+    }
+
+    [Fact]
+    public async Task UnknownEvidenceReachesDomainSnapshotAndRemainsExcludedWithCount()
+    {
+        var unknown = Evidence("unknown", AsOf.AddMinutes(-5)) with
+        {
+            ImpactDirection = ImpactDirection.Unknown,
+            Severity = null
+        };
+        var source = new StubEvidenceSource("events", request => new(
+            "events", request.AsOf, false, [unknown], "ready"));
+
+        var snapshot = await new ScoreCoreSnapshotService(new([source]), new MemorySnapshotStore())
+            .CaptureAsync(new("NVDA", ImpactTargetKind.Company, AsOf));
+
+        Assert.Equal(1, snapshot.Score.InputCount);
+        Assert.Equal(1, snapshot.Score.UnknownCount);
+        Assert.Contains(snapshot.Score.ExcludedEvidence, x =>
+            x.EvidenceId == "unknown" && x.Reason == "impact_direction_unknown");
+        Assert.DoesNotContain(snapshot.AssemblyExclusions, x => x.EvidenceId == "unknown");
     }
 
     [Fact]
@@ -75,6 +110,26 @@ public sealed class ScoreCoreApplicationTests
         Assert.Single(store.Values);
         Assert.Equal("shadow", first.Status);
         Assert.Equal(ScoreCalibrationStatus.Uncalibrated, first.Score.CalibrationStatus);
+    }
+
+    [Fact]
+    public async Task ChangedEvidencePayloadProducesDifferentCaptureId()
+    {
+        var quality = 0.8;
+        var source = new StubEvidenceSource("events", request => new(
+            "events", request.AsOf, true,
+            [Evidence("same-id", AsOf.AddMinutes(-5)) with
+            {
+                Quality = new(0.9, quality, 1, 0.7)
+            }], "ready"));
+        var service = new ScoreCoreSnapshotService(new([source]), new MemorySnapshotStore());
+
+        var first = await service.CaptureAsync(new("NVDA", ImpactTargetKind.Company, AsOf));
+        quality = 0.6;
+        var second = await service.CaptureAsync(new("NVDA", ImpactTargetKind.Company, AsOf));
+
+        Assert.NotEqual(first.CaptureId, second.CaptureId);
+        Assert.Equal(first.Score.SnapshotId, second.Score.SnapshotId);
     }
 
     [Fact]
