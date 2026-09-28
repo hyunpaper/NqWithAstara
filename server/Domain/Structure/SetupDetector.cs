@@ -659,8 +659,8 @@ public static class SetupDetector
 public static class CandidateSelection
 {
     /// <summary>
-    /// 정렬 키는 (종류 문자열 ordinal, EventId ordinal)뿐이다 — 성과 지표를 대표 선택에 쓰지 않는다(§9.4, #209).
-    /// 같은 중복 방지 키에서는 실제 신규 거래 후보를 1개만 남긴다.
+    /// 같은 중복 방지 키에서는 1개만 남긴다. Range 롱 복수 후보의 VWAP 위치 외에는
+    /// (종류 문자열 ordinal, EventId ordinal) 순서를 유지한다(#245).
     /// </summary>
     public static EntryCandidate? SelectPreferred(IEnumerable<EntryCandidate> candidates)
     {
@@ -672,8 +672,23 @@ public static class CandidateSelection
             .GroupBy(x => x.DuplicateGuardKey, StringComparer.Ordinal)
             .Select(group => Ordered(group).First());
 
-        return Ordered(perKey).First();
+        var eligible = perKey.ToArray();
+        if (eligible.Length >= 2 && eligible.All(IsRangeLongWithFiniteVwap))
+        {
+            var atOrBelow = eligible.Where(x => x.Evidence!.VwapDistanceAtr <= 0).ToArray();
+            if (atOrBelow.Length > 0)
+                return atOrBelow.OrderBy(x => Math.Abs(x.Evidence!.VwapDistanceAtr!.Value))
+                    .ThenBy(x => x.KindName, StringComparer.Ordinal)
+                    .ThenBy(x => x.EventId, StringComparer.Ordinal).First();
+        }
+
+        return Ordered(eligible).First();
     }
+
+    static bool IsRangeLongWithFiniteVwap(EntryCandidate candidate) =>
+        candidate.Side == TradeSide.Long &&
+        candidate.Regime?.Direction == StrategyDirection.Range &&
+        candidate.Evidence?.VwapDistanceAtr is { } distance && double.IsFinite(distance);
 
     static IOrderedEnumerable<EntryCandidate> Ordered(IEnumerable<EntryCandidate> candidates) =>
         candidates

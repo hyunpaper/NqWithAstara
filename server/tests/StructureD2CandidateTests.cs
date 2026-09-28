@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Astra.Server;
 using Astra.Server.Domain.Structure;
 using Xunit;
 
@@ -722,6 +723,61 @@ public sealed class StructureD2CandidateTests
     }
 
     [Fact]
+    public void Range롱_복수후보는_VWAP이하중_가장가까운_후보를_우선한다()
+    {
+        var below = WithContext(Candidate("PULLBACK", "zone-p", 60, 2m, "below"),
+            StrategyDirection.Range, TradeSide.Long, 0);
+        var farBelow = WithContext(Candidate("REBOUND", "zone-r", 60, 2m, "far"),
+            StrategyDirection.Range, TradeSide.Long, -.6);
+        var above = WithContext(Candidate("BREAKOUT", "zone-b", 60, 2m, "above"),
+            StrategyDirection.Range, TradeSide.Long, .01);
+
+        Assert.Equal(below.EventId, CandidateSelection.SelectPreferred([above, farBelow, below])!.EventId);
+    }
+
+    [Fact]
+    public void Range롱_VWAP거리동률은_기존_ordinal순서로_해소한다()
+    {
+        var breakout = WithContext(Candidate("BREAKOUT", "zone-b", 60, 2m, "same"),
+            StrategyDirection.Range, TradeSide.Long, -.2);
+        var pullback = WithContext(Candidate("PULLBACK", "zone-p", 60, 2m, "same"),
+            StrategyDirection.Range, TradeSide.Long, -.2);
+
+        Assert.Equal(breakout.EventId, CandidateSelection.SelectPreferred([pullback, breakout])!.EventId);
+        Assert.Equal(breakout.EventId, CandidateSelection.SelectPreferred([breakout, pullback])!.EventId);
+    }
+
+    [Fact]
+    public void VWAP_tieBreak비대상은_기존_ordinal선택을_보존한다()
+    {
+        var ordinal = WithContext(Candidate("BREAKOUT", "zone-b", 60, 2m, "ordinal"),
+            StrategyDirection.Range, TradeSide.Long, .5);
+        var favored = WithContext(Candidate("PULLBACK", "zone-p", 60, 2m, "favored"),
+            StrategyDirection.Range, TradeSide.Long, -.1);
+
+        Assert.Equal(ordinal.EventId, CandidateSelection.SelectPreferred([ordinal])!.EventId);
+        Assert.Equal(ordinal.EventId, CandidateSelection.SelectPreferred([ordinal, favored with { Evidence = null }])!.EventId);
+        Assert.Equal(ordinal.EventId, CandidateSelection.SelectPreferred([
+            ordinal with { Regime = new StrategyRegime(StrategyDirection.TrendUp, VolatilityBand.Normal) },
+            favored with { Regime = new StrategyRegime(StrategyDirection.TrendUp, VolatilityBand.Normal) }
+        ])!.EventId);
+        Assert.Equal(ordinal.EventId, CandidateSelection.SelectPreferred([
+            ordinal, favored with { Side = TradeSide.Short }
+        ])!.EventId);
+    }
+
+    [Fact]
+    public void Range롱_VWAP우선에서도_Ready가아닌_후보는_선택하지않는다()
+    {
+        var ready = WithContext(Candidate("PULLBACK", "zone-p", 60, 2m, "ready"),
+            StrategyDirection.Range, TradeSide.Long, .5);
+        var rejected = WithContext(Candidate("BREAKOUT", "zone-b", 60, 2m, "rejected"),
+            StrategyDirection.Range, TradeSide.Long, 0) with { Disposition = CandidateDisposition.Rejected };
+
+        Assert.Equal(ready.EventId, CandidateSelection.SelectPreferred([rejected, ready])!.EventId);
+    }
+
+    [Fact]
     public void OnlyOneCandidatePerDuplicateGuardKeySurvivesSelection()
     {
         // 같은 트리거가 여러 저항을 동시에 넘어도 이 키당 신규 거래 후보는 1개다(§8).
@@ -762,6 +818,16 @@ public sealed class StructureD2CandidateTests
             Fx.At(TriggerMinute), Fx.At(TriggerMinute + 1), Fx.At(TriggerMinute), Fx.At(TriggerMinute + 1),
             Fx.At(TriggerMinute + 6), CandidateDisposition.Ready, 100m, 99.15m, quality, qualityResult, null,
             planning, ImmutableArray<string>.Empty, ImmutableArray<string>.Empty, false, false, null);
+    }
+
+    static EntryCandidate WithContext(EntryCandidate candidate, StrategyDirection direction, TradeSide side,
+        double? vwapDistance)
+    {
+        var regime = new StrategyRegime(direction, VolatilityBand.Normal);
+        var evidence = new EntryEvidence(candidate.TriggerBarStart, candidate.TriggerConfirmedAt, side, regime,
+            null, null, candidate.Planning.NetR, null, null, vwapDistance, null, TimeSpan.Zero,
+            true, true, [], []);
+        return candidate with { Side = side, Regime = regime, Evidence = evidence };
     }
 
     // ── D1 파이프라인과의 결합: 트리거 봉 격리와 예시 E ──
