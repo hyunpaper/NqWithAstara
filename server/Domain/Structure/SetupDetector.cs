@@ -121,6 +121,7 @@ public static class SetupDetector
     /// <summary>REBOUND가 극단적 하락 추세에서 롱으로 승격되는 것을 막는 거절 사유(§I-1, #208).</summary>
     public const string CodeTrendDeeplyOpposesRebound = "TREND_DEEPLY_OPPOSES_REBOUND";
     public const string CodeTrendDeeplyOpposesShortRebound = "TREND_DEEPLY_OPPOSES_SHORT_REBOUND";
+    public const string CodeReboundLongAboveVwap = "REBOUND_LONG_ABOVE_VWAP";
     public const string CodeTransitionPullbackBlocked = "TRANSITION_PULLBACK_BLOCKED";
     public const string CodeTransitionBreakoutBlocked = "TRANSITION_BREAKOUT_BLOCKED";
 
@@ -510,6 +511,13 @@ public static class SetupDetector
         }
         foreach (var reason in quality.Reasons) rejections.Add(reason);
 
+        var vwapDistance = request.Trend.Vwap is { } vwap && request.Trend.Atr1m is > 0 &&
+                           double.IsFinite(vwap) && double.IsFinite(request.Trend.Atr1m.Value)
+            ? (side == TradeSide.Long ? (double)trigger.Close - vwap : vwap - (double)trigger.Close)
+              / request.Trend.Atr1m.Value : (double?)null;
+        if (RejectsReboundLongAboveVwap(hypothesis.Kind, side, vwapDistance))
+            rejections.Add(CodeReboundLongAboveVwap);
+
         if (request.Trend.State == TrendState.Transition && hypothesis.Kind == SetupKind.Pullback &&
             !policy.AllowTransitionPullback)
             rejections.Add(CodeTransitionPullbackBlocked);
@@ -595,10 +603,6 @@ public static class SetupDetector
 
         var trendAlignment = request.Trend.SignedTrend is { } signed && double.IsFinite(signed)
             ? Math.Clamp((side == TradeSide.Long ? signed : -signed) / 100d, -1d, 1d) : (double?)null;
-        var vwapDistance = request.Trend.Vwap is { } vwap && request.Trend.Atr1m is > 0 &&
-                           double.IsFinite(vwap) && double.IsFinite(request.Trend.Atr1m.Value)
-            ? (side == TradeSide.Long ? (double)trigger.Close - vwap : vwap - (double)trigger.Close)
-              / request.Trend.Atr1m.Value : (double?)null;
         var distance = planning.Stop is { } stopDistance && request.Atr1mAtStructureCutoff is > 0
             ? (double)Math.Abs(entryReference - stopDistance) / request.Atr1mAtStructureCutoff.Value : (double?)null;
         var planCosts = planning.Plan?.Costs;
@@ -641,6 +645,10 @@ public static class SetupDetector
 
     /// <summary>추세 정렬을 전제로 하는 종류. REBOUND는 제외다(§8/§9.4).</summary>
     static bool RequiresTrendAlignment(SetupKind kind) => kind is SetupKind.Pullback or SetupKind.Breakout;
+
+    public static bool RejectsReboundLongAboveVwap(SetupKind kind, TradeSide side, double? vwapDistance) =>
+        kind == SetupKind.Rebound && side == TradeSide.Long &&
+        vwapDistance is > 0 and var distance && double.IsFinite(distance);
 
     /// <summary>§8 stable EventId=(symbol,sessionStart,kind,zoneId,triggerBarStart).</summary>
     public static string EventId(string symbol, DateTimeOffset sessionStart, string kindName, string zoneId,

@@ -507,6 +507,79 @@ public sealed class StructureD2CandidateTests
     }
 
     [Fact]
+    public void ReboundLongAboveVwapIsRejectedByTheSharedCandidatePolicy()
+    {
+        var trend = D2.Trend(TrendState.Range, -20) with { Vwap = 99.70, Atr1m = .20 };
+
+        var result = SetupDetector.Detect(Request(PullbackBars(), PullbackZones(), PullbackEpisodes(), trend), P);
+        var candidate = result.Candidates.Single(x => x.Kind == SetupKind.Rebound);
+
+        Assert.Equal(.5, candidate.Evidence!.VwapDistanceAtr!.Value, 10);
+        Assert.Equal(CandidateDisposition.Rejected, candidate.Disposition);
+        Assert.Contains(SetupDetector.CodeReboundLongAboveVwap, candidate.RejectionCodes);
+        Assert.Null(candidate.Plan);
+        Assert.Null(result.PreferredCandidateId);
+    }
+
+    [Theory]
+    [InlineData(99.80, 0)]
+    [InlineData(100.00, -1)]
+    public void ReboundLongAtOrBelowVwapKeepsTheExistingReadyPath(double vwap, double expectedDistance)
+    {
+        var trend = D2.Trend(TrendState.Range, -20) with { Vwap = vwap, Atr1m = .20 };
+
+        var candidate = SetupDetector.Detect(
+            Request(PullbackBars(), PullbackZones(), PullbackEpisodes(), trend), P)
+            .Candidates.Single(x => x.Kind == SetupKind.Rebound);
+
+        Assert.Equal(expectedDistance, candidate.Evidence!.VwapDistanceAtr!.Value, 10);
+        Assert.Equal(CandidateDisposition.Ready, candidate.Disposition);
+        Assert.DoesNotContain(SetupDetector.CodeReboundLongAboveVwap, candidate.RejectionCodes);
+    }
+
+    [Fact]
+    public void ReboundLongWithMissingVwapKeepsTheExistingReadyPath()
+    {
+        var trend = D2.Trend(TrendState.Range, -20) with { Vwap = null };
+
+        var candidate = SetupDetector.Detect(
+            Request(PullbackBars(), PullbackZones(), PullbackEpisodes(), trend), P)
+            .Candidates.Single(x => x.Kind == SetupKind.Rebound);
+
+        Assert.Null(candidate.Evidence!.VwapDistanceAtr);
+        Assert.Equal(CandidateDisposition.Ready, candidate.Disposition);
+        Assert.DoesNotContain(SetupDetector.CodeReboundLongAboveVwap, candidate.RejectionCodes);
+    }
+
+    [Theory]
+    [InlineData(SetupKind.Breakout)]
+    [InlineData(SetupKind.Pullback)]
+    public void AboveVwapPolicyDoesNotRejectOtherSetupKinds(SetupKind kind)
+    {
+        Assert.False(SetupDetector.RejectsReboundLongAboveVwap(kind, TradeSide.Long, .01));
+    }
+
+    [Fact]
+    public void AboveVwapPolicyDoesNotRejectShortRebounds()
+    {
+        Assert.False(SetupDetector.RejectsReboundLongAboveVwap(SetupKind.Rebound, TradeSide.Short, .01));
+    }
+
+    [Fact]
+    public void LiveAndReplayInputsShareTheSameReboundVwapDisposition()
+    {
+        var trend = D2.Trend(TrendState.Range, -20) with { Vwap = 99.70, Atr1m = .20 };
+        var request = Request(PullbackBars(), PullbackZones(), PullbackEpisodes(), trend);
+
+        var live = SetupDetector.Detect(request, P);
+        var replay = SetupDetector.Detect(request, P);
+
+        Assert.Equal(live.Candidates.Select(x => x.Fingerprint()), replay.Candidates.Select(x => x.Fingerprint()));
+        Assert.Equal(CandidateDisposition.Rejected,
+            replay.Candidates.Single(x => x.Kind == SetupKind.Rebound).Disposition);
+    }
+
+    [Fact]
     public void ReboundDoesNotFireWithoutAFailedBreakdownEpisode()
     {
         // episode 저점이 지지 구간 안(99.25)이면 이탈 시도가 없었다 → 눌림이지 반등이 아니다.

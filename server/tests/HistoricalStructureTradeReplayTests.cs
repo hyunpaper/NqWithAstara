@@ -306,6 +306,20 @@ public sealed class HistoricalStructureTradeReplayTests
     }
 
     [Fact]
+    public void ReboundVwap거절은_진단과_실행퍼널에_동일한_사유로_남는다()
+    {
+        var row = Diagnostic("rebound-above-vwap", CandidateDisposition.Rejected,
+            [SetupDetector.CodeReboundLongAboveVwap]);
+
+        var summary = HistoricalStructureTradeReplay.SummarizeGates([row]);
+
+        Assert.Equal(1, summary.GateRejected);
+        Assert.Equal(0, summary.ExecutionFunnel!.Preferred);
+        Assert.True(summary.ExecutionFunnel.Reconciled);
+        Assert.Equal(1, summary.Gates.Single(x => x.Reason == SetupDetector.CodeReboundLongAboveVwap).Candidates);
+    }
+
+    [Fact]
     public void 실행퍼널은_EventId별_후보부터_체결까지_서로다른_분모를_보존한다()
     {
         var rows = new[]
