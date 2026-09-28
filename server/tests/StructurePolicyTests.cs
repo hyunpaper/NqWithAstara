@@ -36,7 +36,7 @@ public sealed class StructurePolicyTests
             StructurePolicy.Default with { Version = "v5-structure.2" },
             StructurePolicy.Default with { ReboundLongVwapGateVersion = "reject-positive-distance.2" },
             StructurePolicy.Default with { BreakoutConfirmationGateVersion = "hold-breakout-boundary.2" },
-            StructurePolicy.Default with { AllowTransitionPullback = false },
+            StructurePolicy.Default with { AllowTransitionPullback = true },
             StructurePolicy.Default with { ObservationDailyByteLimit = 1 }
         };
         var hashes = variants.Select(x => x.PolicyHash).ToArray();
@@ -56,22 +56,22 @@ public sealed class StructurePolicyTests
         Assert.Contains("\"ZoneEligibilityStrength\":0.35", json);
         Assert.Contains("\"PriceTick\":0.01", json);
         Assert.Contains("\"PivotLeft\":2", json);
-        Assert.Contains("\"AllowTransitionPullback\":true", json);
+        Assert.Contains("\"AllowTransitionPullback\":false", json);
         Assert.DoesNotContain("2026", json);           // 실행 시각/경로가 들어가면 hash가 재현되지 않는다
     }
 
     [Fact]
-    public void TransitionPullbackBreadthExpansionIsDefaultAndStartsANewPolicyLineageWhenDisabled()
+    public void TransitionPullbackIsBlockedByDefaultAndExplicitEnablementStartsANewPolicyLineage()
     {
         var policy = StructurePolicy.Default;
 
-        Assert.True(policy.AllowTransitionPullback);
-        var disabled = policy with { AllowTransitionPullback = false };
-        Assert.NotEqual(policy.PolicyHash, disabled.PolicyHash);
+        Assert.False(policy.AllowTransitionPullback);
+        var enabled = policy with { AllowTransitionPullback = true };
+        Assert.NotEqual(policy.PolicyHash, enabled.PolicyHash);
 
         var current = StructuralLatch.Empty(Fx.Symbol, Fx.SessionStart, policy.PolicyHash);
         Assert.True(current.Matches(Fx.SessionStart, policy.PolicyHash));
-        Assert.False(current.Matches(Fx.SessionStart, disabled.PolicyHash));
+        Assert.False(current.Matches(Fx.SessionStart, enabled.PolicyHash));
     }
 
     [Fact]

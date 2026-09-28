@@ -133,10 +133,10 @@ public sealed record StructurePolicy
     public double MinimumExpectedNetR { get; init; } = 0.0;
     public bool RequireCompleteLiquidityCost { get; init; } = true;
     /// <summary>
-    /// TRANSITION 국면에서도 구조적으로 완성된 PULLBACK 계획을 허용한다. 후보 생성 이후의 방향 정렬,
-    /// 계획 적격성, 비용·기대값, 확인봉, 손절·목표 규칙은 동일하게 유지된다.
+    /// TRANSITION은 확정된 추세 정렬이 없는 구간이므로 PULLBACK의 최종 진입 자격을 기본 차단한다.
+    /// 후보와 근거는 관측을 위해 생성하되, 명시적으로 허용한 정책에서만 최종 자격 차단을 해제한다.
     /// </summary>
-    public bool AllowTransitionPullback { get; init; } = true;
+    public bool AllowTransitionPullback { get; init; }
     public bool AllowTransitionBreakout { get; init; }
 
     /// <summary>§7 UP/DOWN 진입·이탈에 요구하는 연속 완료 봉 수. TRANSITION은 여기서 제외된다(§7, #148).</summary>
