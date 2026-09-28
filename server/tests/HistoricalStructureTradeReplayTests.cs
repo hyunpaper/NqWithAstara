@@ -91,6 +91,50 @@ public sealed class HistoricalStructureTradeReplayTests
     }
 
     [Fact]
+    public async Task 종목병렬도_1과_2는_입력순서와_누적결과가_같다()
+    {
+        var bars = new MemoryBars();
+        bars.Seed("2026-09-08", "TSLA", 78, 5);
+        string[] symbols = ["SOXL", "TSLA", "KORU"];
+
+        var sequential = await new HistoricalStructureTradeReplay(bars, StructurePolicy.Default,
+                maxDegreeOfParallelism: 1)
+            .RunDetailedAsync(new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 8), symbols, default);
+        var parallel = await new HistoricalStructureTradeReplay(bars, StructurePolicy.Default,
+                maxDegreeOfParallelism: 2)
+            .RunDetailedAsync(new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 8), symbols, default);
+
+        Assert.Equal(JsonSerializer.Serialize(sequential), JsonSerializer.Serialize(parallel));
+        Assert.Equal(symbols.Order(StringComparer.Ordinal), parallel.Coverage.Select(x => x.Symbol));
+    }
+
+    [Fact]
+    public async Task 종목Replay는_동시에_두개까지만_읽는다()
+    {
+        var bars = new ConcurrencyTrackingBars();
+
+        var run = await new HistoricalStructureTradeReplay(bars, StructurePolicy.Default,
+                maxDegreeOfParallelism: 2)
+            .RunDetailedAsync(new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 8),
+                ["SOXL", "TSLA", "KORU", "NVDA"], default);
+
+        Assert.Equal(2, bars.MaximumConcurrency);
+        Assert.Equal(4, run.Trades.Count);
+    }
+
+    [Fact]
+    public async Task 종목Replay는_저장소읽기_취소를_호출자에게_전파한다()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.CancelAfter(TimeSpan.FromMilliseconds(50));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            new HistoricalStructureTradeReplay(new CancellationBars(), StructurePolicy.Default)
+                .RunDetailedAsync(new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 8),
+                    ["SOXL", "TSLA", "KORU"], cancellation.Token));
+    }
+
+    [Fact]
     public async Task 상세Replay는_후보_게이트_사유를_보존하고_결정적이다()
     {
         var first = await new HistoricalStructureTradeReplay(new MemoryBars(), StructurePolicy.Default)
@@ -374,6 +418,69 @@ public sealed class HistoricalStructureTradeReplayTests
         {
             Calls++;
             return new StructureLiquidity(99.99m, 100.01m, observedAt, 100, 100);
+        }
+    }
+
+    sealed class ConcurrencyTrackingBars : IBarStore
+    {
+        int _active;
+        int _maximum;
+        public int MaximumConcurrency => _maximum;
+
+        public Task<string?> LastLineAsync(string day, string symbol, CancellationToken ct) =>
+            Task.FromResult<string?>(null);
+        public Task AppendAsync(string day, string symbol, string line, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<string>> ListDaysAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(["2026-09-08"]);
+        public Task<IReadOnlyList<string>> ListSymbolsAsync(string day, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>([]);
+        public Task<int> CountLinesAsync(string day, string symbol, CancellationToken ct) => Task.FromResult(0);
+        public async Task<IReadOnlyList<string>> ReadLinesAsync(string day, string symbol, CancellationToken ct)
+        {
+            var active = Interlocked.Increment(ref _active);
+            InterlockedExtensions.Max(ref _maximum, active);
+            try
+            {
+                await Task.Delay(50, ct);
+                return [];
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _active);
+            }
+        }
+        public Task DeleteDayAsync(string day, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    sealed class CancellationBars : IBarStore
+    {
+        public Task<string?> LastLineAsync(string day, string symbol, CancellationToken ct) =>
+            Task.FromResult<string?>(null);
+        public Task AppendAsync(string day, string symbol, string line, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<string>> ListDaysAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(["2026-09-08"]);
+        public Task<IReadOnlyList<string>> ListSymbolsAsync(string day, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>([]);
+        public Task<int> CountLinesAsync(string day, string symbol, CancellationToken ct) => Task.FromResult(0);
+        public async Task<IReadOnlyList<string>> ReadLinesAsync(string day, string symbol, CancellationToken ct)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return [];
+        }
+        public Task DeleteDayAsync(string day, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    static class InterlockedExtensions
+    {
+        public static void Max(ref int location, int value)
+        {
+            var current = Volatile.Read(ref location);
+            while (current < value)
+            {
+                var observed = Interlocked.CompareExchange(ref location, value, current);
+                if (observed == current) return;
+                current = observed;
+            }
         }
     }
 }

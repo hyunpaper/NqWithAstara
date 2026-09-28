@@ -5,8 +5,10 @@ using Astra.Server.Domain.Structure;
 namespace Astra.Server.Application.Backtest;
 
 public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePolicy policy,
-    IHistoricalLiquiditySource? liquiditySource = null)
+    IHistoricalLiquiditySource? liquiditySource = null, int maxDegreeOfParallelism = 2)
 {
+    readonly object _liquidityLock = new();
+
     public const string GateAttributionOrder =
         "data-quality>session-time>direction>structure>entry-quality>risk-cost>expected-value>other.v1";
 
@@ -86,22 +88,61 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
     public async Task<ReplayRun> RunDetailedAsync(DateOnly from, DateOnly to,
         IReadOnlyList<string> symbols, CancellationToken ct, double? expectedValueThreshold = null)
     {
+        if (maxDegreeOfParallelism is < 1 or > 2)
+            throw new ArgumentOutOfRangeException(nameof(maxDegreeOfParallelism),
+                "과거 replay 동시성은 1 또는 2만 허용합니다.");
         var replayPolicy = expectedValueThreshold is { } threshold
             ? policy with { ExpectedValueFeatureThreshold = threshold }
             : policy;
         var days = (await store.ListDaysAsync(ct)).Where(x => DateOnly.TryParseExact(x, "yyyy-MM-dd", out var day)
             && day >= from && day <= to).Order().ToArray();
-        var result = symbols.ToImmutableDictionary(x => x, _ => new List<SimTrade>(),
-            StringComparer.OrdinalIgnoreCase).ToBuilder();
-        var daily = symbols.ToDictionary(x => x, _ => new List<Candle>(), StringComparer.OrdinalIgnoreCase);
+        using var gate = new SemaphoreSlim(maxDegreeOfParallelism, maxDegreeOfParallelism);
+        var tasks = symbols.Select(async (symbol, index) =>
+        {
+            await gate.WaitAsync(ct);
+            try
+            {
+                return (index, Replay: await ReplaySymbolAsync(days, symbol, replayPolicy, ct));
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }).ToArray();
+        var completed = await Task.WhenAll(tasks);
+        var ordered = completed.OrderBy(x => x.index).Select(x => x.Replay).ToArray();
+        var trades = ordered.ToImmutableDictionary(x => x.Symbol, x => x.Trades,
+            StringComparer.OrdinalIgnoreCase);
+        if (liquiditySource?.IsModeled == true)
+            trades = trades.ToImmutableDictionary(x => x.Key,
+                x => x.Value.Select(ApplyModeledRealizedSpread).ToImmutableArray(),
+                StringComparer.OrdinalIgnoreCase);
+        var realized = trades.Values.SelectMany(x => x).Where(x => x.ExitAt is not null && x.PnlPercent is not null &&
+                x.Structure?.EntryEventId is not null)
+            .GroupBy(x => x.Structure!.EntryEventId, StringComparer.Ordinal)
+            .ToDictionary(x => x.Key, x => x.First(), StringComparer.Ordinal);
+        var diagnostics = ordered.SelectMany(x => x.Candidates)
+            .Select(x => realized.TryGetValue(x.EventId, out var trade) && trade.Structure?.PlanSnapshot.RiskPercent is > 0
+                ? x with { RealizedNetR = trade.PnlPercent / trade.Structure.PlanSnapshot.RiskPercent }
+                : x)
+            .OrderBy(x => x.SessionDate).ThenBy(x => x.Symbol, StringComparer.Ordinal)
+            .ThenBy(x => x.SignalAt).ThenBy(x => x.EventId, StringComparer.Ordinal).ToImmutableArray();
+        return new ReplayRun(trades, diagnostics,
+            ordered.Select(x => x.Coverage).OrderBy(x => x.Symbol, StringComparer.Ordinal).ToImmutableArray(),
+            SummarizeGates(diagnostics));
+    }
+
+    async Task<SymbolReplayResult> ReplaySymbolAsync(string[] days, string symbol, StructurePolicy replayPolicy,
+        CancellationToken ct)
+    {
+        var result = new List<SimTrade>();
+        var daily = new List<Candle>();
         var candidateDiagnostics = new Dictionary<string, ReplayCandidateDiagnostic>(StringComparer.Ordinal);
         var forecastInputs = new Dictionary<string, ConditionalReturnForecastInput>(StringComparer.Ordinal);
-        var coverage = symbols.ToDictionary(x => x, _ => new CoverageAccumulator(),
-            StringComparer.OrdinalIgnoreCase);
+        var coverage = new CoverageAccumulator();
 
         foreach (var day in days)
-            foreach (var symbol in symbols)
-            {
+        {
                 ct.ThrowIfCancellationRequested();
                 var bars = ConfluenceReplay.Parse(await store.ReadLinesAsync(day, symbol, ct))
                     .Select(x => new Candle(x.Start, (double)x.Open, (double)x.High, (double)x.Low,
@@ -111,7 +152,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                 var timeframe = ReplayTimeframePolicy.Contract(barSpan);
                 var sessionStart = bars[0].Timestamp;
                 var sessionEnd = sessionStart.AddHours(6.5);
-                coverage[symbol].Add(bars, sessionStart, sessionEnd, barSpan, timeframe);
+                coverage.Add(bars, sessionStart, sessionEnd, barSpan, timeframe);
                 if (!timeframe.Supported) continue;
                 var sessionPolicy = ReplayTimeframePolicy.Apply(replayPolicy, timeframe);
                 var market = new MarketSession(true, "과거 replay", null, sessionStart, sessionEnd);
@@ -125,9 +166,9 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                 for (var index = 0; index < bars.Length && bars[index].Timestamp.Add(barSpan) < sessionEnd; index++)
                 {
                     var current = bars[index];
-                    var openBeforeBar = result[symbol].Count(x => x.Status == "OPEN");
-                    result[symbol] = SimulationEngine.ReplayBars(result[symbol], symbol, [current]);
-                    var exitedThisPoll = result[symbol].Count(x => x.Status == "OPEN") < openBeforeBar;
+                    var openBeforeBar = result.Count(x => x.Status == "OPEN");
+                    result = SimulationEngine.ReplayBars(result, symbol, [current]);
+                    var exitedThisPoll = result.Count(x => x.Status == "OPEN") < openBeforeBar;
                     processedBars = index + 1;
                     var now = current.Timestamp.Add(barSpan);
                     var completedStarts = bars.Take(index + 1).Select(x => x.Timestamp).ToArray();
@@ -140,11 +181,11 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                         {
                             UpdateDiagnostic(candidateDiagnostics, queued.Pending.EntryEventId,
                                 row => row with { Confirmed = true });
-                            var entered = StructuralSimulation.Enter(result[symbol], new StructuralEntryRequest(symbol,
+                            var entered = StructuralSimulation.Enter(result, new StructuralEntryRequest(symbol,
                                 queued.Candidate.TriggerBarStart, now, sessionEnd, queued.Context,
                                 completedStarts, sessionStart, queued.Candidate.Plan?.TargetZoneSnapshot.Aliases, confirmation,
                                 RequireCompleteLiquidityCost: sessionPolicy.RequireCompleteLiquidityCost), sessionPolicy);
-                            result[symbol] = entered.Trades;
+                            result = entered.Trades;
                             UpdateDiagnostic(candidateDiagnostics, queued.Pending.EntryEventId, row => row with
                             {
                                 Filled = entered.Outcome is StructuralEntryOutcome.Entered or
@@ -172,8 +213,10 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                         }
                     }
                     var prefix = bars.Take(index + 1).ToArray();
-                    var liquidity = liquiditySource?.Get(symbol, now, (decimal)current.Close);
-                    var build = StructureSnapshotFactory.Create(symbol, market, prefix, daily[symbol], current.Close,
+                    StructureLiquidity? liquidity;
+                    lock (_liquidityLock)
+                        liquidity = liquiditySource?.Get(symbol, now, (decimal)current.Close);
+                    var build = StructureSnapshotFactory.Create(symbol, market, prefix, daily, current.Close,
                         now, now, 1, sessionPolicy, liquidity, barSpan);
                     if (build.Snapshot is null || build.LastCompletedBarStart is null ||
                         build.Status != StructureAnalysisStatus.Available) continue;
@@ -252,31 +295,17 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                             CandidateSelection.SelectPreferred(candidates)?.EventId), null, consumeOnReady: false);
                 }
 
-                result[symbol] = ReplayPendingBars(result[symbol], symbol, bars, processedBars);
-                result[symbol] = SimulationEngine.CloseExpiredSessions(result[symbol], sessionEnd);
-                daily[symbol].Add(Daily(bars));
-            }
+                result = ReplayPendingBars(result, symbol, bars, processedBars);
+                result = SimulationEngine.CloseExpiredSessions(result, sessionEnd);
+                daily.Add(Daily(bars));
+        }
 
-        var trades = result.ToImmutableDictionary(x => x.Key, x => x.Value.ToImmutableArray(),
-            StringComparer.OrdinalIgnoreCase);
-        if (liquiditySource?.IsModeled == true)
-            trades = trades.ToImmutableDictionary(x => x.Key,
-                x => x.Value.Select(ApplyModeledRealizedSpread).ToImmutableArray(),
-                StringComparer.OrdinalIgnoreCase);
-        var realized = trades.Values.SelectMany(x => x).Where(x => x.ExitAt is not null && x.PnlPercent is not null &&
-                x.Structure?.EntryEventId is not null)
-            .GroupBy(x => x.Structure!.EntryEventId, StringComparer.Ordinal)
-            .ToDictionary(x => x.Key, x => x.First(), StringComparer.Ordinal);
-        var diagnostics = candidateDiagnostics.Values
-            .Select(x => realized.TryGetValue(x.EventId, out var trade) && trade.Structure?.PlanSnapshot.RiskPercent is > 0
-                ? x with { RealizedNetR = trade.PnlPercent / trade.Structure.PlanSnapshot.RiskPercent }
-                : x)
-            .OrderBy(x => x.SessionDate).ThenBy(x => x.Symbol, StringComparer.Ordinal)
-            .ThenBy(x => x.SignalAt).ThenBy(x => x.EventId, StringComparer.Ordinal).ToImmutableArray();
-        return new ReplayRun(trades, diagnostics,
-            coverage.OrderBy(x => x.Key, StringComparer.Ordinal).Select(x => x.Value.Build(x.Key)).ToImmutableArray(),
-            SummarizeGates(diagnostics));
+        return new SymbolReplayResult(symbol, result.ToImmutableArray(),
+            candidateDiagnostics.Values.ToImmutableArray(), coverage.Build(symbol));
     }
+
+    sealed record SymbolReplayResult(string Symbol, ImmutableArray<SimTrade> Trades,
+        ImmutableArray<ReplayCandidateDiagnostic> Candidates, ReplaySourceCoverage Coverage);
 
     public static ReplayGateSummary SummarizeGates(IEnumerable<ReplayCandidateDiagnostic> diagnostics)
     {
