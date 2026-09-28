@@ -150,7 +150,12 @@ public sealed class StructureD2CandidateTests
         var transition = SetupDetector.Detect(Request(PullbackBars(), PullbackZones(), PullbackEpisodes(),
             D2.Trend(TrendState.Transition, 10)), P);
         var transitionCandidate = Assert.Single(transition.Candidates.Where(x => x.Kind == SetupKind.Pullback));
-        Assert.Contains(SetupDetector.CodeTransitionPullbackBlocked, transitionCandidate.RejectionCodes);
+        Assert.DoesNotContain(SetupDetector.CodeTransitionPullbackBlocked, transitionCandidate.RejectionCodes);
+
+        var disabled = SetupDetector.Detect(Request(PullbackBars(), PullbackZones(), PullbackEpisodes(),
+            D2.Trend(TrendState.Transition, 10)), P with { AllowTransitionPullback = false });
+        var disabledCandidate = Assert.Single(disabled.Candidates.Where(x => x.Kind == SetupKind.Pullback));
+        Assert.Contains(SetupDetector.CodeTransitionPullbackBlocked, disabledCandidate.RejectionCodes);
     }
 
     /// <summary>히스테리시스로 UP이 유지되는 efficiency 1봉 딥에서는 PULLBACK 가설이 그대로 생성된다(§7, #148).</summary>
