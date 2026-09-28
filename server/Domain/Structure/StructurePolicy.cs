@@ -17,6 +17,7 @@ public sealed record StructurePolicy
     public string Version { get; init; } = "v5-structure.1";
     public string EligibilityCostModelVersion { get; init; } = "eligibility.fee-plus-spread.1";
     public string RealizedFillCostModelVersion { get; init; } = "realized.v4-fill.1";
+    public string ReboundLongVwapGateVersion { get; init; } = "reject-positive-distance.1";
 
     // ── 피벗·최소 관측 (§16A 표) ──
     public int PivotLeft { get; init; } = 2;

@@ -4,6 +4,9 @@ using Xunit;
 /// <summary>설계 §16A 정책·수치 계약. 정책 수치가 바뀌면 hash가 바뀌고, 실행 컨텍스트는 hash에 들어가지 않는다.</summary>
 public sealed class StructurePolicyTests
 {
+    const string PolicyHashBeforeReboundLongVwapGate =
+        "65281f3f5c25b48e469bd9d5c8674f8926bdb9328dd672d10d5a00d4583e39b5";
+
     [Fact]
     public void PolicyHashIsDeterministicForTheSamePolicy()
     {
@@ -31,6 +34,7 @@ public sealed class StructurePolicyTests
             StructurePolicy.Default with { MinimumNetR = 1.3 },
             StructurePolicy.Default with { RecencyTradingMinutes = 391 },
             StructurePolicy.Default with { Version = "v5-structure.2" },
+            StructurePolicy.Default with { ReboundLongVwapGateVersion = "reject-positive-distance.2" },
             StructurePolicy.Default with { ObservationDailyByteLimit = 1 }
         };
         var hashes = variants.Select(x => x.PolicyHash).ToArray();
@@ -51,6 +55,34 @@ public sealed class StructurePolicyTests
         Assert.Contains("\"PriceTick\":0.01", json);
         Assert.Contains("\"PivotLeft\":2", json);
         Assert.DoesNotContain("2026", json);           // 실행 시각/경로가 들어가면 hash가 재현되지 않는다
+    }
+
+    [Fact]
+    public void ReboundLongVwapGateHasItsOwnPolicyLineageWithoutChangingTheEngineVersion()
+    {
+        var policy = StructurePolicy.Default;
+
+        Assert.Equal("reject-positive-distance.1", policy.ReboundLongVwapGateVersion);
+        Assert.Contains("\"ReboundLongVwapGateVersion\":\"reject-positive-distance.1\"", policy.CanonicalJson,
+            StringComparison.Ordinal);
+        Assert.NotEqual(PolicyHashBeforeReboundLongVwapGate, policy.PolicyHash);
+        Assert.NotEqual(policy.PolicyHash,
+            (policy with { ReboundLongVwapGateVersion = "reject-positive-distance.2" }).PolicyHash);
+        Assert.Equal("v5-structure.1", policy.Version);
+    }
+
+    [Fact]
+    public void ReboundLongVwapPolicyHashChangeStartsANewLatchLineage()
+    {
+        var policy = StructurePolicy.Default;
+        var previous = StructuralLatch.Empty(Fx.Symbol, Fx.SessionStart, PolicyHashBeforeReboundLongVwapGate)
+            with { Seeded = true, WatermarkBarStart = Fx.At(30) };
+
+        Assert.False(previous.Matches(Fx.SessionStart, policy.PolicyHash));
+        var fresh = StructuralLatch.Empty(Fx.Symbol, Fx.SessionStart, policy.PolicyHash);
+        Assert.False(fresh.Seeded);
+        Assert.Null(fresh.WatermarkBarStart);
+        Assert.True(fresh.Matches(Fx.SessionStart, policy.PolicyHash));
     }
 
     [Fact]
