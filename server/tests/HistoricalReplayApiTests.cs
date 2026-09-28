@@ -201,9 +201,16 @@ public sealed class HistoricalReplayApiTests : IDisposable
         Assert.Equal(gateSummary.GetProperty("rejected").GetInt32(),
             gateSummary.GetProperty("gateRejected").GetInt32());
         Assert.Equal(JsonValueKind.Null, result.GetProperty("timeframeNotice").ValueKind);
-        Assert.Equal("historical.ohlcv-spread-borrow-model.v2", result.GetProperty("costProfile").GetString());
+        Assert.Equal("historical.fee-only-long-only.v1", result.GetProperty("costProfile").GetString());
         Assert.Equal("modeled-v2", result.GetProperty("selectedCostPolicy").GetString());
         Assert.Equal(2, result.GetProperty("costResults").GetArrayLength());
+        var feeOnly = result.GetProperty("costResults").EnumerateArray().First();
+        Assert.Equal("fee-only", feeOnly.GetProperty("basis").GetString());
+        Assert.Equal(.2, feeOnly.GetProperty("commissionPercent").GetDouble());
+        Assert.Equal(0, feeOnly.GetProperty("modeledSpreadPercent").GetDouble());
+        Assert.Equal(0, feeOnly.GetProperty("modeledBorrowPercent").GetDouble());
+        Assert.Equal("unavailable", feeOnly.GetProperty("slippageStatus").GetString());
+        Assert.Equal("long-only", feeOnly.GetProperty("positionPolicy").GetString());
         Assert.Equal("insufficient-training-sample",
             result.GetProperty("selectionDiagnostics").GetProperty("status").GetString());
         Assert.Equal(ProbabilityCalibrationEvaluator.InsufficientData,
@@ -223,6 +230,8 @@ public sealed class HistoricalReplayApiTests : IDisposable
         Assert.Contains("slippage", diagnostics.GetProperty("notice").GetString(), StringComparison.Ordinal);
         using var trades = JsonDocument.Parse(await client.GetStringAsync($"/api/replays/{id}/trades"));
         Assert.Equal(JsonValueKind.Array, trades.RootElement.ValueKind);
+        Assert.All(trades.RootElement.EnumerateArray(), row =>
+            Assert.Equal((int)TradeSide.Long, row.GetProperty("trade").GetProperty("side").GetInt32()));
         Assert.True(File.Exists(Path.Combine(_root, "App_Data", "replays", id, "trades.jsonl")));
         Assert.True(File.Exists(Path.Combine(_root, "App_Data", "replays", id,
             "conditional-model-evaluation.json")));

@@ -7,6 +7,7 @@ namespace Astra.Server.Application.Backtest;
 public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePolicy policy,
     IHistoricalLiquiditySource? liquiditySource = null, int maxDegreeOfParallelism = 2)
 {
+    public const string ReplayLongOnlyShortRejected = "REPLAY_LONG_ONLY_SHORT_REJECTED";
     readonly object _liquidityLock = new();
 
     public const string GateAttributionOrder =
@@ -239,9 +240,9 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                         snapshot.SessionEnd, snapshot.AnalysisAsOf, now, build.Bars.Bars, evaluated.Zones,
                         evaluated.Episodes, trend, built.Atr1mAtCutoff, snapshot.QuotePrice, snapshot.QuoteAt,
                          snapshot.OptionalLiquidity, build.Quality.BlockersForCandidate.Concat(gate.Blockers).ToImmutableArray()), sessionPolicy);
-                    var candidates = StructuralLifecycle.ApplyLive(
+                    var candidates = ApplyReplayPositionPolicy(StructuralLifecycle.ApplyLive(
                         StructuralLifecycle.ApplyLatch(latch, detected.Candidates, gate.AllowNewTrigger, sessionPolicy,
-                            evaluated.Zones), snapshot.QuotePrice, now);
+                            evaluated.Zones), snapshot.QuotePrice, now));
                     foreach (var candidate in candidates)
                     {
                         if (candidate.Evidence?.Forecast?.Input is { } forecastInput)
@@ -350,6 +351,16 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
             ExecutionStopReason = current.ExecutionStopReason ?? previous.ExecutionStopReason
         };
     }
+
+    public static ImmutableArray<EntryCandidate> ApplyReplayPositionPolicy(IEnumerable<EntryCandidate> candidates) =>
+        candidates.Select(candidate => candidate.Side == TradeSide.Short
+            ? candidate with
+            {
+                Disposition = CandidateDisposition.Rejected,
+                RejectionCodes = candidate.RejectionCodes.Add(ReplayLongOnlyShortRejected)
+                    .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToImmutableArray()
+            }
+            : candidate).ToImmutableArray();
 
     static bool Approved(ReplayCandidateDiagnostic row) => row.FinalApproved;
 

@@ -46,7 +46,10 @@ public sealed record HistoricalReplayTradeResult(SimTrade Trade, double? GrossPn
 public sealed record HistoricalReplayCostResult(string Basis, string Source, bool Available,
     string MissingCostPolicy, string? UnavailableReason, HistoricalReplayAggregate? Aggregate,
     ImmutableArray<HistoricalReplaySymbolResult> Symbols,
-    HistoricalStructureTradeReplay.ReplayGateSummary GateSummary);
+    HistoricalStructureTradeReplay.ReplayGateSummary GateSummary,
+    double? CommissionPercent = null, double? ModeledSpreadPercent = null,
+    double? ModeledBorrowPercent = null, string SlippageStatus = "unavailable",
+    string PositionPolicy = "unspecified");
 
 public sealed record HistoricalReplaySelectionDiagnostics(string Version, DateOnly TrainFrom, DateOnly TrainTo,
     DateOnly EvaluationFrom, DateOnly EvaluationTo, int TrainingRows, int RequiredTrainingRows,
@@ -262,12 +265,13 @@ public sealed class HistoricalReplayService
             var measurement = await new ConfluenceReplay(_barStores.Create(Path.Combine(dataset.Root, "bars")),
                 _confluencePolicy).RunAsync(queued.From, queued.To, 10, queued.Benchmark, work.Cancellation.Token);
             var replayStore = _barStores.Create(Path.Combine(dataset.Root, "bars"));
-            var costModel = HistoricalReplayCostModel.ConservativeDefault;
+            var costModel = HistoricalReplayCostModel.FeeOnlyLongOnly;
             var costSource = new ModeledHistoricalLiquiditySource(costModel);
             var modelPolicy = _structurePolicy with
             {
                 RequireCompleteLiquidityCost = true,
-                ShortBorrowCostPercent = costModel.ShortBorrowPercent
+                RoundTripFeePercent = TradingCostDefaults.RoundTripFeePercent,
+                ShortBorrowCostPercent = null
             };
             var trainDays = Math.Max(1, (queued.To.DayNumber - queued.From.DayNumber + 1) / 2);
             var trainTo = queued.From.AddDays(trainDays - 1);
@@ -317,13 +321,15 @@ public sealed class HistoricalReplayService
             var symbols = queued.SelectedCostPolicy == HistoricalReplayCostPolicies.ModeledV2
                 ? modeledSymbols : observedUnavailable;
             var costResults = ImmutableArray.Create(
-                new HistoricalReplayCostResult("modeled", costModel.Version, true,
+                new HistoricalReplayCostResult("fee-only", costModel.Version, true,
                     HistoricalReplayCostPolicies.ModeledV2, null, Aggregate(modeledSymbols), modeledSymbols,
-                    modeledRun.GateSummary),
+                    modeledRun.GateSummary, TradingCostDefaults.RoundTripFeePercent, costModel.SpreadPercent, 0,
+                    "unavailable", "long-only"),
                 new HistoricalReplayCostResult("observed", "OBSERVED_ORDERBOOK", false,
                     HistoricalReplayCostPolicies.RejectMissing,
                     "과거 bid/ask·잔량·slippage 관측이 없어 net PnL을 산출하지 않습니다.", null,
-                    observedUnavailable, observedRun.GateSummary));
+                    observedUnavailable, observedRun.GateSummary, TradingCostDefaults.RoundTripFeePercent, null, null,
+                    "unavailable", "long-only"));
             var quality = import.Rows.Select(x => new HistoricalReplayQuality(x.Symbol, x.ExpectedBars, x.ActualBars,
                 x.Gaps, x.Duplicates, x.MissingRate, x.BenchmarkMissing)).ToImmutableArray();
             work.Cancellation.Token.ThrowIfCancellationRequested();
@@ -332,8 +338,9 @@ public sealed class HistoricalReplayService
                 Status = "completed", CompletedAt = _clock.GetUtcNow(),
                 Source = import.Source,
                 DataStatus = "partial",
-                DataReason = "관측 비용은 결측이며 modeled-v2와 reject-missing 결과를 분리했습니다.",
-                Notice = "선택한 비용 결측 정책의 과거 가상 결과이며 실제 체결 성과가 아닙니다.",
+                DataReason = "왕복 수수료 0.2%만 적용하고 과거 spread·borrow·slippage는 관측값으로 사용하지 않았습니다.",
+                Notice = "long-only fee-only 과거 가상 결과이며 실제 체결 성과가 아닙니다. " +
+                    "spread·borrow는 0, slippage는 unavailable입니다.",
                 SourceQuality = sourceQuality,
                 DataQuality = quality,
                 Symbols = symbols,

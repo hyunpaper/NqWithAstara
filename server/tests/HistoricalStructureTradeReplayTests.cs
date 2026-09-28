@@ -171,6 +171,47 @@ public sealed class HistoricalStructureTradeReplayTests
     }
 
     [Fact]
+    public void FeeOnly프로필은_잠금호가와_0spread_0borrow를_명시한다()
+    {
+        var model = HistoricalReplayCostModel.FeeOnlyLongOnly;
+        var source = new ModeledHistoricalLiquiditySource(model);
+        var liquidity = source.Get("TSLA", Start, 100m);
+
+        Assert.Equal("historical.fee-only-long-only.v1", source.SourceName);
+        Assert.Equal(0, model.SpreadPercent);
+        Assert.Null(model.ShortBorrowPercent);
+        Assert.Equal(100m, liquidity!.BestBid);
+        Assert.Equal(100m, liquidity.BestAsk);
+    }
+
+    [Fact]
+    public void FeeOnly_long거래는_gross에서_왕복수수료_0점2퍼센트만_차감한다()
+    {
+        var trade = new SimTrade("long", "TSLA", "PULLBACK", Start, 100, 110, 95,
+            null, null, "OPEN", null, null, null, 100, SessionEnd: Start.AddHours(1));
+        var result = HistoricalStructureTradeReplay.ReplayPendingBars([trade], "TSLA",
+            [new Candle(Start.AddMinutes(1), 100, 110, 99, 110, 1000)], 0);
+
+        Assert.Equal(9.8, Assert.Single(result).PnlPercent);
+    }
+
+    [Fact]
+    public void Replay_longOnly가드는_borrow설정과_무관하게_short를_선택전에_거절한다()
+    {
+        var longCandidate = Candidate("long", TradeSide.Long);
+        var shortCandidate = Candidate("short", TradeSide.Short) with { KindName = "A_BREAKOUT" };
+        var policy = StructurePolicy.Default with { ShortBorrowCostPercent = .02 };
+
+        var filtered = HistoricalStructureTradeReplay.ApplyReplayPositionPolicy([shortCandidate, longCandidate]);
+
+        Assert.NotNull(policy.ShortBorrowCostPercent);
+        var rejected = Assert.Single(filtered.Where(x => x.Side == TradeSide.Short));
+        Assert.Equal(CandidateDisposition.Rejected, rejected.Disposition);
+        Assert.Contains(HistoricalStructureTradeReplay.ReplayLongOnlyShortRejected, rejected.RejectionCodes);
+        Assert.Equal(longCandidate.EventId, CandidateSelection.SelectPreferred(filtered)!.EventId);
+    }
+
+    [Fact]
     public async Task 상세Replay는_원천봉_커버리지와_주기지원상태를_제공한다()
     {
         var bars = new MemoryBars();
@@ -373,6 +414,16 @@ public sealed class HistoricalStructureTradeReplayTests
         disposition == CandidateDisposition.Ready && costComplete && expectedNetR is > 0,
         costComplete, false, "test", expectedNetR,
         (reasons ?? []).ToImmutableArray(), ImmutableArray<string>.Empty);
+
+    static EntryCandidate Candidate(string id, TradeSide side)
+    {
+        var quality = new EntryQualityResult(60, [], [], [], [], []);
+        var planning = new PlanEvaluation(null, [], null, null, null, null, null, null,
+            null, 2, null, null, null, null, false, null, []);
+        return new EntryCandidate(id, id, SetupKind.Pullback, "PULLBACK", "zone", Start, Start, Start, Start,
+            Start.AddMinutes(5), CandidateDisposition.Ready, 100, 99, 60, quality, null, planning,
+            [], [], false, false, null, side);
+    }
 
     sealed class MemoryBars : IBarStore
     {
