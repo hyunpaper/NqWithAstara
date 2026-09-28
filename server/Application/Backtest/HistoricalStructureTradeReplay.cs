@@ -275,18 +275,16 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                         UpdateDiagnostic(candidateDiagnostics, preferred.EventId, row => row with { Preferred = true });
 
                     if (!exitedThisPoll && pending is null && preferred is { Disposition: CandidateDisposition.Ready, Plan: not null }
-                        && ShouldQueuePending(pendingEventIds, new PendingEntry(preferred.EventId, symbol,
-                            preferred.Side, preferred.TriggerBarStart, preferred.TriggerBarStart.Add(barSpan),
-                            preferred.ExpiresAt, (double)preferred.Plan.Stop, (double)preferred.Plan.Target,
-                            (double)preferred.Plan.EntryReference, preferred.Plan.PlanId, preferred.Plan.PolicyHash)))
+                        && ShouldQueuePending(pendingEventIds, PendingEntryPolicy.Create(preferred.EventId, symbol,
+                            preferred.TriggerBarStart, preferred.TriggerBarStart.Add(barSpan), preferred.ExpiresAt,
+                            preferred.Plan, replayPolicy.BreakoutConfirmationGateVersion)))
                     {
                         var context = StructuralSimulation.Freeze(preferred.Plan, preferred.EventId,
                             trend.State.ToString(), trend.SignedTrend, preferred.EntryQuality,
                             snapshot.AnalysisAsOf, snapshot.QuoteAt);
-                        var pendingEntry = new PendingEntry(preferred.EventId, symbol, preferred.Side,
+                        var pendingEntry = PendingEntryPolicy.Create(preferred.EventId, symbol,
                             preferred.TriggerBarStart, preferred.TriggerBarStart.Add(barSpan), preferred.ExpiresAt,
-                            (double)preferred.Plan.Stop, (double)preferred.Plan.Target,
-                            (double)preferred.Plan.EntryReference, preferred.Plan.PlanId, preferred.Plan.PolicyHash);
+                            preferred.Plan, replayPolicy.BreakoutConfirmationGateVersion);
                         pending = new PendingReplayEntry(pendingEntry, context, preferred);
                         UpdateDiagnostic(candidateDiagnostics, preferred.EventId,
                             row => row with { PendingQueued = true, ExecutionStopReason = null });

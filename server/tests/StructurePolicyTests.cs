@@ -35,6 +35,7 @@ public sealed class StructurePolicyTests
             StructurePolicy.Default with { RecencyTradingMinutes = 391 },
             StructurePolicy.Default with { Version = "v5-structure.2" },
             StructurePolicy.Default with { ReboundLongVwapGateVersion = "reject-positive-distance.2" },
+            StructurePolicy.Default with { BreakoutConfirmationGateVersion = "hold-breakout-boundary.2" },
             StructurePolicy.Default with { ObservationDailyByteLimit = 1 }
         };
         var hashes = variants.Select(x => x.PolicyHash).ToArray();
@@ -55,6 +56,18 @@ public sealed class StructurePolicyTests
         Assert.Contains("\"PriceTick\":0.01", json);
         Assert.Contains("\"PivotLeft\":2", json);
         Assert.DoesNotContain("2026", json);           // 실행 시각/경로가 들어가면 hash가 재현되지 않는다
+    }
+
+    [Fact]
+    public void BreakoutConfirmationGateHasItsOwnPolicyLineage()
+    {
+        var policy = StructurePolicy.Default;
+
+        Assert.Equal("hold-breakout-boundary.1", policy.BreakoutConfirmationGateVersion);
+        Assert.Contains("\"BreakoutConfirmationGateVersion\":\"hold-breakout-boundary.1\"",
+            policy.CanonicalJson, StringComparison.Ordinal);
+        Assert.NotEqual(policy.PolicyHash,
+            (policy with { BreakoutConfirmationGateVersion = "hold-breakout-boundary.2" }).PolicyHash);
     }
 
     [Fact]

@@ -62,6 +62,22 @@ public sealed class HistoricalStructureTradeReplayTests
     }
 
     [Fact]
+    public void ReplayConfirmationUsesTheSharedBreakoutBoundaryContract()
+    {
+        var pending = new PendingEntry("replay-breakout", "TSLA", TradeSide.Long,
+            Start, Start.AddMinutes(1), Start.AddMinutes(3), 95, 110, 101, "plan", "policy",
+            "BREAKOUT", 100, "hold-breakout-boundary.1");
+        var confirmationBar = new Candle(Start.AddMinutes(1), 101, 102, 99, 100, 10);
+
+        var resolution = HistoricalStructureTradeReplay.ResolvePending(pending, confirmationBar,
+            Start.AddMinutes(2));
+
+        Assert.True(resolution.Clear);
+        Assert.Equal(PendingEntryDecision.RejectedThesisInvalidated, resolution.Confirmation!.Decision);
+        Assert.Equal(PendingEntryDecision.RejectedThesisInvalidated.ToString(), resolution.Reason);
+    }
+
+    [Fact]
     public void ReplayEntryRequestCarriesCompletedBarsForCooldownEvaluation()
     {
         var stopped = new SimTrade("stopped", "TSLA", "PULLBACK", Start,
