@@ -230,7 +230,8 @@ public sealed class HistoricalReplayService
             var trainDays = Math.Max(1, (queued.To.DayNumber - queued.From.DayNumber + 1) / 2);
             var trainTo = queued.From.AddDays(trainDays - 1);
             var evaluationFrom = trainTo < queued.To ? trainTo.AddDays(1) : queued.To;
-            var trainingRun = await new HistoricalStructureTradeReplay(replayStore, modelPolicy, costSource)
+            var trainingRun = await new HistoricalStructureTradeReplay(replayStore, modelPolicy, costSource,
+                    queued.Benchmark)
                 .RunDetailedAsync(queued.From, trainTo, queued.Watchlist, work.Cancellation.Token);
             var observations = trainingRun.Candidates
                 .Where(x => x.CostComplete)
@@ -248,10 +249,12 @@ public sealed class HistoricalReplayService
                     [0d, .25d, .5d, .75d, 1d], minimumRows: requiredTrainingRows);
                 replayPolicy = WalkForwardExpectedValue.ApplyToPolicy(modelPolicy, selectedThreshold);
             }
-            var modeledRun = await new HistoricalStructureTradeReplay(replayStore, replayPolicy, costSource)
+            var modeledRun = await new HistoricalStructureTradeReplay(replayStore, replayPolicy, costSource,
+                    queued.Benchmark)
                 .RunDetailedAsync(evaluationFrom, queued.To, queued.Watchlist, work.Cancellation.Token);
             var observedPolicy = replayPolicy with { RequireCompleteLiquidityCost = true, ShortBorrowCostPercent = null };
-            var observedRun = await new HistoricalStructureTradeReplay(replayStore, observedPolicy)
+            var observedRun = await new HistoricalStructureTradeReplay(replayStore, observedPolicy,
+                    benchmarkSymbol: queued.Benchmark)
                 .RunDetailedAsync(evaluationFrom, queued.To, queued.Watchlist, work.Cancellation.Token);
             var selectedRun = queued.SelectedCostPolicy == HistoricalReplayCostPolicies.ModeledV2
                 ? modeledRun : observedRun;

@@ -31,7 +31,8 @@ public sealed class StructurePolicyTests
             StructurePolicy.Default with { MinimumNetR = 1.3 },
             StructurePolicy.Default with { RecencyTradingMinutes = 391 },
             StructurePolicy.Default with { Version = "v5-structure.2" },
-            StructurePolicy.Default with { ObservationDailyByteLimit = 1 }
+            StructurePolicy.Default with { ObservationDailyByteLimit = 1 },
+            StructurePolicy.Default with { RequirePositiveBenchmarkForRebound = true }
         };
         var hashes = variants.Select(x => x.PolicyHash).ToArray();
         Assert.DoesNotContain(baseline, hashes);
@@ -75,6 +76,7 @@ public sealed class StructurePolicyTests
         Assert.Equal(.15, p.ZoneHalfWidthAtrFactor);
         Assert.Equal(.5, p.ReactionAtrScale);
         Assert.Equal(390, p.RecencyTradingMinutes);
+        Assert.False(p.RequirePositiveBenchmarkForRebound);
     }
 
     [Fact]

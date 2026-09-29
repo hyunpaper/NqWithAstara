@@ -118,6 +118,37 @@ public sealed class StructuralPendingEntryServiceTests
     }
 
     [Fact]
+    public async Task ProductionPendingPathBlocksNegativeBenchmarkOnlyForLongRebound()
+    {
+        var store = new MemoryStore();
+        var pending = new StructuralPendingEntryService(store);
+        var context = StructuralSimulation.Freeze(
+            StructuralPlanner.Evaluate(D2.ExampleA() with { Kind = "REBOUND" }, D6.WiringPolicy).Plan!,
+            "pending-benchmark", "UP", 12, 55, Start, Start);
+        await pending.QueueAsync(new StoredPendingStructuralEntry(
+            new PendingEntry("pending-benchmark", "SOXL", TradeSide.Long, Start,
+                Start.AddMinutes(1), Start.AddMinutes(5), (double)context.PlanSnapshot.Stop,
+                (double)context.PlanSnapshot.Target, (double)context.PlanSnapshot.EntryReference,
+                context.PlanSnapshot.PlanId, context.PlanSnapshot.PolicyHash), context, Start));
+        var entries = new CountingEntryPort(new StructuralTradeEntryService(store, D6.WiringPolicy));
+        var policy = D6.WiringPolicy with { RequirePositiveBenchmarkForRebound = true };
+        var benchmark = new FakeBenchmark(BenchmarkBars(100, 99));
+        var service = BuildPendingService(store, pending, entries, policy, benchmark);
+        var snapshot = new StructureSnapshot("SOXL", Start, Start.AddHours(6), Start.AddMinutes(1),
+            100, Start.AddMinutes(1), ImmutableArray<Candle>.Empty, ImmutableArray<Candle>.Empty,
+            null, null, 1);
+        var request = new StructureObservationRequest("SOXL", 1, D6.Session, [], [], 100, Start.AddMinutes(1));
+
+        var result = await service.TryEnterPreferredAsync(request, [], null, snapshot, null,
+            Start.AddMinutes(2), [new Candle(Start.AddMinutes(1), 100, 101, 99, 100.5, 1)], default);
+
+        Assert.False(result!.Entered);
+        Assert.Equal(BenchmarkEntryGate.Negative, result.Note);
+        Assert.Equal(0, entries.Calls);
+        Assert.Null(await pending.GetAsync("SOXL"));
+    }
+
+    [Fact]
     public async Task ProductionPendingPathWaitsBeforeConfirmationAndMissesAfterIt()
     {
         var store = new MemoryStore();
@@ -144,11 +175,28 @@ public sealed class StructuralPendingEntryServiceTests
     }
 
     static StructureAnalysisService BuildPendingService(MemoryStore store,
-        StructuralPendingEntryService pending, CountingEntryPort entries) =>
-        new(store, new StructureObservationWriter(new MemoryObservationStore(), D6.WiringPolicy),
+        StructuralPendingEntryService pending, CountingEntryPort entries, StructurePolicy? policy = null,
+        IBenchmarkBarSource? benchmark = null)
+    {
+        var selected = policy ?? D6.WiringPolicy;
+        return new(store, new StructureObservationWriter(new MemoryObservationStore(), selected),
             new MonitorRuntimeState(), TimeProvider.System, new SilentDiagnostics(),
-            new StructureEngineOptions(StructureEngineMode.Active), D6.WiringPolicy, entries,
-            pendingEntries: pending);
+            new StructureEngineOptions(StructureEngineMode.Active), selected, entries,
+            pendingEntries: pending, benchmark: benchmark);
+    }
+
+    static Candle[] BenchmarkBars(double firstClose, double lastClose) => Enumerable.Range(0, 16)
+        .Select(i =>
+        {
+            var close = i == 0 ? firstClose : i == 15 ? lastClose : firstClose;
+            return new Candle(Start.AddMinutes(-14 + i), close, close, close, close, 1);
+        }).ToArray();
+
+    sealed class FakeBenchmark(IReadOnlyList<Candle> bars) : IBenchmarkBarSource
+    {
+        public string Symbol => "QQQ";
+        public IReadOnlyList<Candle> Bars => bars;
+    }
 
     sealed class CountingEntryPort(IStructuralTradeEntries inner) : IStructuralTradeEntries
     {

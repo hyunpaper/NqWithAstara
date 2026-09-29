@@ -123,7 +123,8 @@ public sealed class StructureAnalysisService(
     SymbolMetadataService? metadata = null,
     ConfluenceService? confluence = null,
     RejectedPlanResearchService? research = null,
-    StructuralPendingEntryService? pendingEntries = null)
+    StructuralPendingEntryService? pendingEntries = null,
+    IBenchmarkBarSource? benchmark = null)
 {
     public enum LivePendingDecision { Wait, Confirm, Missed }
     public sealed record LivePendingResolution(LivePendingDecision Decision, Candle? ConfirmationBar, string Reason);
@@ -550,6 +551,13 @@ public sealed class StructureAnalysisService(
                     "LIVE_CONFIRMATION_BAR_CLOSE");
                 if (confirmation.Decision != PendingEntryDecision.Confirmed)
                     return new ActiveEntryResult(candidates, false, "V5_PENDING_CONFIRMATION_REJECTED");
+                var benchmarkDecision = BenchmarkEntryGate.Evaluate(_policy, stored.Context.PlanSnapshot.Kind,
+                    stored.Pending.Side, benchmark?.Bars, stored.Pending.ConfirmationBarStart.AddMinutes(1));
+                if (!benchmarkDecision.Allowed)
+                {
+                    await pendingEntries.RemoveAsync(snapshot.Symbol);
+                    return new ActiveEntryResult(candidates, false, benchmarkDecision.Reason);
+                }
                 var claimed = await pendingEntries.ClaimAndPersistConfirmationAsync(snapshot.Symbol, confirmation, now);
                 if (claimed is null) return new ActiveEntryResult(candidates, false, "V5_PENDING_ALREADY_CLAIMED");
                 var pendingContext = claimed.Context;
@@ -610,6 +618,13 @@ public sealed class StructureAnalysisService(
                     confirmationBar.Close, "LIVE_CONFIRMATION_BAR_CLOSE");
                 if (confirmation.Decision != PendingEntryDecision.Confirmed)
                     return Blocked(candidates, chosen, "V5_PENDING_CONFIRMATION_REJECTED");
+                var benchmarkDecision = BenchmarkEntryGate.Evaluate(_policy, stored.Context.PlanSnapshot.Kind,
+                    stored.Pending.Side, benchmark?.Bars, stored.Pending.ConfirmationBarStart.AddMinutes(1));
+                if (!benchmarkDecision.Allowed)
+                {
+                    await pendingEntries.RemoveAsync(snapshot.Symbol);
+                    return Blocked(candidates, chosen, benchmarkDecision.Reason);
+                }
                 var claimed = await pendingEntries.ClaimAndPersistConfirmationAsync(snapshot.Symbol, confirmation, now);
                 if (claimed is null) return Blocked(candidates, chosen, "V5_PENDING_ALREADY_CLAIMED");
                 confirmation = claimed.Confirmation!;

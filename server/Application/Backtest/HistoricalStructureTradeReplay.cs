@@ -5,7 +5,7 @@ using Astra.Server.Domain.Structure;
 namespace Astra.Server.Application.Backtest;
 
 public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePolicy policy,
-    IHistoricalLiquiditySource? liquiditySource = null)
+    IHistoricalLiquiditySource? liquiditySource = null, string benchmarkSymbol = "QQQ")
 {
     public const string GateAttributionOrder =
         "data-quality>session-time>direction>structure>entry-quality>risk-cost>expected-value>other.v1";
@@ -18,7 +18,10 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
         double? ExpectedNetR, ImmutableArray<string> RejectionReasons, ImmutableArray<string> FeatureContributions,
         double? RealizedNetR = null, ConditionalReturnForecast? Forecast = null,
         StrategyRegimeAssessment? RegimeAssessment = null,
-        ConditionalReturnForecastInput? ForecastInput = null);
+        ConditionalReturnForecastInput? ForecastInput = null)
+    {
+        public string? ExecutionStopReason { get; init; }
+    }
 
     public sealed record ReplaySourceCoverage(string Symbol, int Sessions, int ExpectedBars, int ActualBars,
         int MissingBars, double CoverageRate, double SourceBarMinutes, string GranularityStatus,
@@ -84,6 +87,12 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
             StringComparer.OrdinalIgnoreCase);
 
         foreach (var day in days)
+        {
+            var benchmarkBars = replayPolicy.RequirePositiveBenchmarkForRebound
+                ? ConfluenceReplay.Parse(await store.ReadLinesAsync(day, benchmarkSymbol, ct))
+                    .Select(x => new Candle(x.Start, (double)x.Open, (double)x.High, (double)x.Low,
+                        (double)x.Close, (double)x.Volume)).ToImmutableArray()
+                : ImmutableArray<Candle>.Empty;
             foreach (var symbol in symbols)
             {
                 ct.ThrowIfCancellationRequested();
@@ -122,11 +131,21 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                         var resolution = ResolvePending(queued.Pending, current, now, barSpan);
                         if (resolution.Confirmation is { Decision: PendingEntryDecision.Confirmed } confirmation)
                         {
-                            var entered = StructuralSimulation.Enter(result[symbol], new StructuralEntryRequest(symbol,
-                                queued.Candidate.TriggerBarStart, now, sessionEnd, queued.Context,
-                                completedStarts, sessionStart, queued.Candidate.Plan?.TargetZoneSnapshot.Aliases, confirmation,
-                                RequireCompleteLiquidityCost: sessionPolicy.RequireCompleteLiquidityCost), sessionPolicy);
-                            result[symbol] = entered.Trades;
+                            var benchmark = BenchmarkEntryGate.Evaluate(sessionPolicy,
+                                queued.Context.PlanSnapshot.Kind, queued.Pending.Side, benchmarkBars, now);
+                            if (benchmark.Allowed)
+                            {
+                                var entered = StructuralSimulation.Enter(result[symbol], new StructuralEntryRequest(symbol,
+                                    queued.Candidate.TriggerBarStart, now, sessionEnd, queued.Context,
+                                    completedStarts, sessionStart, queued.Candidate.Plan?.TargetZoneSnapshot.Aliases, confirmation,
+                                    RequireCompleteLiquidityCost: sessionPolicy.RequireCompleteLiquidityCost), sessionPolicy);
+                                result[symbol] = entered.Trades;
+                            }
+                            else if (candidateDiagnostics.TryGetValue(queued.Pending.EntryEventId, out var diagnostic))
+                                candidateDiagnostics[queued.Pending.EntryEventId] = diagnostic with
+                                {
+                                    ExecutionStopReason = benchmark.Reason
+                                };
                         }
                         pendingEventIds.Add(queued.Pending.EntryEventId);
                         pending = null;
@@ -219,6 +238,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                 result[symbol] = SimulationEngine.CloseExpiredSessions(result[symbol], sessionEnd);
                 daily[symbol].Add(Daily(bars));
             }
+        }
 
         var trades = result.ToImmutableDictionary(x => x.Key, x => x.Value.ToImmutableArray(),
             StringComparer.OrdinalIgnoreCase);

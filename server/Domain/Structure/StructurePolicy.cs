@@ -132,6 +132,7 @@ public sealed record StructurePolicy
     public bool RequireCompleteLiquidityCost { get; init; } = true;
     public bool AllowTransitionPullback { get; init; }
     public bool AllowTransitionBreakout { get; init; }
+    public bool RequirePositiveBenchmarkForRebound { get; init; }
 
     /// <summary>§7 UP/DOWN 진입·이탈에 요구하는 연속 완료 봉 수. TRANSITION은 여기서 제외된다(§7, #148).</summary>
     public int TrendStateHoldBars { get; init; } = 2;
