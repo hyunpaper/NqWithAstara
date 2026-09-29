@@ -52,6 +52,10 @@ public sealed class ReplayBackfillTests
             Assert.Equal("partial", report.DataStatus);
             Assert.All(report.Sources, row => Assert.False(row.ReachedRequestedStart));
             Assert.All(report.Sources, row => Assert.Equal("페이지 상한", row.Reason));
+            Assert.All(report.Sources, row => Assert.Equal(new DateOnly(2026, 9, 1), row.RequestedFrom));
+            Assert.All(report.Sources, row => Assert.Equal(new DateOnly(2026, 9, 8), row.RequestedTo));
+            Assert.All(report.Sources, row => Assert.Equal(new DateOnly(2026, 9, 8), row.FirstCoveredSession));
+            Assert.All(report.Sources, row => Assert.Equal(new DateOnly(2026, 9, 8), row.LastCoveredSession));
         }
         finally { Directory.Delete(root, true); }
     }

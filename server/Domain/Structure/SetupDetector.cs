@@ -121,6 +121,7 @@ public static class SetupDetector
     /// <summary>REBOUND가 극단적 하락 추세에서 롱으로 승격되는 것을 막는 거절 사유(§I-1, #208).</summary>
     public const string CodeTrendDeeplyOpposesRebound = "TREND_DEEPLY_OPPOSES_REBOUND";
     public const string CodeTrendDeeplyOpposesShortRebound = "TREND_DEEPLY_OPPOSES_SHORT_REBOUND";
+    public const string CodeReboundLongAboveVwap = "REBOUND_LONG_ABOVE_VWAP";
     public const string CodeTransitionPullbackBlocked = "TRANSITION_PULLBACK_BLOCKED";
     public const string CodeTransitionBreakoutBlocked = "TRANSITION_BREAKOUT_BLOCKED";
 
@@ -510,6 +511,13 @@ public static class SetupDetector
         }
         foreach (var reason in quality.Reasons) rejections.Add(reason);
 
+        var vwapDistance = request.Trend.Vwap is { } vwap && request.Trend.Atr1m is > 0 &&
+                           double.IsFinite(vwap) && double.IsFinite(request.Trend.Atr1m.Value)
+            ? (side == TradeSide.Long ? (double)trigger.Close - vwap : vwap - (double)trigger.Close)
+              / request.Trend.Atr1m.Value : (double?)null;
+        if (RejectsReboundLongAboveVwap(hypothesis.Kind, side, vwapDistance))
+            rejections.Add(CodeReboundLongAboveVwap);
+
         if (request.Trend.State == TrendState.Transition && hypothesis.Kind == SetupKind.Pullback &&
             !policy.AllowTransitionPullback)
             rejections.Add(CodeTransitionPullbackBlocked);
@@ -595,10 +603,6 @@ public static class SetupDetector
 
         var trendAlignment = request.Trend.SignedTrend is { } signed && double.IsFinite(signed)
             ? Math.Clamp((side == TradeSide.Long ? signed : -signed) / 100d, -1d, 1d) : (double?)null;
-        var vwapDistance = request.Trend.Vwap is { } vwap && request.Trend.Atr1m is > 0 &&
-                           double.IsFinite(vwap) && double.IsFinite(request.Trend.Atr1m.Value)
-            ? (side == TradeSide.Long ? (double)trigger.Close - vwap : vwap - (double)trigger.Close)
-              / request.Trend.Atr1m.Value : (double?)null;
         var distance = planning.Stop is { } stopDistance && request.Atr1mAtStructureCutoff is > 0
             ? (double)Math.Abs(entryReference - stopDistance) / request.Atr1mAtStructureCutoff.Value : (double?)null;
         var planCosts = planning.Plan?.Costs;
@@ -642,6 +646,10 @@ public static class SetupDetector
     /// <summary>추세 정렬을 전제로 하는 종류. REBOUND는 제외다(§8/§9.4).</summary>
     static bool RequiresTrendAlignment(SetupKind kind) => kind is SetupKind.Pullback or SetupKind.Breakout;
 
+    public static bool RejectsReboundLongAboveVwap(SetupKind kind, TradeSide side, double? vwapDistance) =>
+        kind == SetupKind.Rebound && side == TradeSide.Long &&
+        vwapDistance is > 0 and var distance && double.IsFinite(distance);
+
     /// <summary>§8 stable EventId=(symbol,sessionStart,kind,zoneId,triggerBarStart).</summary>
     public static string EventId(string symbol, DateTimeOffset sessionStart, string kindName, string zoneId,
         DateTimeOffset triggerBarStart) =>
@@ -659,8 +667,8 @@ public static class SetupDetector
 public static class CandidateSelection
 {
     /// <summary>
-    /// 정렬 키는 (종류 문자열 ordinal, EventId ordinal)뿐이다 — 성과 지표를 대표 선택에 쓰지 않는다(§9.4, #209).
-    /// 같은 중복 방지 키에서는 실제 신규 거래 후보를 1개만 남긴다.
+    /// 같은 중복 방지 키에서는 1개만 남긴다. Range 롱 복수 후보의 VWAP 위치 외에는
+    /// (종류 문자열 ordinal, EventId ordinal) 순서를 유지한다(#245).
     /// </summary>
     public static EntryCandidate? SelectPreferred(IEnumerable<EntryCandidate> candidates)
     {
@@ -672,8 +680,23 @@ public static class CandidateSelection
             .GroupBy(x => x.DuplicateGuardKey, StringComparer.Ordinal)
             .Select(group => Ordered(group).First());
 
-        return Ordered(perKey).First();
+        var eligible = perKey.ToArray();
+        if (eligible.Length >= 2 && eligible.All(IsRangeLongWithFiniteVwap))
+        {
+            var atOrBelow = eligible.Where(x => x.Evidence!.VwapDistanceAtr <= 0).ToArray();
+            if (atOrBelow.Length > 0)
+                return atOrBelow.OrderBy(x => Math.Abs(x.Evidence!.VwapDistanceAtr!.Value))
+                    .ThenBy(x => x.KindName, StringComparer.Ordinal)
+                    .ThenBy(x => x.EventId, StringComparer.Ordinal).First();
+        }
+
+        return Ordered(eligible).First();
     }
+
+    static bool IsRangeLongWithFiniteVwap(EntryCandidate candidate) =>
+        candidate.Side == TradeSide.Long &&
+        candidate.Regime?.Direction == StrategyDirection.Range &&
+        candidate.Evidence?.VwapDistanceAtr is { } distance && double.IsFinite(distance);
 
     static IOrderedEnumerable<EntryCandidate> Ordered(IEnumerable<EntryCandidate> candidates) =>
         candidates

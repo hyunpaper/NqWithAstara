@@ -174,6 +174,37 @@ public sealed class StructuralPendingEntryServiceTests
         Assert.Null(await pending.GetAsync("SOXL"));
     }
 
+    [Fact]
+    public async Task 돌파_논거가_확인봉에서_무효화되면_대기를_즉시_제거한다()
+    {
+        var store = new MemoryStore();
+        var pending = new StructuralPendingEntryService(store);
+        var rejected = Entry("invalidated-breakout") with
+        {
+            Pending = Entry("invalidated-breakout").Pending with
+            {
+                SetupKind = "BREAKOUT",
+                ConfirmationBoundary = 100,
+                ConfirmationPolicyVersion = "hold-breakout-boundary.1"
+            }
+        };
+        await pending.QueueAsync(rejected);
+        var entries = new CountingEntryPort(new StructuralTradeEntryService(store, D6.WiringPolicy));
+        var service = BuildPendingService(store, pending, entries);
+        var snapshot = new StructureSnapshot("SOXL", Start, Start.AddHours(6), Start.AddMinutes(1),
+            100, Start.AddMinutes(1), ImmutableArray<Candle>.Empty, ImmutableArray<Candle>.Empty,
+            null, null, 1);
+        var request = new StructureObservationRequest("SOXL", 1, D6.Session, [], [], 100, Start.AddMinutes(1));
+
+        var result = await service.TryEnterPreferredAsync(request, [], null, snapshot, null,
+            Start.AddMinutes(2), [new Candle(Start.AddMinutes(1), 101, 102, 99, 100, 1)], default);
+
+        Assert.False(result!.Entered);
+        Assert.Contains("REJECTED", result.Note);
+        Assert.Equal(0, entries.Calls);
+        Assert.Null(await pending.GetAsync("SOXL"));
+    }
+
     static StructureAnalysisService BuildPendingService(MemoryStore store,
         StructuralPendingEntryService pending, CountingEntryPort entries, StructurePolicy? policy = null,
         IBenchmarkBarSource? benchmark = null)

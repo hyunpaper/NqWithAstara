@@ -16,18 +16,20 @@ public static class HistoricalReplayCostPolicies
 }
 
 public sealed record HistoricalReplayRequest(DateOnly From, DateOnly To, IReadOnlyList<string>? Symbols = null,
-    string MissingCostPolicy = HistoricalReplayCostPolicies.ModeledV2);
+    string MissingCostPolicy = HistoricalReplayCostPolicies.ModeledV2, bool RefreshDataset = false);
 
 public sealed record HistoricalReplayExitCounts(int Stop, int Target, int Eod);
 
 public sealed record HistoricalReplaySymbolResult(string Symbol, int? Signals, int? VirtualEntries, int? Wins,
     int? Losses, double? PnlPercent, double? AverageHoldingMinutes, HistoricalReplayExitCounts? Exits,
     string TradeReplayStatus, string? UnavailableReason, double? GrossPnlPercent = null,
-    double? FeePercent = null, double? SlippagePercent = null);
+    double? FeePercent = null, double? SlippagePercent = null,
+    string SignalsDefinition = "컨플루언스 기법별 관측 행 수이며 진입 후보 수가 아닙니다.");
 
 public sealed record HistoricalReplayAggregate(int? Signals, int? VirtualEntries, int? Wins, int? Losses,
     double? PnlPercent, double? AverageHoldingMinutes, HistoricalReplayExitCounts? Exits,
-    double? GrossPnlPercent = null, double? FeePercent = null, double? SlippagePercent = null);
+    double? GrossPnlPercent = null, double? FeePercent = null, double? SlippagePercent = null,
+    string SignalsDefinition = "컨플루언스 기법별 관측 행 수이며 진입 후보 수가 아닙니다.");
 
 public sealed record HistoricalReplayQuality(string Symbol, int ExpectedBars, int ActualBars, int Gaps, int Duplicates,
     double MissingRate, bool BenchmarkMissing);
@@ -35,7 +37,8 @@ public sealed record HistoricalReplayQuality(string Symbol, int ExpectedBars, in
 public sealed record HistoricalReplaySourceQuality(string Symbol, int RawBars, int ActualTradingDays,
     bool ReachedRequestedStart, DateTimeOffset? OldestBar, string DataStatus, string? Reason,
     DateTimeOffset? NewestBar = null, int RequiredDailySeed = 0, int AvailableDailySeed = 0,
-    string CarryPolicy = "session-reset");
+    string CarryPolicy = "session-reset", DateOnly? FirstCoveredSession = null,
+    DateOnly? LastCoveredSession = null, DateOnly? RequestedFrom = null, DateOnly? RequestedTo = null);
 
 public sealed record HistoricalReplayTradeResult(SimTrade Trade, double? GrossPnlPercent,
     double FeePercent, double? SlippagePercent, double? NetPnlPercent);
@@ -43,7 +46,10 @@ public sealed record HistoricalReplayTradeResult(SimTrade Trade, double? GrossPn
 public sealed record HistoricalReplayCostResult(string Basis, string Source, bool Available,
     string MissingCostPolicy, string? UnavailableReason, HistoricalReplayAggregate? Aggregate,
     ImmutableArray<HistoricalReplaySymbolResult> Symbols,
-    HistoricalStructureTradeReplay.ReplayGateSummary GateSummary);
+    HistoricalStructureTradeReplay.ReplayGateSummary GateSummary,
+    double? CommissionPercent = null, double? ModeledSpreadPercent = null,
+    double? ModeledBorrowPercent = null, string SlippageStatus = "unavailable",
+    string PositionPolicy = "unspecified");
 
 public sealed record HistoricalReplaySelectionDiagnostics(string Version, DateOnly TrainFrom, DateOnly TrainTo,
     DateOnly EvaluationFrom, DateOnly EvaluationTo, int TrainingRows, int RequiredTrainingRows,
@@ -65,7 +71,9 @@ public sealed record HistoricalReplayRun(string Id, DateOnly From, DateOnly To, 
     HistoricalReplaySelectionDiagnostics? SelectionDiagnostics = null,
     RegimeValidationReport? RegimeValidation = null,
     ProbabilityCalibrationReport? ProbabilityCalibration = null,
-    ConditionalReturnModelEvaluation? ConditionalReturnModelEvaluation = null);
+    ConditionalReturnModelEvaluation? ConditionalReturnModelEvaluation = null,
+    string? DatasetId = null, string? DatasetStatus = null, DateTimeOffset? DatasetFetchedAt = null,
+    bool? DatasetReused = null, bool RefreshDataset = false);
 
 public sealed record HistoricalReplayStartResult(int HttpStatus, HistoricalReplayRun? Run, string? Message);
 
@@ -115,12 +123,14 @@ public sealed class HistoricalReplayService
             .Select(x => x.Symbol.Trim().ToUpperInvariant()).Where(x => x.Length > 0 && x != "QQQ")
             .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToImmutableArray();
         if (watch.Length == 0) return new(409, null, "관심종목이 비어 있습니다.");
+        if (watch.Any(x => !ReplayDatasetCache.IsValidSymbol(x)))
+            return new(400, null, "심볼은 1~32자의 영문자·숫자·점·하이픈·밑줄만 사용할 수 있습니다.");
 
         var now = _clock.GetUtcNow();
         var run = new HistoricalReplayRun(Guid.NewGuid().ToString("N"), request.From, request.To, watch, "QQQ",
             _bars.Name, _structurePolicy.PolicyHash, _weights.WeightsVersion, "queued", now, null, null, [], null, [],
             "historical-virtual", "과거 replay 가상 결과이며 실제 체결 성과가 아닙니다.",
-            SelectedCostPolicy: request.MissingCostPolicy);
+            SelectedCostPolicy: request.MissingCostPolicy, RefreshDataset: request.RefreshDataset);
         await SaveAsync(run);
         var cancellation = new CancellationTokenSource();
         var work = new ReplayWork(cancellation);
@@ -198,11 +208,21 @@ public sealed class HistoricalReplayService
             work.Cancellation.Token.ThrowIfCancellationRequested();
             if (running?.Status != "running") return;
             var replayRoot = ReplayDirectory(queued.Id);
-            var import = await new ReplayBackfill(_bars, _clock).RunAsync(replayRoot, queued.Watchlist,
-                queued.Benchmark, queued.From, queued.To, work.Cancellation.Token);
+            var dataset = await new ReplayDatasetCache(_root, _bars, _clock).AcquireAsync(queued.Watchlist,
+                queued.Benchmark, queued.From, queued.To, queued.RefreshDataset, work.Cancellation.Token);
+            var import = dataset.Import;
+            await UpdateAsync(queued.Id, current => current.Status == "running" ? current with
+            {
+                DatasetId = dataset.DatasetId,
+                DatasetStatus = dataset.Manifest.Status,
+                DatasetFetchedAt = dataset.Manifest.FetchedAt,
+                DatasetReused = dataset.Reused
+            } : current);
             var sourceQuality = import.Sources.Select(x => new HistoricalReplaySourceQuality(x.Symbol, x.RawBars,
                 x.ActualTradingDays, x.ReachedRequestedStart, x.OldestBar, x.DataStatus, x.Reason, x.NewestBar,
-                _structurePolicy.DailyLookbackSessions, Math.Min(x.ActualTradingDays, _structurePolicy.DailyLookbackSessions)))
+                _structurePolicy.DailyLookbackSessions, Math.Min(x.ActualTradingDays, _structurePolicy.DailyLookbackSessions),
+                FirstCoveredSession: x.FirstCoveredSession, LastCoveredSession: x.LastCoveredSession,
+                RequestedFrom: x.RequestedFrom, RequestedTo: x.RequestedTo))
                 .ToImmutableArray();
             if (import.DataStatus == "no-data")
             {
@@ -217,21 +237,47 @@ public sealed class HistoricalReplayService
                 } : current);
                 return;
             }
-            var measurement = await new ConfluenceReplay(_barStores.Create(Path.Combine(replayRoot, "bars")),
+            if (import.DataStatus == "partial")
+            {
+                var reason = "insufficient-data: 요청 시작일까지 도달하지 못한 원천이 있어 성과 집계와 " +
+                    "훈련·선정을 실행하지 않았습니다. " + string.Join("; ", import.Sources
+                        .Where(x => x.DataStatus != "available")
+                        .Select(x => $"{x.Symbol} {x.FirstCoveredSession:yyyy-MM-dd}~{x.LastCoveredSession:yyyy-MM-dd} " +
+                                     $"(요청 {x.RequestedFrom:yyyy-MM-dd}~{x.RequestedTo:yyyy-MM-dd}, {x.Reason})"));
+                var unavailable = queued.Watchlist.Select(symbol => Unavailable(symbol, reason)).ToImmutableArray();
+                var partialQuality = import.Rows.Select(x => new HistoricalReplayQuality(x.Symbol, x.ExpectedBars, x.ActualBars,
+                    x.Gaps, x.Duplicates, x.MissingRate, x.BenchmarkMissing)).ToImmutableArray();
+                var partialTrainDays = Math.Max(1, (queued.To.DayNumber - queued.From.DayNumber + 1) / 2);
+                var partialTrainTo = queued.From.AddDays(partialTrainDays - 1);
+                var partialEvaluationFrom = partialTrainTo < queued.To ? partialTrainTo.AddDays(1) : queued.To;
+                await UpdateAsync(queued.Id, current => current.Status == "running" ? current with
+                {
+                    Status = "completed", CompletedAt = _clock.GetUtcNow(), Source = import.Source,
+                    DataStatus = "insufficient-data", DataReason = reason, Notice = reason,
+                    SourceQuality = sourceQuality, DataQuality = partialQuality, Aggregate = null, Symbols = unavailable,
+                    SelectionDiagnostics = new HistoricalReplaySelectionDiagnostics(ReplaySelectionPolicy.Version,
+                        queued.From, partialTrainTo, partialEvaluationFrom, queued.To, 0,
+                        ReplaySelectionPolicy.MinimumTrainingRows,
+                        null, "insufficient-source-coverage", "원천 범위가 요청 시작일까지 도달하지 않아 선택을 생략")
+                } : current);
+                return;
+            }
+            var measurement = await new ConfluenceReplay(_barStores.Create(Path.Combine(dataset.Root, "bars")),
                 _confluencePolicy).RunAsync(queued.From, queued.To, 10, queued.Benchmark, work.Cancellation.Token);
-            var replayStore = _barStores.Create(Path.Combine(replayRoot, "bars"));
-            var costModel = HistoricalReplayCostModel.ConservativeDefault;
+            var replayStore = _barStores.Create(Path.Combine(dataset.Root, "bars"));
+            var costModel = HistoricalReplayCostModel.FeeOnlyLongOnly;
             var costSource = new ModeledHistoricalLiquiditySource(costModel);
             var modelPolicy = _structurePolicy with
             {
                 RequireCompleteLiquidityCost = true,
-                ShortBorrowCostPercent = costModel.ShortBorrowPercent
+                RoundTripFeePercent = TradingCostDefaults.RoundTripFeePercent,
+                ShortBorrowCostPercent = null
             };
             var trainDays = Math.Max(1, (queued.To.DayNumber - queued.From.DayNumber + 1) / 2);
             var trainTo = queued.From.AddDays(trainDays - 1);
             var evaluationFrom = trainTo < queued.To ? trainTo.AddDays(1) : queued.To;
             var trainingRun = await new HistoricalStructureTradeReplay(replayStore, modelPolicy, costSource,
-                    queued.Benchmark)
+                    benchmarkSymbol: queued.Benchmark)
                 .RunDetailedAsync(queued.From, trainTo, queued.Watchlist, work.Cancellation.Token);
             var observations = trainingRun.Candidates
                 .Where(x => x.CostComplete)
@@ -250,7 +296,7 @@ public sealed class HistoricalReplayService
                 replayPolicy = WalkForwardExpectedValue.ApplyToPolicy(modelPolicy, selectedThreshold);
             }
             var modeledRun = await new HistoricalStructureTradeReplay(replayStore, replayPolicy, costSource,
-                    queued.Benchmark)
+                    benchmarkSymbol: queued.Benchmark)
                 .RunDetailedAsync(evaluationFrom, queued.To, queued.Watchlist, work.Cancellation.Token);
             var observedPolicy = replayPolicy with { RequireCompleteLiquidityCost = true, ShortBorrowCostPercent = null };
             var observedRun = await new HistoricalStructureTradeReplay(replayStore, observedPolicy,
@@ -278,13 +324,15 @@ public sealed class HistoricalReplayService
             var symbols = queued.SelectedCostPolicy == HistoricalReplayCostPolicies.ModeledV2
                 ? modeledSymbols : observedUnavailable;
             var costResults = ImmutableArray.Create(
-                new HistoricalReplayCostResult("modeled", costModel.Version, true,
+                new HistoricalReplayCostResult("fee-only", costModel.Version, true,
                     HistoricalReplayCostPolicies.ModeledV2, null, Aggregate(modeledSymbols), modeledSymbols,
-                    modeledRun.GateSummary),
+                    modeledRun.GateSummary, TradingCostDefaults.RoundTripFeePercent, costModel.SpreadPercent, 0,
+                    "unavailable", "long-only"),
                 new HistoricalReplayCostResult("observed", "OBSERVED_ORDERBOOK", false,
                     HistoricalReplayCostPolicies.RejectMissing,
                     "과거 bid/ask·잔량·slippage 관측이 없어 net PnL을 산출하지 않습니다.", null,
-                    observedUnavailable, observedRun.GateSummary));
+                    observedUnavailable, observedRun.GateSummary, TradingCostDefaults.RoundTripFeePercent, null, null,
+                    "unavailable", "long-only"));
             var quality = import.Rows.Select(x => new HistoricalReplayQuality(x.Symbol, x.ExpectedBars, x.ActualBars,
                 x.Gaps, x.Duplicates, x.MissingRate, x.BenchmarkMissing)).ToImmutableArray();
             work.Cancellation.Token.ThrowIfCancellationRequested();
@@ -293,8 +341,9 @@ public sealed class HistoricalReplayService
                 Status = "completed", CompletedAt = _clock.GetUtcNow(),
                 Source = import.Source,
                 DataStatus = "partial",
-                DataReason = "관측 비용은 결측이며 modeled-v2와 reject-missing 결과를 분리했습니다.",
-                Notice = "선택한 비용 결측 정책의 과거 가상 결과이며 실제 체결 성과가 아닙니다.",
+                DataReason = "왕복 수수료 0.2%만 적용하고 과거 spread·borrow·slippage는 관측값으로 사용하지 않았습니다.",
+                Notice = "long-only fee-only 과거 가상 결과이며 실제 체결 성과가 아닙니다. " +
+                    "spread·borrow는 0, slippage는 unavailable입니다.",
                 SourceQuality = sourceQuality,
                 DataQuality = quality,
                 Symbols = symbols,
@@ -372,7 +421,7 @@ public sealed class HistoricalReplayService
                 ? null : Math.Abs(trade.Target - trade.EntryPrice) / trade.EntryPrice * 100;
             return new RegimeValidationSample(candidate.EventId, candidate.Symbol, candidate.SessionDate,
                 candidate.SignalAt, candidate.Regime == "UNCOLLECTED" ? null : candidate.Regime,
-                trade?.Kind ?? "UNCOLLECTED", candidate.FinalApproved, trade is not null,
+                trade?.Kind ?? "UNCOLLECTED", candidate.GateApproved || candidate.FinalApproved, trade is not null,
                 trade is { Status: not "OPEN" } ? trade.Status : null, stopDistance, targetDistance,
                 trade?.PnlPercent);
         }).ToArray();

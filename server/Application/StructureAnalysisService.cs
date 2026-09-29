@@ -550,7 +550,11 @@ public sealed class StructureAnalysisService(
                 var confirmation = stored.Confirmation ?? PendingEntryPolicy.Confirm(stored.Pending, bar!, now, bar!.Close,
                     "LIVE_CONFIRMATION_BAR_CLOSE");
                 if (confirmation.Decision != PendingEntryDecision.Confirmed)
+                {
+                    if (confirmation.Decision == PendingEntryDecision.RejectedThesisInvalidated)
+                        await pendingEntries.RemoveAsync(snapshot.Symbol);
                     return new ActiveEntryResult(candidates, false, "V5_PENDING_CONFIRMATION_REJECTED");
+                }
                 var benchmarkDecision = BenchmarkEntryGate.Evaluate(_policy, stored.Context.PlanSnapshot.Kind,
                     stored.Pending.Side, benchmark?.Bars, stored.Pending.ConfirmationBarStart.AddMinutes(1));
                 if (!benchmarkDecision.Allowed)
@@ -617,7 +621,11 @@ public sealed class StructureAnalysisService(
                 var confirmation = PendingEntryPolicy.Confirm(stored.Pending, confirmationBar, now,
                     confirmationBar.Close, "LIVE_CONFIRMATION_BAR_CLOSE");
                 if (confirmation.Decision != PendingEntryDecision.Confirmed)
+                {
+                    if (confirmation.Decision == PendingEntryDecision.RejectedThesisInvalidated)
+                        await pendingEntries.RemoveAsync(snapshot.Symbol);
                     return Blocked(candidates, chosen, "V5_PENDING_CONFIRMATION_REJECTED");
+                }
                 var benchmarkDecision = BenchmarkEntryGate.Evaluate(_policy, stored.Context.PlanSnapshot.Kind,
                     stored.Pending.Side, benchmark?.Bars, stored.Pending.ConfirmationBarStart.AddMinutes(1));
                 if (!benchmarkDecision.Allowed)
@@ -650,10 +658,9 @@ public sealed class StructureAnalysisService(
             chosen.EntryQuality, snapshot.AnalysisAsOf, snapshot.QuoteAt);
         if (pendingEntries is not null)
         {
-            var pending = new PendingEntry(chosen.EventId, snapshot.Symbol, chosen.Side,
-                chosen.TriggerBarStart, chosen.TriggerBarStart.AddMinutes(1), chosen.ExpiresAt,
-                (double)chosen.Plan.Stop, (double)chosen.Plan.Target, (double)chosen.Plan.EntryReference,
-                chosen.Plan.PlanId, chosen.Plan.PolicyHash);
+            var pending = PendingEntryPolicy.Create(chosen.EventId, snapshot.Symbol, chosen.TriggerBarStart,
+                chosen.TriggerBarStart.AddMinutes(1), chosen.ExpiresAt, chosen.Plan,
+                _policy.BreakoutConfirmationGateVersion);
             await pendingEntries.QueueAsync(new StoredPendingStructuralEntry(pending, context, now));
             return Blocked(candidates, chosen, "V5_ENTRY_PENDING_CONFIRMATION");
         }

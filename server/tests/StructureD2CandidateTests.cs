@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Astra.Server;
 using Astra.Server.Domain.Structure;
 using Xunit;
 
@@ -150,6 +151,11 @@ public sealed class StructureD2CandidateTests
             D2.Trend(TrendState.Transition, 10)), P);
         var transitionCandidate = Assert.Single(transition.Candidates.Where(x => x.Kind == SetupKind.Pullback));
         Assert.Contains(SetupDetector.CodeTransitionPullbackBlocked, transitionCandidate.RejectionCodes);
+
+        var enabled = SetupDetector.Detect(Request(PullbackBars(), PullbackZones(), PullbackEpisodes(),
+            D2.Trend(TrendState.Transition, 10)), P with { AllowTransitionPullback = true });
+        var enabledCandidate = Assert.Single(enabled.Candidates.Where(x => x.Kind == SetupKind.Pullback));
+        Assert.DoesNotContain(SetupDetector.CodeTransitionPullbackBlocked, enabledCandidate.RejectionCodes);
     }
 
     /// <summary>히스테리시스로 UP이 유지되는 efficiency 1봉 딥에서는 PULLBACK 가설이 그대로 생성된다(§7, #148).</summary>
@@ -506,6 +512,79 @@ public sealed class StructureD2CandidateTests
     }
 
     [Fact]
+    public void ReboundLongAboveVwapIsRejectedByTheSharedCandidatePolicy()
+    {
+        var trend = D2.Trend(TrendState.Range, -20) with { Vwap = 99.70, Atr1m = .20 };
+
+        var result = SetupDetector.Detect(Request(PullbackBars(), PullbackZones(), PullbackEpisodes(), trend), P);
+        var candidate = result.Candidates.Single(x => x.Kind == SetupKind.Rebound);
+
+        Assert.Equal(.5, candidate.Evidence!.VwapDistanceAtr!.Value, 10);
+        Assert.Equal(CandidateDisposition.Rejected, candidate.Disposition);
+        Assert.Contains(SetupDetector.CodeReboundLongAboveVwap, candidate.RejectionCodes);
+        Assert.Null(candidate.Plan);
+        Assert.Null(result.PreferredCandidateId);
+    }
+
+    [Theory]
+    [InlineData(99.80, 0)]
+    [InlineData(100.00, -1)]
+    public void ReboundLongAtOrBelowVwapKeepsTheExistingReadyPath(double vwap, double expectedDistance)
+    {
+        var trend = D2.Trend(TrendState.Range, -20) with { Vwap = vwap, Atr1m = .20 };
+
+        var candidate = SetupDetector.Detect(
+            Request(PullbackBars(), PullbackZones(), PullbackEpisodes(), trend), P)
+            .Candidates.Single(x => x.Kind == SetupKind.Rebound);
+
+        Assert.Equal(expectedDistance, candidate.Evidence!.VwapDistanceAtr!.Value, 10);
+        Assert.Equal(CandidateDisposition.Ready, candidate.Disposition);
+        Assert.DoesNotContain(SetupDetector.CodeReboundLongAboveVwap, candidate.RejectionCodes);
+    }
+
+    [Fact]
+    public void ReboundLongWithMissingVwapKeepsTheExistingReadyPath()
+    {
+        var trend = D2.Trend(TrendState.Range, -20) with { Vwap = null };
+
+        var candidate = SetupDetector.Detect(
+            Request(PullbackBars(), PullbackZones(), PullbackEpisodes(), trend), P)
+            .Candidates.Single(x => x.Kind == SetupKind.Rebound);
+
+        Assert.Null(candidate.Evidence!.VwapDistanceAtr);
+        Assert.Equal(CandidateDisposition.Ready, candidate.Disposition);
+        Assert.DoesNotContain(SetupDetector.CodeReboundLongAboveVwap, candidate.RejectionCodes);
+    }
+
+    [Theory]
+    [InlineData(SetupKind.Breakout)]
+    [InlineData(SetupKind.Pullback)]
+    public void AboveVwapPolicyDoesNotRejectOtherSetupKinds(SetupKind kind)
+    {
+        Assert.False(SetupDetector.RejectsReboundLongAboveVwap(kind, TradeSide.Long, .01));
+    }
+
+    [Fact]
+    public void AboveVwapPolicyDoesNotRejectShortRebounds()
+    {
+        Assert.False(SetupDetector.RejectsReboundLongAboveVwap(SetupKind.Rebound, TradeSide.Short, .01));
+    }
+
+    [Fact]
+    public void LiveAndReplayInputsShareTheSameReboundVwapDisposition()
+    {
+        var trend = D2.Trend(TrendState.Range, -20) with { Vwap = 99.70, Atr1m = .20 };
+        var request = Request(PullbackBars(), PullbackZones(), PullbackEpisodes(), trend);
+
+        var live = SetupDetector.Detect(request, P);
+        var replay = SetupDetector.Detect(request, P);
+
+        Assert.Equal(live.Candidates.Select(x => x.Fingerprint()), replay.Candidates.Select(x => x.Fingerprint()));
+        Assert.Equal(CandidateDisposition.Rejected,
+            replay.Candidates.Single(x => x.Kind == SetupKind.Rebound).Disposition);
+    }
+
+    [Fact]
     public void ReboundDoesNotFireWithoutAFailedBreakdownEpisode()
     {
         // episode 저점이 지지 구간 안(99.25)이면 이탈 시도가 없었다 → 눌림이지 반등이 아니다.
@@ -722,6 +801,61 @@ public sealed class StructureD2CandidateTests
     }
 
     [Fact]
+    public void Range롱_복수후보는_VWAP이하중_가장가까운_후보를_우선한다()
+    {
+        var below = WithContext(Candidate("PULLBACK", "zone-p", 60, 2m, "below"),
+            StrategyDirection.Range, TradeSide.Long, 0);
+        var farBelow = WithContext(Candidate("REBOUND", "zone-r", 60, 2m, "far"),
+            StrategyDirection.Range, TradeSide.Long, -.6);
+        var above = WithContext(Candidate("BREAKOUT", "zone-b", 60, 2m, "above"),
+            StrategyDirection.Range, TradeSide.Long, .01);
+
+        Assert.Equal(below.EventId, CandidateSelection.SelectPreferred([above, farBelow, below])!.EventId);
+    }
+
+    [Fact]
+    public void Range롱_VWAP거리동률은_기존_ordinal순서로_해소한다()
+    {
+        var breakout = WithContext(Candidate("BREAKOUT", "zone-b", 60, 2m, "same"),
+            StrategyDirection.Range, TradeSide.Long, -.2);
+        var pullback = WithContext(Candidate("PULLBACK", "zone-p", 60, 2m, "same"),
+            StrategyDirection.Range, TradeSide.Long, -.2);
+
+        Assert.Equal(breakout.EventId, CandidateSelection.SelectPreferred([pullback, breakout])!.EventId);
+        Assert.Equal(breakout.EventId, CandidateSelection.SelectPreferred([breakout, pullback])!.EventId);
+    }
+
+    [Fact]
+    public void VWAP_tieBreak비대상은_기존_ordinal선택을_보존한다()
+    {
+        var ordinal = WithContext(Candidate("BREAKOUT", "zone-b", 60, 2m, "ordinal"),
+            StrategyDirection.Range, TradeSide.Long, .5);
+        var favored = WithContext(Candidate("PULLBACK", "zone-p", 60, 2m, "favored"),
+            StrategyDirection.Range, TradeSide.Long, -.1);
+
+        Assert.Equal(ordinal.EventId, CandidateSelection.SelectPreferred([ordinal])!.EventId);
+        Assert.Equal(ordinal.EventId, CandidateSelection.SelectPreferred([ordinal, favored with { Evidence = null }])!.EventId);
+        Assert.Equal(ordinal.EventId, CandidateSelection.SelectPreferred([
+            ordinal with { Regime = new StrategyRegime(StrategyDirection.TrendUp, VolatilityBand.Normal) },
+            favored with { Regime = new StrategyRegime(StrategyDirection.TrendUp, VolatilityBand.Normal) }
+        ])!.EventId);
+        Assert.Equal(ordinal.EventId, CandidateSelection.SelectPreferred([
+            ordinal, favored with { Side = TradeSide.Short }
+        ])!.EventId);
+    }
+
+    [Fact]
+    public void Range롱_VWAP우선에서도_Ready가아닌_후보는_선택하지않는다()
+    {
+        var ready = WithContext(Candidate("PULLBACK", "zone-p", 60, 2m, "ready"),
+            StrategyDirection.Range, TradeSide.Long, .5);
+        var rejected = WithContext(Candidate("BREAKOUT", "zone-b", 60, 2m, "rejected"),
+            StrategyDirection.Range, TradeSide.Long, 0) with { Disposition = CandidateDisposition.Rejected };
+
+        Assert.Equal(ready.EventId, CandidateSelection.SelectPreferred([rejected, ready])!.EventId);
+    }
+
+    [Fact]
     public void OnlyOneCandidatePerDuplicateGuardKeySurvivesSelection()
     {
         // 같은 트리거가 여러 저항을 동시에 넘어도 이 키당 신규 거래 후보는 1개다(§8).
@@ -762,6 +896,16 @@ public sealed class StructureD2CandidateTests
             Fx.At(TriggerMinute), Fx.At(TriggerMinute + 1), Fx.At(TriggerMinute), Fx.At(TriggerMinute + 1),
             Fx.At(TriggerMinute + 6), CandidateDisposition.Ready, 100m, 99.15m, quality, qualityResult, null,
             planning, ImmutableArray<string>.Empty, ImmutableArray<string>.Empty, false, false, null);
+    }
+
+    static EntryCandidate WithContext(EntryCandidate candidate, StrategyDirection direction, TradeSide side,
+        double? vwapDistance)
+    {
+        var regime = new StrategyRegime(direction, VolatilityBand.Normal);
+        var evidence = new EntryEvidence(candidate.TriggerBarStart, candidate.TriggerConfirmedAt, side, regime,
+            null, null, candidate.Planning.NetR, null, null, vwapDistance, null, TimeSpan.Zero,
+            true, true, [], []);
+        return candidate with { Side = side, Regime = regime, Evidence = evidence };
     }
 
     // ── D1 파이프라인과의 결합: 트리거 봉 격리와 예시 E ──

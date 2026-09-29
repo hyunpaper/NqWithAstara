@@ -17,6 +17,8 @@ public sealed record StructurePolicy
     public string Version { get; init; } = "v5-structure.1";
     public string EligibilityCostModelVersion { get; init; } = "eligibility.fee-plus-spread.1";
     public string RealizedFillCostModelVersion { get; init; } = "realized.v4-fill.1";
+    public string ReboundLongVwapGateVersion { get; init; } = "reject-positive-distance.1";
+    public string BreakoutConfirmationGateVersion { get; init; } = "hold-breakout-boundary.1";
 
     // ── 피벗·최소 관측 (§16A 표) ──
     public int PivotLeft { get; init; } = 2;
@@ -130,6 +132,10 @@ public sealed record StructurePolicy
     public double? ExpectedValueFeatureThreshold { get; init; }
     public double MinimumExpectedNetR { get; init; } = 0.0;
     public bool RequireCompleteLiquidityCost { get; init; } = true;
+    /// <summary>
+    /// TRANSITION은 확정된 추세 정렬이 없는 구간이므로 PULLBACK의 최종 진입 자격을 기본 차단한다.
+    /// 후보와 근거는 관측을 위해 생성하되, 명시적으로 허용한 정책에서만 최종 자격 차단을 해제한다.
+    /// </summary>
     public bool AllowTransitionPullback { get; init; }
     public bool AllowTransitionBreakout { get; init; }
     public bool RequirePositiveBenchmarkForRebound { get; init; }
