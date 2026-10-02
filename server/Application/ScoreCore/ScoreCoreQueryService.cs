@@ -11,7 +11,7 @@ public sealed record ScoreCoreQueryResult(ScoreCoreQueryStatus Status, ScoreCore
 public sealed record ScoreCoreDisabledDto(bool Enabled);
 
 public sealed record ScoreCoreSnapshotDto(bool Enabled, string CaptureId, string TargetId, string TargetKind,
-    DateTimeOffset AsOf, string Status, string CalibrationStatus, string SchemaVersion, string PolicyVersion,
+    DateTimeOffset AsOf, DateTimeOffset CapturedAt, DateTimeOffset LastConfirmedAt, string Status, string CalibrationStatus, string SchemaVersion, string PolicyVersion,
     string ClassifierVersion, int EvidenceCount, int UniqueEventCount, int InputCount, int IncludedCount,
     int UnknownCount, IReadOnlyList<ScoreCoreHorizonDto> Horizons, IReadOnlyList<ScoreCoreCoverageDto> Coverage,
     IReadOnlyList<ScoreCoreExclusionSummaryDto> ExclusionSummary,
@@ -34,7 +34,8 @@ public sealed record ScoreCoreExcludedEvidenceDto(string Stage, string Source, s
     string? EventGroupId, string Reason);
 
 /// <summary>저장된 shadow snapshot을 API DTO로 변환한다. Domain 타입을 직접 노출하지 않는다(#309).</summary>
-public sealed partial class ScoreCoreQueryService(ScoreCoreOptions options, IScoreCoreSnapshotStore store)
+public sealed partial class ScoreCoreQueryService(ScoreCoreOptions options, IScoreCoreSnapshotStore store,
+    ScoreCoreRuntimeState? state = null)
 {
     public async Task<ScoreCoreQueryResult> LatestAsync(string kind, string targetId, CancellationToken ct)
     {
@@ -42,7 +43,7 @@ public sealed partial class ScoreCoreQueryService(ScoreCoreOptions options, ISco
         if (NewsScoreEvidenceSource.TargetKind(kind ?? "") is not { } targetKind || !TargetPattern().IsMatch(targetId ?? ""))
             return new(ScoreCoreQueryStatus.BadRequest);
         var snapshot = await store.FindLatestAsync(targetKind, targetId!.Trim(), ct);
-        return snapshot is null ? new(ScoreCoreQueryStatus.NotFound) : new(ScoreCoreQueryStatus.Found, Map(snapshot, false));
+        return snapshot is null ? new(ScoreCoreQueryStatus.NotFound) : new(ScoreCoreQueryStatus.Found, Map(snapshot, false, state));
     }
 
     public async Task<ScoreCoreQueryResult> SnapshotAsync(string captureId, CancellationToken ct)
@@ -50,10 +51,13 @@ public sealed partial class ScoreCoreQueryService(ScoreCoreOptions options, ISco
         if (!options.Enabled) return new(ScoreCoreQueryStatus.Disabled);
         if (!CapturePattern().IsMatch(captureId ?? "")) return new(ScoreCoreQueryStatus.NotFound);
         var snapshot = await store.FindAsync(captureId!, ct);
-        return snapshot is null ? new(ScoreCoreQueryStatus.NotFound) : new(ScoreCoreQueryStatus.Found, Map(snapshot, true));
+        if (snapshot is null) return new(ScoreCoreQueryStatus.NotFound);
+        var latest = await store.FindLatestAsync(snapshot.Score.TargetKind, snapshot.Score.TargetId, ct);
+        return new(ScoreCoreQueryStatus.Found,
+            Map(snapshot, true, latest?.CaptureId == snapshot.CaptureId ? state : null));
     }
 
-    static ScoreCoreSnapshotDto Map(ScoreCoreShadowSnapshot snapshot, bool detail)
+    static ScoreCoreSnapshotDto Map(ScoreCoreShadowSnapshot snapshot, bool detail, ScoreCoreRuntimeState? state)
     {
         var score = snapshot.Score;
         var excluded = snapshot.AssemblyExclusions
@@ -64,7 +68,10 @@ public sealed partial class ScoreCoreQueryService(ScoreCoreOptions options, ISco
         var summary = excluded.GroupBy(x => (x.Stage, x.Reason))
             .Select(x => new ScoreCoreExclusionSummaryDto(x.Key.Stage, x.Key.Reason, x.Count()))
             .OrderBy(x => x.Stage, StringComparer.Ordinal).ThenBy(x => x.Reason, StringComparer.Ordinal).ToArray();
-        return new(true, snapshot.CaptureId, score.TargetId, Name(score.TargetKind), score.AsOf, snapshot.Status,
+        var confirmed = state?.LastConfirmedAt(score.TargetKind, score.TargetId) is { } at && at > score.AsOf
+            ? at : score.AsOf;
+        return new(true, snapshot.CaptureId, score.TargetId, Name(score.TargetKind), score.AsOf, score.AsOf, confirmed,
+            snapshot.Status,
             Name(score.CalibrationStatus), score.ScoreSchemaVersion, score.PolicyVersion, score.ClassifierVersion,
             snapshot.EvidenceCount, snapshot.UniqueEventCount, score.InputCount, score.IncludedCount, score.UnknownCount,
             score.Horizons.Select(x => new ScoreCoreHorizonDto(Name(x.Horizon), x.SignedEvidence, x.PositiveMass,
