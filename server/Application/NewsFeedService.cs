@@ -45,7 +45,6 @@ public sealed class NewsFeedService(
     NewsRuntimeState state,
     IMonitorDiagnostics diagnostics,
     TimeProvider clock,
-    NewsTranslationQueue? translationQueue = null,
     INewsRelevanceAdjudicator? relevanceAdjudicator = null,
     INewsRelevancePolicy? relevancePolicy = null,
     INewsRelevanceContextSource? relevanceContext = null)
@@ -188,8 +187,6 @@ public sealed class NewsFeedService(
                 var record = JsonSerializer.Deserialize<NewsRecord>(line, Json);
                 if (record is null) continue;
                 state.Add(record, options.RecentCapacity);
-                if (record.TranslationStatus is "pending" or "failed" or "quota_wait" or "not_configured")
-                    translationQueue?.Enqueue(record);
             }
         }
         catch (Exception exception) { diagnostics.PollFailed("news-restore", exception); }
@@ -787,25 +784,16 @@ public sealed class NewsFeedService(
             clock.GetUtcNow(),
             inputKind,
             result.PromptVersion,
-            classifiedFrom, entry.Article.Entities, classification?.KoreanTitle,
-            classification?.KoreanSource, classification?.ImpactScores,
-            entry.Article.Summary, entry.Article.Content,
-            entry.Article.Url,
-            entry.Prior?.CollectedAt ?? entry.CollectedAt,
-            classifiedFrom is not null ? "representative" : inputKind == NewsInputKinds.Headline ? "headline"
+            classifiedFrom, entry.Article.Entities, ImpactScores: classification?.ImpactScores,
+            Summary: entry.Article.Summary, Content: entry.Article.Content,
+            Url: entry.Article.Url,
+            CollectedAt: entry.Prior?.CollectedAt ?? entry.CollectedAt,
+            EvidenceSource: classifiedFrom is not null ? "representative" : inputKind == NewsInputKinds.Headline ? "headline"
                 : classificationSource.Contains("summary", StringComparison.Ordinal) || classificationSource.Contains("excerpt", StringComparison.Ordinal)
                     ? "excerpt" : "body",
-            translationQueue is null ? entry.Prior?.TranslationStatus ?? "not_requested" : "pending",
-            classificationText, classificationSource, classifiedFrom ?? entry.Article.Id,
-            entry.Prior?.SummaryKo, entry.Prior?.ContentKo,
-            entry.Article.CreatedAt == DateTimeOffset.MinValue ? "unknown" : entry.Article.CreatedAt > clock.GetUtcNow().AddMinutes(5) ? "future" : "known",
-            translationQueue is null ? entry.Prior?.TitleTranslationStatus ?? "not_requested" : "pending",
-            translationQueue is null ? entry.Prior?.SummaryTranslationStatus ?? "not_requested" : "pending",
-            translationQueue is null ? entry.Prior?.ContentTranslationStatus ?? "not_requested" : "pending",
-            translationQueue is null ? entry.Prior?.ClassificationTranslationStatus ?? "not_requested" : "pending",
-            entry.Prior?.ClassificationTextKo,
-            entry.Prior?.TranslationContentHash,
-            relevance);
+            ClassificationText: classificationText, ClassificationSource: classificationSource, EvidenceArticleId: classifiedFrom ?? entry.Article.Id,
+            PublishedAtStatus: entry.Article.CreatedAt == DateTimeOffset.MinValue ? "unknown" : entry.Article.CreatedAt > clock.GetUtcNow().AddMinutes(5) ? "future" : "known",
+            Relevance: relevance);
     }
 
     async Task SaveAsync(NewsRecord record, CancellationToken ct)
@@ -829,7 +817,6 @@ public sealed class NewsFeedService(
         state.Add(record, options.RecentCapacity);
         state.Limited(false);
         await MarkInboxProcessedAsync(record.Id, ct);
-        translationQueue?.Enqueue(record);
     }
 
     bool Allowed()

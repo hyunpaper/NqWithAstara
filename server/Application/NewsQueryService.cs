@@ -8,7 +8,7 @@ namespace Astra.Server.Application;
 /// 관련성 exclude 기사와, 판정이 없는 저장 기사 중 정책이 제외하는 기사는 목록·점수에서 뺀다.
 /// </summary>
 public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state, TimeProvider clock,
-    NewsTranslationQueue? translations = null, INewsRelevancePolicy? relevance = null)
+    INewsRelevancePolicy? relevance = null)
 {
     public const int DefaultLimit = 50;
     public const int MaxLimit = 200;
@@ -71,10 +71,7 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
     public object Health() => new
     {
         enabled = options.Enabled,
-        feed = options.UseSbhNews ? NewsFeedProviders.SbhNews
-            : options.UseFoxNewsRss ? NewsFeedProviders.FoxNewsRss
-            : options.UseSaveTicker ? "saveticker"
-            : string.IsNullOrWhiteSpace(options.MarketauxApiKey) ? "rss" : "marketaux",
+        feed = NewsFeedProviders.SbhNews,
         lastPollAt = state.LastPollAt,
         lastAttemptAt = state.LastAttemptAt,
         lastSuccessAt = state.LastSuccessAt,
@@ -85,7 +82,6 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         feedStatus = state.FeedStatus,
         providers = state.Providers,
         queue = state.Queue,
-        translationQueue = translations?.QueueDepth ?? 0,
         relevanceAdjudication = new { status = state.RelevanceAdjudicationStatus,
             reason = state.RelevanceAdjudicationReason, queue = state.RelevanceAdjudicationQueue },
         relevanceFilter = RelevanceFilter(state.RelevanceFilter),
@@ -118,20 +114,13 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         var provenance = !string.IsNullOrWhiteSpace(record.ClassifiedFrom) ? state.Find(record.ClassifiedFrom) ?? record : record;
         return new
         {
-            id = record.Id, title = record.Title, titleKo = record.TitleKo,
-            source = record.Source, sourceKo = record.SourceKo, url = record.Url,
+            id = record.Id, title = record.Title,
+            source = record.Source, url = record.Url,
             summary = record.Summary, body = record.Content, content = record.Content,
-            summaryKo = record.SummaryKo, contentKo = record.ContentKo,
-            translationStatus = record.TranslationStatus,
-            titleTranslationStatus = record.TitleTranslationStatus,
-            summaryTranslationStatus = record.SummaryTranslationStatus,
-            contentTranslationStatus = record.ContentTranslationStatus,
-            classificationTranslationStatus = record.ClassificationTranslationStatus,
             createdAt = record.CreatedAt, collectedAt = record.CollectedAt,
             publishedAtStatus = record.PublishedAtStatus,
             inputKind = record.InputKind, evidenceSource = record.EvidenceSource,
             classificationText = string.IsNullOrWhiteSpace(record.ClassificationText) ? provenance.ClassificationText : record.ClassificationText,
-            classificationTextKo = record.ClassificationTextKo ?? provenance.ClassificationTextKo,
             classificationSource = record.ClassificationSource,
             evidenceArticleId = record.EvidenceArticleId ?? provenance.Id,
             classifiedFrom = record.ClassifiedFrom,
@@ -154,13 +143,6 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
     public object? DetailByQuery(string? id, string? symbol = null)
         => string.IsNullOrWhiteSpace(id) ? null : Detail(id, symbol);
 
-    public bool RequestTranslation(string? id)
-    {
-        if (string.IsNullOrWhiteSpace(id) || translations is null || state.Find(id) is not { } record) return false;
-        translations.Enqueue(record);
-        return true;
-    }
-
     public object? Evidence(string id)
     {
         return Detail(id);
@@ -172,9 +154,7 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         title = record.Title,
         summary = record.Summary,
         content = record.Content,
-        titleKo = record.TitleKo,
         source = record.Source,
-        sourceKo = record.SourceKo,
         createdAt = record.CreatedAt,
         tickers = record.Tickers,
         matchedSymbols = record.MatchedSymbols,
@@ -194,18 +174,10 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         url = record.Url,
         collectedAt = record.CollectedAt,
         evidenceSource = record.EvidenceSource,
-        translationStatus = record.TranslationStatus,
         classificationText = record.ClassificationText,
         classificationSource = record.ClassificationSource,
         evidenceArticleId = record.EvidenceArticleId,
-        summaryKo = record.SummaryKo,
-        contentKo = record.ContentKo,
         publishedAtStatus = record.PublishedAtStatus,
-        titleTranslationStatus = record.TitleTranslationStatus,
-        summaryTranslationStatus = record.SummaryTranslationStatus,
-        contentTranslationStatus = record.ContentTranslationStatus,
-        classificationTranslationStatus = record.ClassificationTranslationStatus,
-        classificationTextKo = record.ClassificationTextKo,
     };
 
     object Project(NewsSentimentScore score, IReadOnlyList<NewsRecord> records, DateTimeOffset now, string snapshotId)
@@ -228,7 +200,7 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         };
     }
 
-    sealed record EvidenceItem(string Id, string Title, string? TitleKo, string Source, string? SourceKo,
+    sealed record EvidenceItem(string Id, string Title, string Source,
         string Sentiment, int Strength, double Weight, double Contribution, DateTimeOffset CreatedAt);
     sealed record EvidenceSnapshot(double Score, double TotalWeight, IReadOnlyList<EvidenceItem> Top,
         int RemainingCount, double RemainingContribution, double RemainingWeight);
@@ -247,8 +219,8 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         var score = NewsSentimentDecay.Score(candidates.Select(x => new NewsSentimentInput(symbol,
             x.Record.Sentiment, x.Record.Strength, x.Record.CreatedAt)), now, options.HalfLifeMinutes)
             .FirstOrDefault()?.Score ?? 0;
-        var all = candidates.Select(x => new EvidenceItem(x.Record.Id, x.Record.Title, x.Record.TitleKo,
-                x.Record.Source, x.Record.SourceKo, x.Record.Sentiment, x.Record.Strength,
+        var all = candidates.Select(x => new EvidenceItem(x.Record.Id, x.Record.Title,
+                x.Record.Source, x.Record.Sentiment, x.Record.Strength,
                 Round6(x.Weight), Round6(NewsSentiments.Sign(x.Record.Sentiment) * x.Record.Strength * x.Weight / totalWeight),
                 x.Record.CreatedAt))
             .OrderByDescending(x => Math.Abs(x.Contribution)).ThenByDescending(x => x.CreatedAt)

@@ -21,34 +21,26 @@ public sealed class NewsFeedServiceTests
         public NewsRuntimeState State { get; } = new();
         public NewsClock Clock { get; } = new(Start);
         public NewsDiagnostics Diagnostics { get; } = new();
-        public NewsTranslationQueue? TranslationQueue { get; }
         public NewsFeedService Service { get; }
 
         public Harness(params WatchItem[] watchlist) : this(null, null, watchlist) { }
-
-        public Harness(INewsTranslator? translator, params WatchItem[] watchlist) : this(translator, null, watchlist) { }
 
         public Harness(INewsRelevanceAdjudicator adjudicator, Action<NewsOptions> configure)
         {
             configure(Options);
             Local = new NewsLocalStore();
-            Service = new NewsFeedService(Options, Feed, Classifier, Store, Local, State, Diagnostics, Clock,
-                null, adjudicator);
+            Service = new NewsFeedService(Options, Feed, Classifier, Store, Local, State, Diagnostics, Clock, adjudicator);
         }
 
-        public Harness(INewsTranslator? translator, INewsRelevanceAdjudicator? adjudicator, params WatchItem[] watchlist)
-            : this(translator, adjudicator, null, watchlist) { }
+        public Harness(INewsRelevanceAdjudicator? adjudicator, params WatchItem[] watchlist)
+            : this(adjudicator, null, watchlist) { }
 
-        public Harness(INewsRelevancePolicy policy) : this(null, null, policy) { }
+        public Harness(INewsRelevancePolicy policy) : this(null, policy) { }
 
-        public Harness(INewsTranslator? translator, INewsRelevanceAdjudicator? adjudicator, INewsRelevancePolicy? policy,
-            params WatchItem[] watchlist)
+        public Harness(INewsRelevanceAdjudicator? adjudicator, INewsRelevancePolicy? policy, params WatchItem[] watchlist)
         {
             Local = new NewsLocalStore(watchlist);
-            TranslationQueue = translator is null ? null
-                : new NewsTranslationQueue(Options, translator, Store, State, Diagnostics, Clock);
-            Service = new NewsFeedService(Options, Feed, Classifier, Store, Local, State, Diagnostics, Clock,
-                TranslationQueue, adjudicator, policy);
+            Service = new NewsFeedService(Options, Feed, Classifier, Store, Local, State, Diagnostics, Clock, adjudicator, policy);
         }
 
         public Task PollAsync() => Service.PollAsync(CancellationToken.None);
@@ -106,7 +98,8 @@ public sealed class NewsFeedServiceTests
         await harness.PollAsync();
         harness.Clock.Now = Start.AddMinutes(1);
         harness.Page(1, new NewsFeedItem("102", "구형 기사 1", new string('x', 5000), "legacy-source",
-            harness.Clock.GetUtcNow(), []), Item("101", "구형 기사 2"), Item("100", "기준"));
+            harness.Clock.GetUtcNow(), []), new NewsFeedItem("101", "구형 기사 2", new string('y', 1200), "legacy-source", Start, []),
+            Item("100", "기준"));
         await harness.PollAsync();
         Assert.Equal(1, harness.Service.QueueDepth);
 
@@ -732,7 +725,7 @@ public sealed class NewsFeedServiceTests
     {
         var harness = new Harness();
         harness.Classifier.Respond = _ => new NewsClassificationResult(
-            new NewsClassification(["MARKET"], NewsSentiments.Neutral, 1, "영향 제한", "시장 주요 기업 기사", "야후 파이낸스", new Dictionary<string, int> { ["MARKET"] = 10 }),
+            new NewsClassification(["MARKET"], NewsSentiments.Neutral, 1, "영향 제한", new Dictionary<string, int> { ["MARKET"] = 10 }),
             "qwen", 10, true, "v2c");
         var firstCollectedAt = Start.AddHours(-2);
         var record = new NewsRecord("90", "영문 기사", "Yahoo Finance", Start, [], [], ["MARKET"],
@@ -745,8 +738,6 @@ public sealed class NewsFeedServiceTests
 
         Assert.Single(harness.Classifier.Requests);
         Assert.Equal(NewsSentiments.Neutral, harness.Saved().Last().Sentiment);
-        Assert.Equal("시장 주요 기업 기사", harness.Saved().Last().TitleKo);
-        Assert.Equal("야후 파이낸스", harness.Saved().Last().SourceKo);
         Assert.Equal(10, harness.Saved().Last().ImpactScores!["MARKET"]);
         Assert.Equal(firstCollectedAt, harness.Saved().Last().CollectedAt);
     }
@@ -756,7 +747,7 @@ public sealed class NewsFeedServiceTests
     {
         var harness = new Harness();
         harness.Classifier.Respond = _ => new NewsClassificationResult(
-            new NewsClassification(["MARKET"], NewsSentiments.Neutral, 1, "본문 확인", "제목", "출처", new Dictionary<string, int> { ["MARKET"] = 1 }),
+            new NewsClassification(["MARKET"], NewsSentiments.Neutral, 1, "본문 확인", new Dictionary<string, int> { ["MARKET"] = 1 }),
             "qwen", 10, true, "v2c");
         var record = new NewsRecord("90", "저장 제목", "출처", Start, [], [], ["MARKET"], NewsSentiments.Unclassified, 0, "", "qwen", 10, Start,
             NewsInputKinds.Body, "v2c", null, null, null, null, null, "저장 요약", "저장 본문");
@@ -795,7 +786,7 @@ public sealed class NewsFeedServiceTests
         var harness = new Harness();
         harness.Options.ReclassifyUnclassifiedPerPoll = 3;
         harness.Classifier.Respond = _ => new NewsClassificationResult(
-            new NewsClassification(["MARKET"], NewsSentiments.Neutral, 1, "영향 제한", "한국어 제목", "한국어 출처", new Dictionary<string, int> { ["MARKET"] = 5 }),
+            new NewsClassification(["MARKET"], NewsSentiments.Neutral, 1, "영향 제한", new Dictionary<string, int> { ["MARKET"] = 5 }),
             "qwen", 10, true, "v2c");
         var records = Enumerable.Range(90, 5).Select(id => new NewsRecord(id.ToString(), $"기사 {id}", "Yahoo Finance", Start, [], [], ["MARKET"], NewsSentiments.Unclassified, 0, "", "qwen", 60000, Start));
         harness.Store.Files["2026-09-12.jsonl"] = records.Select(x => JsonSerializer.Serialize(x, new JsonSerializerOptions(JsonSerializerDefaults.Web))).ToList();
@@ -809,37 +800,40 @@ public sealed class NewsFeedServiceTests
 
 
     [Fact]
-    public async Task PapagoFailureKeepsOllamaTranslationFields()
+    public async Task 새_레코드는_번역_필드를_쓰지_않고_한국어_원문만_저장한다()
     {
-        var harness = new Harness(new FakeNewsTranslator());
-        harness.Classifier.Respond = _ => new NewsClassificationResult(
-            new NewsClassification(["MARKET"], NewsSentiments.Neutral, 1, "영향 제한", "Ollama 번역", "Ollama 출처", new Dictionary<string, int> { ["MARKET"] = 4 }),
-            "qwen", 10, true, "v2c");
+        var harness = new Harness();
         harness.Page(1, Item("100", "기준"));
         await harness.PollAsync();
-        harness.Page(1, Item("101", "영문 기사"), Item("100", "기준"));
+        harness.Page(1, Item("101", "삼성전자 실적 발표"), Item("100", "기준"));
+
         await harness.PollAsync();
-        Assert.Equal("Ollama 번역", harness.Saved().Single().TitleKo);
-        Assert.Equal("Ollama 출처", harness.Saved().Single().SourceKo);
+
+        var line = Assert.Single(harness.Store.Files["2026-09-12.jsonl"]);
+        using var json = JsonDocument.Parse(line);
+        Assert.Equal("삼성전자 실적 발표", json.RootElement.GetProperty("title").GetString());
+        foreach (var name in new[] { "titleKo", "sourceKo", "summaryKo", "contentKo", "classificationTextKo", "translationStatus",
+            "titleTranslationStatus", "summaryTranslationStatus", "contentTranslationStatus", "classificationTranslationStatus", "translationContentHash" })
+            Assert.False(json.RootElement.TryGetProperty(name, out _), name);
     }
 
     [Fact]
-    public async Task 재기동은_pending_번역을_백그라운드큐에_복구한다()
+    public async Task 재기동은_구_번역_레코드를_읽어_복원하되_번역을_요청하지_않는다()
     {
-        var translator = new FakeNewsTranslator { TextRespond = text => "번역:" + text };
-        var harness = new Harness(translator);
-        var record = new NewsRecord("pending", "English", "한국어 출처", Start, [], [], ["MARKET"],
-            NewsSentiments.Neutral, 1, "이유", "qwen", 10, Start,
-            ImpactScores: new Dictionary<string, int> { ["MARKET"] = 1 }, TranslationStatus: "pending");
-        harness.Store.Files["2026-09-12.jsonl"] =
-            [JsonSerializer.Serialize(record, new JsonSerializerOptions(JsonSerializerDefaults.Web))];
+        var harness = new Harness();
+        var legacy = """{"id":"legacy","title":"English","titleKo":"영문 제목","source":"Reuters","sourceKo":"로이터","createdAt":"2026-09-12T07:00:00+00:00","tickers":[],"matchedSymbols":[],"symbols":["MARKET"],"sentiment":"neutral","strength":1,"reason":"이유","model":"qwen","latencyMs":10,"classifiedAt":"2026-09-12T07:00:00+00:00","impactScores":{"MARKET":1},"summaryKo":"요약","contentKo":"본문","translationStatus":"pending","titleTranslationStatus":"translated","summaryTranslationStatus":"translated","contentTranslationStatus":"failed","classificationTranslationStatus":"quota_wait","classificationTextKo":"분류 한국어","translationContentHash":"abc"}""";
+        harness.Store.Files["2026-09-12.jsonl"] = [legacy];
         harness.Page(1, Item("100", "기준"));
 
         await harness.PollAsync();
 
-        Assert.Equal(1, harness.TranslationQueue!.QueueDepth);
-        Assert.True(await harness.TranslationQueue.ProcessNextAsync());
-        Assert.Equal("번역:English", harness.State.Find("pending")!.TitleKo);
+        var restored = harness.State.Find("legacy")!;
+        Assert.Equal("English", restored.Title);
+        Assert.Equal("영문 제목", restored.TitleKo);
+        Assert.Equal("본문", restored.ContentKo);
+        Assert.Equal("pending", restored.TranslationStatus);
+        Assert.Empty(harness.Classifier.Requests);
+        Assert.Single(harness.Store.Files["2026-09-12.jsonl"]);
     }
 
     [Fact]
@@ -994,7 +988,7 @@ public sealed class NewsFeedServiceTests
         var adjudicator = new FakeRelevanceAdjudicator(new NewsRelevanceAssessment(
             NewsRelevancePolicy.CurrentVersion, NewsRelevanceDecisions.Include, "macro_policy", "Fed", "raises",
             [new("MARKET", "market", "direct", "Fed raises rates")], "Fed raises rates", "ollama_adjudicated"));
-        var harness = new Harness(null, adjudicator);
+        var harness = new Harness(adjudicator);
         harness.Options.SbhRelevanceAdjudicationEnabled = true;
         harness.Feed.Name = NewsFeedProviders.SbhNews;
         harness.Page(1, Relevant("base", "base", NewsRelevanceDecisions.Include));
@@ -1019,7 +1013,7 @@ public sealed class NewsFeedServiceTests
     [Fact]
     public async Task 재시작은_pending_inbox를_재큐하고_실패시_pending을_유지한다()
     {
-        var first = new Harness(null, new FakeRelevanceAdjudicator(null));
+        var first = new Harness(new FakeRelevanceAdjudicator(null));
         first.Options.SbhRelevanceAdjudicationEnabled = true;
         first.Feed.Name = NewsFeedProviders.SbhNews;
         first.Page(1, Relevant("base", "base", NewsRelevanceDecisions.Include));
@@ -1028,7 +1022,7 @@ public sealed class NewsFeedServiceTests
         await first.PollAsync();
 
         var unavailable = new FakeRelevanceAdjudicator(null);
-        var restarted = new Harness(null, unavailable);
+        var restarted = new Harness(unavailable);
         restarted.Options.SbhRelevanceAdjudicationEnabled = true;
         restarted.Feed.Name = NewsFeedProviders.SbhNews;
         restarted.Store.Texts[NewsFeedService.StateFile] = first.Store.Texts[NewsFeedService.StateFile];
@@ -1049,7 +1043,7 @@ public sealed class NewsFeedServiceTests
     [Fact]
     public async Task 재심_queue는_설정용량을_넘지_않고_inbox_pending을_보존한다()
     {
-        var harness = new Harness(null, new FakeRelevanceAdjudicator(null));
+        var harness = new Harness(new FakeRelevanceAdjudicator(null));
         harness.Options.SbhRelevanceAdjudicationEnabled = true;
         harness.Feed.Name = NewsFeedProviders.SbhNews;
         harness.Page(1, Relevant("base", "base", NewsRelevanceDecisions.Include));
@@ -1144,7 +1138,7 @@ public sealed class NewsFeedServiceTests
     public async Task 재심_실패는_backoff_전에_재큐하지_않고_3회째에_timeout으로_제외한다()
     {
         var adjudicator = new FailingRelevanceAdjudicator();
-        var harness = new Harness(null, adjudicator);
+        var harness = new Harness(adjudicator);
         harness.Options.SbhRelevanceAdjudicationEnabled = true;
         harness.Feed.Name = NewsFeedProviders.SbhNews;
         harness.Page(1, Relevant("base", "base", NewsRelevanceDecisions.Include));
@@ -1185,7 +1179,7 @@ public sealed class NewsFeedServiceTests
     [Fact]
     public async Task 재심_TTL이_지나면_시도횟수와_무관하게_timeout으로_제외한다()
     {
-        var harness = new Harness(null, new FakeRelevanceAdjudicator(null));
+        var harness = new Harness(new FakeRelevanceAdjudicator(null));
         harness.Options.SbhRelevanceAdjudicationEnabled = true;
         harness.Feed.Name = NewsFeedProviders.SbhNews;
         harness.Page(1, Relevant("base", "base", NewsRelevanceDecisions.Include));
@@ -1207,7 +1201,7 @@ public sealed class NewsFeedServiceTests
     [Fact]
     public async Task 재시작_뒤에도_재심_시도횟수를_이어서_센다()
     {
-        var first = new Harness(null, new FailingRelevanceAdjudicator());
+        var first = new Harness(new FailingRelevanceAdjudicator());
         first.Options.SbhRelevanceAdjudicationEnabled = true;
         first.Feed.Name = NewsFeedProviders.SbhNews;
         first.Page(1, Relevant("base", "base", NewsRelevanceDecisions.Include));
@@ -1222,7 +1216,7 @@ public sealed class NewsFeedServiceTests
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => worker);
         }
 
-        var restarted = new Harness(null, new FailingRelevanceAdjudicator());
+        var restarted = new Harness(new FailingRelevanceAdjudicator());
         restarted.Options.SbhRelevanceAdjudicationEnabled = true;
         restarted.Feed.Name = NewsFeedProviders.SbhNews;
         restarted.Store.Texts[NewsFeedService.StateFile] = first.Store.Texts[NewsFeedService.StateFile];
@@ -1244,7 +1238,7 @@ public sealed class NewsFeedServiceTests
     [Fact]
     public async Task 재심_queue가_가득차면_조용히_버리지_않고_다음_poll에서_다시_넣는다()
     {
-        var harness = new Harness(null, new FakeRelevanceAdjudicator(null));
+        var harness = new Harness(new FakeRelevanceAdjudicator(null));
         harness.Options.SbhRelevanceAdjudicationEnabled = true;
         harness.Options.SbhRelevanceAdjudicationQueueCapacity = 1;
         harness.Feed.Name = NewsFeedProviders.SbhNews;
@@ -1263,7 +1257,7 @@ public sealed class NewsFeedServiceTests
     [Fact]
     public async Task inbox_상한은_처리완료_항목부터_자르고_미처리_review는_보존한다()
     {
-        var harness = new Harness(null, new FakeRelevanceAdjudicator(null));
+        var harness = new Harness(new FakeRelevanceAdjudicator(null));
         harness.Options.SbhRelevanceAdjudicationEnabled = true;
         harness.Options.InboxCapacity = 3;
         harness.Feed.Name = NewsFeedProviders.SbhNews;
@@ -1340,7 +1334,7 @@ public sealed class NewsFeedServiceTests
         => new(id, title, "", "Fox News", at ?? Start, [], Url: url, Provider: NewsFeedProviders.FoxNewsRss);
 
     static NewsClassificationResult Irrelevant()
-        => new(new NewsClassification(["MARKET"], NewsSentiments.Neutral, 0, "연예 기사", "제목", "출처",
+        => new(new NewsClassification(["MARKET"], NewsSentiments.Neutral, 0, "연예 기사",
             new Dictionary<string, int> { ["MARKET"] = 0 }, Irrelevant: true), "fake", 10, true, "v2d");
 
     [Fact]
