@@ -40,6 +40,8 @@ public sealed class RatesApiTests
         state.IntradaySucceeded(TreasuryTenor.Y10, new IntradayRateQuote(TreasuryTenor.Y10, "^TNX", 5.237, 5.293, Now.AddSeconds(-30), "yahoo:^TNX"), Now);
         state.IntradayFailed(TreasuryTenor.Y30, "HTTP 429", Now);
         state.DailySucceeded(new DailyRateSeries(TreasuryTenor.Y2, "DGS2", [new(new DateOnly(2026, 9, 30), 4.89), new(new DateOnly(2026, 10, 1), 4.88)], Now, "fred:DGS2"), Now);
+        state.RegisterEtf(RatesOptions.DefaultEtfProxies);
+        state.EtfSucceeded(RatesOptions.DefaultEtfProxies[1], new EtfProxyQuote(TreasuryTenor.Y10, "IEF", 89.3, 89.0031, Now.AddSeconds(-30), "yahoo:IEF"), Now);
         state.Appended(2, Now);
         using var client = host.Factory.CreateClient();
 
@@ -47,7 +49,7 @@ public sealed class RatesApiTests
         using var health = JsonDocument.Parse(await client.GetStringAsync("/api/health"));
 
         var root = rates.RootElement;
-        Assert.Equal(["enabled", "status", "asOf", "intradaySource", "dailySource", "refreshSeconds", "tenors", "spreads", "directionChecks", "warnings", "limitations"],
+        Assert.Equal(["enabled", "status", "asOf", "intradaySource", "dailySource", "refreshSeconds", "tenors", "spreads", "directionChecks", "etfProxies", "warnings", "limitations"],
             root.EnumerateObject().Select(x => x.Name));
         Assert.True(root.GetProperty("enabled").GetBoolean());
         Assert.Equal("partial", root.GetProperty("status").GetString());
@@ -76,11 +78,22 @@ public sealed class RatesApiTests
         var checks = root.GetProperty("directionChecks").EnumerateArray().ToArray();
         Assert.Equal(["tenor", "intradayDirection", "dailyBaselineDirection", "changeBp", "changeVsDailyBp", "baselineGapBp", "agreement", "reason"],
             checks[0].EnumerateObject().Select(x => x.Name));
+        var proxies = root.GetProperty("etfProxies").EnumerateArray().ToArray();
+        Assert.Equal(["tenor", "symbol", "duration", "price", "previousClose", "returnPct", "impliedChangeBp", "rateChangeBp", "etfDirection", "rateDirection", "agreement", "divergeRuns", "asOf", "fetchedAt", "source", "reason"],
+            proxies[0].EnumerateObject().Select(x => x.Name));
+        Assert.Equal(["SHY", "IEF", "TLT"], proxies.Select(x => x.GetProperty("symbol").GetString()));
+        Assert.Equal("unknown", proxies[0].GetProperty("agreement").GetString());
+        Assert.Equal("agree", proxies[1].GetProperty("agreement").GetString());
+        Assert.Equal(0.334, proxies[1].GetProperty("returnPct").GetDouble());
+        Assert.Equal(-4.5, proxies[1].GetProperty("impliedChangeBp").GetDouble());
+        Assert.Equal(-5.6, proxies[1].GetProperty("rateChangeBp").GetDouble());
+        Assert.Contains(root.GetProperty("limitations").EnumerateArray().Select(x => x.GetString()), x => x!.Contains("SHY·IEF·TLT"));
         Assert.Equal(JsonValueKind.Array, root.GetProperty("limitations").ValueKind);
 
         var block = health.RootElement.GetProperty("rates");
-        Assert.Equal(["enabled", "status", "lastRunAt", "lastSuccessAt", "lastError", "lastDailyRefreshAt", "appendedToday", "failedSources", "lastPrunedAt", "prunedFiles"],
+        Assert.Equal(["enabled", "status", "lastRunAt", "lastSuccessAt", "lastError", "lastDailyRefreshAt", "appendedToday", "failedSources", "lastPrunedAt", "prunedFiles", "etfDivergences"],
             block.EnumerateObject().Select(x => x.Name));
+        Assert.Equal(0, block.GetProperty("etfDivergences").GetArrayLength());
         Assert.Equal("partial", block.GetProperty("status").GetString());
         Assert.Equal(2, block.GetProperty("appendedToday").GetInt32());
         Assert.Equal("intraday:30Y: HTTP 429", block.GetProperty("failedSources")[0].GetString());

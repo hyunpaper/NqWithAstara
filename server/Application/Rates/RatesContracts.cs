@@ -61,12 +61,21 @@ public static class RateObservationKinds
 {
     public const string Intraday = "intraday";
     public const string Daily = "daily";
+    public const string Etf = "etf";
 }
+
+/// <summary>만기별 국채 ETF 대리변수 정의. Duration은 가격 수익률을 bp로 환산하는 근사 듀레이션(년)이다(#325).</summary>
+public sealed record EtfProxyDefinition(TreasuryTenor Tenor, string Symbol, double Duration);
+
+/// <summary>ETF 대리변수의 최신 가격. PreviousClose는 출처가 제공한 전일 종가다(#325).</summary>
+public sealed record EtfProxyQuote(TreasuryTenor Tenor, string Symbol, double Price, double? PreviousClose,
+    DateTimeOffset AsOf, string Source);
 
 public interface IIntradayRateSource
 {
     bool Supports(TreasuryTenor tenor);
     Task<IntradayRateQuote> FetchAsync(TreasuryTenor tenor, CancellationToken ct);
+    Task<EtfProxyQuote> FetchEtfAsync(EtfProxyDefinition proxy, CancellationToken ct);
 }
 
 public interface IDailyRateSource

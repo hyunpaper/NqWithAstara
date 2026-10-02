@@ -23,6 +23,25 @@ public sealed class RatesParserTests
     }
 
     [Fact]
+    public void Yahoo_ETF_응답은_가격과_전일종가를_같은_구조로_읽는다()
+    {
+        const string json = """
+            {"chart":{"result":[{"meta":{"currency":"USD","symbol":"IEF","instrumentType":"ETF","regularMarketPrice":89.3,"chartPreviousClose":89.0031,"previousClose":89.0031,"regularMarketTime":1790884801},
+            "timestamp":[1790884740,1790884800],"indicators":{"quote":[{"close":[89.28,89.3]}]}}],"error":null}}
+            """;
+        var proxy = new EtfProxyDefinition(TreasuryTenor.Y10, "IEF", 7.5);
+
+        var quote = YahooChartParser.ParseEtf(json, proxy, "yahoo:IEF");
+
+        Assert.Equal(TreasuryTenor.Y10, quote.Tenor);
+        Assert.Equal("IEF", quote.Symbol);
+        Assert.Equal(89.3, quote.Price);
+        Assert.Equal(89.0031, quote.PreviousClose);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1790884801), quote.AsOf);
+        Assert.Equal("yahoo:IEF", quote.Source);
+    }
+
+    [Fact]
     public void Yahoo_현재가가_없으면_마지막_유효_close와_그_시각을_쓴다()
     {
         const string json = """
