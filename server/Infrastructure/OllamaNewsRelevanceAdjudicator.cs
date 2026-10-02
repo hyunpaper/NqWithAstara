@@ -66,7 +66,7 @@ public sealed class OllamaNewsRelevanceAdjudicator : INewsRelevanceAdjudicator
             var targets = value.Decision == NewsRelevanceDecisions.Include
                 ? new[] { new NewsEventTarget(value.TargetId!, value.TargetKind!, "direct", value.Evidence) }
                 : [];
-            return new NewsRelevanceAssessment(NewsRelevancePolicy.CurrentVersion, value.Decision, value.EventKind ?? "unknown",
+            return new NewsRelevanceAssessment(item.Relevance?.PolicyVersion ?? NewsRelevancePolicy.CurrentVersion, value.Decision, value.EventKind ?? "unknown",
                 value.Actor ?? "", value.Action ?? "", targets, value.Evidence, value.Reason ?? "ollama_adjudicated",
                 PromptVersion, sw.ElapsedMilliseconds);
         }

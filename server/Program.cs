@@ -93,10 +93,12 @@ builder.Services.AddSingleton<ConfluenceService>();
 builder.Services.AddSingleton(_ => { var news = new NewsOptions(); builder.Configuration.GetSection("News").Bind(news); return news; });
 builder.Services.AddSingleton<INewsStore, NewsStore>();
 builder.Services.AddSingleton<INewsRelevancePolicy, NewsRelevancePolicy>();
+builder.Services.AddSingleton<INewsRelevanceContextSource>(x => new WatchlistNewsRelevanceContextSource(x.GetRequiredService<ILocalStore>()));
 builder.Services.AddSingleton<INewsFeed>(x =>
 {
     var options = x.GetRequiredService<NewsOptions>();
-    if (options.UseSbhNews) return new SbhNewsFeed(options, relevance: x.GetRequiredService<INewsRelevancePolicy>());
+    if (options.UseSbhNews) return new SbhNewsFeed(options, relevance: x.GetRequiredService<INewsRelevancePolicy>(),
+        context: x.GetRequiredService<INewsRelevanceContextSource>());
     if (options.UseFoxNewsRss) return new FoxNewsRssFeed(options);
     return options.UseSaveTicker ? new SaveTickerNewsFeed(options) : new MarketauxNewsFeed(options);
 });

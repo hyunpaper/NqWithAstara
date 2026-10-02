@@ -25,6 +25,9 @@ public sealed class NewsOptions
     public int SbhRelevanceAdjudicationConcurrency { get; set; } = 1;
     public int SbhRelevanceAdjudicationTimeoutSeconds { get; set; } = 8;
     public int SbhRelevanceAdjudicationQueueCapacity { get; set; } = 32;
+    public int SbhRelevanceAdjudicationMaxAttempts { get; set; } = 3;
+    public int SbhRelevanceReviewTtlMinutes { get; set; } = 30;
+    public int SbhRelevanceRetryBackoffSeconds { get; set; } = 60;
     public int MaxClassificationsPerMinute { get; set; } = 12;
     public double HalfLifeMinutes { get; set; } = NewsSentimentDecay.DefaultHalfLifeMinutes;
     public string KeepAlive { get; set; } = "30m";
@@ -119,6 +122,12 @@ public sealed record NewsProviderRuntimeStatus(
     int ReviewCount = 0,
     string? FilterPolicyVersion = null);
 
+public sealed record NewsRelevanceExclusionSample(string Title, string Reason, DateTimeOffset At);
+
+/// <summary>SBH 관련성 필터 누적 통계와 최근 제외 표본(§A 개선, #310).</summary>
+public sealed record NewsRelevanceFilterStats(string? PolicyVersion, long Included, long Excluded, long Review,
+    long ReviewUnadjudicated, IReadOnlyList<NewsRelevanceExclusionSample> RecentExcluded);
+
 /// <summary>health·조회가 함께 보는 뉴스 런타임 상태(#151 §6). 스레드 안전하다.</summary>
 public sealed class NewsRuntimeState
 {
@@ -144,6 +153,51 @@ public sealed class NewsRuntimeState
     public string RelevanceAdjudicationReason { get; private set; } = "";
     public int RelevanceAdjudicationQueue { get; private set; }
     public IReadOnlyList<NewsProviderRuntimeStatus> Providers { get; private set; } = [];
+
+    const int RecentExclusionCapacity = 5;
+    readonly LinkedList<NewsRelevanceExclusionSample> _recentExclusions = new();
+    string? _relevancePolicyVersion;
+    long _relevanceIncluded, _relevanceExcluded, _relevanceReview, _relevanceUnadjudicated;
+
+    public NewsRelevanceFilterStats RelevanceFilter
+    {
+        get
+        {
+            lock (_gate)
+                return new NewsRelevanceFilterStats(_relevancePolicyVersion, _relevanceIncluded, _relevanceExcluded,
+                    _relevanceReview, _relevanceUnadjudicated, _recentExclusions.ToArray());
+        }
+    }
+
+    public void RelevanceObserved(NewsRelevanceAssessment assessment, string title, DateTimeOffset at, bool countDecision = true)
+    {
+        lock (_gate)
+        {
+            _relevancePolicyVersion = assessment.PolicyVersion;
+            if (countDecision)
+            {
+                if (assessment.Decision == NewsRelevanceDecisions.Include) _relevanceIncluded++;
+                else if (assessment.Decision == NewsRelevanceDecisions.Review) _relevanceReview++;
+                else _relevanceExcluded++;
+            }
+            if (assessment.Decision == NewsRelevanceDecisions.Exclude) AddExclusion(title, assessment.Reason, at);
+        }
+    }
+
+    public void RelevanceUnadjudicated(string title, string reason, DateTimeOffset at)
+    {
+        lock (_gate)
+        {
+            _relevanceUnadjudicated++;
+            AddExclusion(title, reason, at);
+        }
+    }
+
+    void AddExclusion(string title, string reason, DateTimeOffset at)
+    {
+        _recentExclusions.AddFirst(new NewsRelevanceExclusionSample(title, reason, at));
+        while (_recentExclusions.Count > RecentExclusionCapacity) _recentExclusions.RemoveLast();
+    }
 
     public void PollStarted(DateTimeOffset at) { lock (_gate) LastAttemptAt = at; }
     public void PollCompleted(DateTimeOffset at) => CollectionCompleted(at, "ok", true, 0, null, []);
