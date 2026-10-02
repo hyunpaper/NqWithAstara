@@ -22,11 +22,11 @@ public sealed class NewsRelevanceLexiconTests
     [InlineData("Crude inventories fall")]
     [InlineData("원유 재고 하락")]
     [InlineData("Treasury yields rise")]
-    [InlineData("국채 금리 상승")]
+    [InlineData("미 국채 금리 상승")]
     [InlineData("Bond prices drop")]
-    [InlineData("채권금리 상승")]
+    [InlineData("미국 채권금리 상승")]
     [InlineData("Central bank cuts interest rates")]
-    [InlineData("기준금리 인하")]
+    [InlineData("연준 기준금리 인하")]
     [InlineData("Fed holds rates steady")]
     [InlineData("연준 금리 동결")]
     [InlineData("Officials signal rate cut ahead")]
@@ -36,11 +36,11 @@ public sealed class NewsRelevanceLexiconTests
     [InlineData("후티 반군 선박 공격")]
     [InlineData("Yemen port attacked")]
     [InlineData("예멘 항구 공습")]
-    [InlineData("Missile launched toward port")]
-    [InlineData("미사일 발사")]
+    [InlineData("Iran missile launched toward port")]
+    [InlineData("이란 미사일 발사")]
     [InlineData("Airstrikes disrupt oil exports")]
-    [InlineData("Drone strikes disrupt refinery output")]
-    [InlineData("공습으로 정유시설 타격")]
+    [InlineData("Drone strikes disrupt Saudi refinery output")]
+    [InlineData("이란 공습으로 정유시설 타격")]
     public void 이슈_키워드는_사건동사와_결합하면_포함한다(string title)
     {
         var result = Evaluate(title);
@@ -177,11 +177,12 @@ public sealed class NewsRelevanceLexiconTests
     }
 
     [Fact]
-    public void 사전_밖_일반명사와_동사는_review로_보류한다()
+    public void 사전_밖_일반명사와_동사만_있으면_제외한다()
     {
         var result = _policy.Evaluate(Item("Supplier signs supply contract"), Context(("DELL", "Dell")));
 
-        Assert.Equal(NewsRelevanceDecisions.Review, result.Decision);
+        Assert.Equal(NewsRelevanceDecisions.Exclude, result.Decision);
+        Assert.Equal("action_without_target", result.Reason);
     }
 
     [Fact]
@@ -217,8 +218,8 @@ public sealed class NewsRelevanceLexiconTests
         var dell = _policy.Evaluate(Item("Oil prices surge"), Context(("DELL", "Dell")));
         var same = _policy.Evaluate(Item("Oil prices surge"), Context(("DELL", "Dell")));
 
-        Assert.StartsWith("sbh-relevance-v2+entities:", empty.PolicyVersion);
-        Assert.Equal(8, empty.PolicyVersion["sbh-relevance-v2+entities:".Length..].Length);
+        Assert.StartsWith("sbh-relevance-v3+entities:", empty.PolicyVersion);
+        Assert.Equal(8, empty.PolicyVersion["sbh-relevance-v3+entities:".Length..].Length);
         Assert.NotEqual(empty.PolicyVersion, dell.PolicyVersion);
         Assert.Equal(dell.PolicyVersion, same.PolicyVersion);
     }
@@ -226,8 +227,8 @@ public sealed class NewsRelevanceLexiconTests
     [Fact]
     public void 사전은_버전을_가진다()
     {
-        Assert.Equal("lexicon-2026-10-02", NewsRelevanceLexicon.Version);
-        Assert.Equal("sbh-relevance-v2", NewsRelevancePolicy.CurrentVersion);
+        Assert.Equal("lexicon-2026-10-02.2", NewsRelevanceLexicon.Version);
+        Assert.Equal("sbh-relevance-v3", NewsRelevancePolicy.CurrentVersion);
     }
 
     [Fact]
@@ -246,7 +247,7 @@ public sealed class NewsRelevanceLexiconTests
     NewsRelevanceAssessment Evaluate(string title) => _policy.Evaluate(Item(title), NewsRelevanceContext.Empty);
 
     static NewsRelevanceContext Context(params (string Symbol, string Name)[] watchlist)
-        => NewsRelevanceContext.Create(watchlist.Select(x => new NewsWatchSymbol(x.Symbol, x.Name)));
+        => NewsRelevanceContext.Create(watchlist.Select(x => new NewsWatchSymbol(x.Symbol, x.Name)), includeGlobalAliases: false);
 
     static NewsFeedItem Item(string title) => new("id", title, "", "SBH", DateTimeOffset.UtcNow, []);
 }
