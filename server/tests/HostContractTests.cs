@@ -169,6 +169,18 @@ public sealed class HttpContractTests(AstraHostFixture host) : IClassFixture<Ast
         Assert.Equal(JsonValueKind.Number, benchmark.GetProperty("todayBars").ValueKind);
     }
 
+    [Fact]
+    public async Task HealthCarriesTheAdditiveStructureEntriesSection()
+    {
+        using var client = host.Factory.CreateClient();
+        using var json = await ReadJson(await client.GetAsync("/api/health"));
+
+        var entries = json.RootElement.GetProperty("structureEntries");
+        Assert.Equal(JsonValueKind.String, entries.GetProperty("tradingDate").ValueKind);
+        Assert.Equal(JsonValueKind.Number, entries.GetProperty("entries").ValueKind);
+        Assert.Equal(JsonValueKind.Number, entries.GetProperty("benchmarkMissingEntries").ValueKind);
+    }
+
     /// <summary>이슈 #167: 컨플루언스 조회는 구조 응답과 같은 검증 규칙을 쓰고 camelCase로 나간다.</summary>
     [Fact]
     public async Task ConfluenceQueryFollowsTheSameSymbolContractAsStructure()

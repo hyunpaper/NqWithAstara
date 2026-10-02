@@ -4,9 +4,13 @@ using Astra.Server.Domain.Structure;
 
 namespace Astra.Server.Application.Backtest;
 
+/// <param name="symbolMetadata">
+/// 고정 종목 메타 표(#245 P0). 주어지면 실시간과 같은 <see cref="SymbolEligibility.Note"/>로 종목 유형을 판정해
+/// 차단 종목의 신규 READY를 막는다. null이면 기존 replay와 같다(실시간의 메타 결측과 같이 차단하지 않는다).
+/// </param>
 public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePolicy policy,
     IHistoricalLiquiditySource? liquiditySource = null, int maxDegreeOfParallelism = 2,
-    string benchmarkSymbol = "QQQ")
+    string benchmarkSymbol = "QQQ", IReadOnlyDictionary<string, StockInfo>? symbolMetadata = null)
 {
     public const string ReplayLongOnlyShortRejected = "REPLAY_LONG_ONLY_SHORT_REJECTED";
     readonly object _liquidityLock = new();
@@ -151,6 +155,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
         var candidateDiagnostics = new Dictionary<string, ReplayCandidateDiagnostic>(StringComparer.Ordinal);
         var forecastInputs = new Dictionary<string, ConditionalReturnForecastInput>(StringComparer.Ordinal);
         var coverage = new CoverageAccumulator();
+        var symbolBlockers = SymbolBlockers(symbol, replayPolicy);
 
         foreach (var day in days)
         {
@@ -266,7 +271,8 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                     var detected = SetupDetector.Detect(SetupDetectionRequest.Create(symbol, snapshot.SessionStart,
                         snapshot.SessionEnd, snapshot.AnalysisAsOf, now, build.Bars.Bars, evaluated.Zones,
                         evaluated.Episodes, trend, built.Atr1mAtCutoff, snapshot.QuotePrice, snapshot.QuoteAt,
-                         snapshot.OptionalLiquidity, build.Quality.BlockersForCandidate.Concat(gate.Blockers).ToImmutableArray()), sessionPolicy);
+                         snapshot.OptionalLiquidity, build.Quality.BlockersForCandidate.Concat(gate.Blockers)
+                             .Concat(symbolBlockers).ToImmutableArray()), sessionPolicy);
                     var candidates = ApplyReplayPositionPolicy(StructuralLifecycle.ApplyLive(
                         StructuralLifecycle.ApplyLatch(latch, detected.Candidates, gate.AllowNewTrigger, sessionPolicy,
                             evaluated.Zones), snapshot.QuotePrice, now));
@@ -328,6 +334,16 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
 
         return new SymbolReplayResult(symbol, result.ToImmutableArray(),
             candidateDiagnostics.Values.ToImmutableArray(), coverage.Build(symbol));
+    }
+
+    /// <summary>메타 표가 없으면 빈 값이다. 메타 결측 종목은 실시간처럼 허용한다(SYMBOL_META_UNKNOWN은 차단이 아니다).</summary>
+    ImmutableArray<string> SymbolBlockers(string symbol, StructurePolicy replayPolicy)
+    {
+        if (symbolMetadata is null) return [];
+        var note = SymbolEligibility.Note(symbolMetadata.GetValueOrDefault(symbol), replayPolicy);
+        return string.Equals(note, SymbolEligibility.CodeTypeUnsupported, StringComparison.Ordinal)
+            ? [SymbolEligibility.CodeTypeUnsupported]
+            : [];
     }
 
     sealed record SymbolReplayResult(string Symbol, ImmutableArray<SimTrade> Trades,
@@ -421,7 +437,9 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
         SetupDetector.BlockerOutsideSession or SetupDetector.BlockerStaleLatestBar or
             SetupDetector.BlockerMissingQuote or SetupDetector.BlockerStaleQuote or
             SetupDetector.BlockerQuoteInFuture or SetupDetector.BlockerAfterEntryCutoff => 20,
+        SymbolEligibility.CodeTypeUnsupported => 1,
         SetupDetector.CodeTrendDirectionOpposesLong or SetupDetector.CodeTrendDirectionOpposesShort or
+            SetupDetector.CodeLongKindDisabled or
             SetupDetector.CodeTrendDeeplyOpposesRebound or SetupDetector.CodeTrendDeeplyOpposesShortRebound or
             SetupDetector.CodeTransitionPullbackBlocked or SetupDetector.CodeTransitionBreakoutBlocked => 30,
         StructuralPlanner.NoInvalidationStructure or StructuralPlanner.NoTargetStructure or

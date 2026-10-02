@@ -84,6 +84,18 @@ public sealed record StructurePolicy
 
     static readonly ImmutableArray<string> DefaultAllowedSecurityTypes = ["STOCK", "DEPOSITARY_RECEIPT"];
 
+    /// <summary>
+    /// 롱 신규 READY를 막는 셋업 유형 이름 집합(`PULLBACK`·`BREAKOUT`·`REBOUND`, #245 Cycle77).
+    /// 기본 빈 값이며, 비어 있으면 canonical JSON에서 빠져 기존 PolicyHash가 유지된다.
+    /// </summary>
+    [OmitFromPolicyHashWhenEmpty]
+    public ImmutableArray<string> DisabledLongKinds { get; init; } = ImmutableArray<string>.Empty;
+
+    /// <summary>롱 <paramref name="kindName"/>이 정책으로 비활성인지 판정한다(#245 Cycle77).</summary>
+    public bool IsLongKindDisabled(string kindName) =>
+        !DisabledLongKinds.IsDefaultOrEmpty &&
+        DisabledLongKinds.Contains(kindName, StringComparer.OrdinalIgnoreCase);
+
     // ── 봉 집계 (§5.2) ──
     public int AggregationMinutes { get; init; } = 5;
     public int OpeningRangeMinutes { get; init; } = 15;
@@ -228,6 +240,7 @@ public sealed record StructurePolicy
             var first = true;
             foreach (var property in PolicyInputs)
             {
+                if (OmittedWhenEmpty(property, property.GetValue(this))) continue;
                 if (!first) builder.Append(',');
                 first = false;
                 builder.Append(Quote(property.Name)).Append(':').Append(Canonical(property.GetValue(this)));
@@ -244,6 +257,14 @@ public sealed record StructurePolicy
         .Where(x => x.CanRead && x.SetMethod is { IsPublic: true })
         .OrderBy(x => x.Name, StringComparer.Ordinal)
         .ToArray();
+
+    static bool OmittedWhenEmpty(PropertyInfo property, object? value) =>
+        property.IsDefined(typeof(OmitFromPolicyHashWhenEmptyAttribute)) &&
+        value is null or ImmutableArray<string> { IsDefaultOrEmpty: true };
+
+    /// <summary>뒤늦게 추가한 집합 정책이 비어 있으면 canonical JSON에서 빼 기존 hash를 보존한다(#245).</summary>
+    [AttributeUsage(AttributeTargets.Property)]
+    sealed class OmitFromPolicyHashWhenEmptyAttribute : Attribute;
 
     static string Quote(string value)
     {

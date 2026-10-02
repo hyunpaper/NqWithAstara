@@ -1,6 +1,6 @@
 namespace Astra.Server.Application.Rates;
 
-/// <summary>금리 수집 1회 실행 정책. 출처 실패는 만기별로 격리하고 백오프하며, 결과는 jsonl에 append한다(#316).</summary>
+/// <summary>금리 수집 1회 실행 정책. 출처 실패는 만기·ETF별로 격리하고 백오프하며, 결과는 jsonl에 append한다(#316, #325).</summary>
 public sealed class RatesCollector(
     RatesOptions options,
     IIntradayRateSource intraday,
@@ -14,6 +14,8 @@ public sealed class RatesCollector(
     readonly Dictionary<TreasuryTenor, DateTimeOffset> _dailyAttemptAt = new();
     readonly Dictionary<TreasuryTenor, DateOnly> _dailyAppended = new();
     readonly Dictionary<TreasuryTenor, (double Value, DateTimeOffset AsOf)> _intradayAppended = new();
+    readonly Dictionary<string, (double Value, DateTimeOffset AsOf)> _etfAppended = new(StringComparer.Ordinal);
+    readonly Dictionary<string, DateTimeOffset> _etfDueAt = new(StringComparer.Ordinal);
     DateOnly? _dailyDay, _pruneDay;
     bool _restored;
 
@@ -23,7 +25,9 @@ public sealed class RatesCollector(
         var now = clock.GetUtcNow();
         state.RunStarted(now);
         foreach (var tenor in TreasuryTenors.All) state.MarkSupport(tenor, intraday.Supports(tenor));
-        await RestoreAsync(now, ct);
+        var proxies = options.ResolvedEtfProxies();
+        state.RegisterEtf(proxies);
+        await RestoreAsync(now, proxies, ct);
         await PruneIfDueAsync(now, ct);
         var pending = new List<RateObservation>();
         var requests = 0;
@@ -49,6 +53,32 @@ public sealed class RatesCollector(
             {
                 diagnostics.PollFailed($"rates-intraday:{tenor.Key()}", exception);
                 state.IntradayFailed(tenor, Describe(exception), clock.GetUtcNow());
+            }
+        }
+        foreach (var proxy in proxies)
+        {
+            var current = clock.GetUtcNow();
+            if (_etfDueAt.TryGetValue(proxy.Symbol, out var due) && due > current) continue;
+            if (state.EtfRetryAt(proxy.Symbol) is { } retryAt && retryAt > current) continue;
+            await SpaceAsync(requests++, ct);
+            try
+            {
+                var quote = await intraday.FetchEtfAsync(proxy, ct);
+                var at = clock.GetUtcNow();
+                state.EtfSucceeded(proxy, quote, at);
+                _etfDueAt[proxy.Symbol] = at + options.EtfInterval;
+                if (!_etfAppended.TryGetValue(proxy.Symbol, out var last) || last.Value != quote.Price || last.AsOf != quote.AsOf)
+                {
+                    pending.Add(new RateObservation(at, proxy.Tenor.Key(), quote.Price, quote.Source, quote.AsOf,
+                        quote.PreviousClose, RateObservationKinds.Etf));
+                    _etfAppended[proxy.Symbol] = (quote.Price, quote.AsOf);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception exception)
+            {
+                diagnostics.PollFailed($"rates-etf:{proxy.Symbol}", exception);
+                state.EtfFailed(proxy, Describe(exception), clock.GetUtcNow());
             }
         }
         await AppendAsync(pending, ct);
@@ -97,7 +127,7 @@ public sealed class RatesCollector(
         if (newDay) _dailyDay = today;
     }
 
-    async Task RestoreAsync(DateTimeOffset now, CancellationToken ct)
+    async Task RestoreAsync(DateTimeOffset now, IReadOnlyList<EtfProxyDefinition> proxies, CancellationToken ct)
     {
         if (_restored) return;
         _restored = true;
@@ -111,6 +141,17 @@ public sealed class RatesCollector(
                 state.IntradaySucceeded(tenor, new IntradayRateQuote(tenor, "", last.Value, last.PreviousClose, last.AsOf,
                     last.Source), last.At);
                 _intradayAppended[tenor] = (last.Value, last.AsOf);
+            }
+            foreach (var group in rows.Where(x => x.Kind == RateObservationKinds.Etf).GroupBy(x => x.Source, StringComparer.Ordinal))
+            {
+                var symbol = group.Key[(group.Key.IndexOf(':') + 1)..];
+                if (proxies.FirstOrDefault(x => x.Symbol == symbol) is not { } proxy) continue;
+                var last = group.OrderBy(x => x.At).Last();
+                if (TreasuryTenors.Parse(last.Tenor) != proxy.Tenor) continue;
+                state.EtfSucceeded(proxy, new EtfProxyQuote(proxy.Tenor, proxy.Symbol, last.Value, last.PreviousClose, last.AsOf,
+                    last.Source), last.At);
+                _etfAppended[proxy.Symbol] = (last.Value, last.AsOf);
+                _etfDueAt[proxy.Symbol] = last.At + options.EtfInterval;
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }

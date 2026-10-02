@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatBp, formatRate, normalizeRates, rateChangeTone, rateModeLabel, ratesStatusLabel } from "./ratesTypes";
+import { etfProxyLine, formatBp, formatPct, formatRate, normalizeRates, rateChangeTone, rateModeLabel, ratesStatusLabel } from "./ratesTypes";
 
 describe("국채 금리 API 계약", () => {
   it("만기·커브·방향 검사·경고를 보존하고 알 수 없는 값은 안전한 기본값으로 바꾼다", () => {
@@ -24,6 +24,11 @@ describe("국채 금리 API 계약", () => {
         { tenor: "10Y", intradayDirection: "down", dailyBaselineDirection: "up", changeBp: -5.6, changeVsDailyBp: 4, baselineGapBp: 9, agreement: "diverge", reason: null },
         { tenor: "30Y", intradayDirection: "sideways", dailyBaselineDirection: null, agreement: "maybe" },
       ],
+      etfProxies: [
+        { tenor: "10Y", symbol: "IEF", duration: 7.5, price: 88.5, previousClose: 89.0031, returnPct: -0.565, impliedChangeBp: 7.5, rateChangeBp: -5.6, etfDirection: "up", rateDirection: "down", agreement: "diverge", divergeRuns: 2.7, asOf: "2026-10-02T13:59:30Z", fetchedAt: "2026-10-02T13:59:40Z", source: "yahoo:IEF", reason: null },
+        { tenor: "30Y", symbol: "TLT", agreement: "maybe", etfDirection: "sideways", divergeRuns: "x" },
+        { tenor: "2Y" },
+      ],
       warnings: ["10Y 실시간 변화 방향(하락)이 FRED 전일값 기준 방향(상승)과 어긋납니다.", 42],
       limitations: ["2Y는 실시간 지수가 없어 FRED 전일 공식값만 표시합니다."],
     });
@@ -38,8 +43,15 @@ describe("국채 금리 API 계약", () => {
     expect(rates!.spreads[0]).toMatchObject({ key: "2s10s", valueBp: 35.7, mode: "mixed" });
     expect(rates!.directionChecks[0]).toMatchObject({ agreement: "diverge", baselineGapBp: 9 });
     expect(rates!.directionChecks[1]).toMatchObject({ intradayDirection: "unknown", dailyBaselineDirection: "unknown", agreement: "unknown" });
+    expect(rates!.etfProxies).toHaveLength(2);
+    expect(rates!.etfProxies[0]).toMatchObject({ tenor: "10Y", symbol: "IEF", returnPct: -0.565, impliedChangeBp: 7.5, rateChangeBp: -5.6, etfDirection: "up", rateDirection: "down", agreement: "diverge", divergeRuns: 2 });
+    expect(rates!.etfProxies[1]).toMatchObject({ symbol: "TLT", price: null, returnPct: null, etfDirection: "unknown", rateDirection: "unknown", agreement: "unknown", divergeRuns: 0, reason: null });
     expect(rates!.warnings).toEqual(["10Y 실시간 변화 방향(하락)이 FRED 전일값 기준 방향(상승)과 어긋납니다."]);
     expect(rates!.limitations).toHaveLength(1);
+  });
+
+  it("etfProxies가 없는 응답도 빈 배열로 받는다", () => {
+    expect(normalizeRates({ enabled: true, status: "ok", tenors: [] })?.etfProxies).toEqual([]);
   });
 
   it("tenors가 없으면 null이고 알 수 없는 status는 데이터 없음으로 본다", () => {
@@ -64,5 +76,18 @@ describe("국채 금리 API 계약", () => {
     expect(rateChangeTone(null)).toBe("none");
     expect(rateModeLabel("daily_only")).toBe("FRED 전일");
     expect(ratesStatusLabel("unavailable")).toBe("데이터 없음");
+    expect(formatPct(0.334)).toBe("+0.33%");
+    expect(formatPct(-0.565)).toBe("-0.56%");
+    expect(formatPct(-0.567)).toBe("-0.57%");
+    expect(formatPct(0)).toBe("0.00%");
+    expect(formatPct(null)).toBe("—");
+  });
+
+  it("ETF 대리변수 한 줄 요약은 수익률·환산 bp·일치 여부·연속 횟수를 담는다", () => {
+    const proxy = { tenor: "10Y", symbol: "IEF", duration: 7.5, price: 88.5, previousClose: 89.0031, returnPct: -0.565, impliedChangeBp: 7.5, rateChangeBp: -5.6, etfDirection: "up" as const, rateDirection: "down" as const, agreement: "diverge" as const, divergeRuns: 3, asOf: null, fetchedAt: null, source: "yahoo:IEF", reason: null };
+    expect(etfProxyLine(proxy)).toBe("ETF IEF -0.56% · ≈ 금리 +7.5bp · 방향 불일치 · 3회 연속");
+    expect(etfProxyLine({ ...proxy, agreement: "agree", divergeRuns: 0, returnPct: 0.334, impliedChangeBp: -4.5 })).toBe("ETF IEF +0.33% · ≈ 금리 -4.5bp · 방향 일치");
+    expect(etfProxyLine({ ...proxy, agreement: "unknown", divergeRuns: 0, reason: "실시간 금리가 없어 방향을 비교할 수 없습니다." })).toBe("ETF IEF -0.56% · ≈ 금리 +7.5bp · 비교 불가 · 실시간 금리가 없어 방향을 비교할 수 없습니다.");
+    expect(etfProxyLine({ ...proxy, price: null, returnPct: null, impliedChangeBp: null, agreement: "unknown", divergeRuns: 0, reason: "ETF 가격 수집 실패: HTTP 429" })).toBe("ETF IEF 없음 · ETF 가격 수집 실패: HTTP 429");
   });
 });

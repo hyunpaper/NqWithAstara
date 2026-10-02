@@ -1,4 +1,4 @@
-// 이슈 #316 — /api/rates(실시간 미국채 2Y·10Y·30Y) 응답 타입과 표시 헬퍼.
+// 이슈 #316·#325 — /api/rates(실시간 미국채 2Y·10Y·30Y, ETF 대리변수 괴리) 응답 타입과 표시 헬퍼.
 // 금리는 표시·기록용 참고값이며 매매 판정에 쓰지 않는다. 상승=빨강/하락=초록은 주식 관점 표기다.
 
 export type RateMode = "intraday" | "daily_only" | "mixed" | "daily" | "unavailable";
@@ -53,6 +53,25 @@ export type RateDirectionCheck = {
   reason: string | null;
 };
 
+export type RateEtfProxy = {
+  tenor: string;
+  symbol: string;
+  duration: number | null;
+  price: number | null;
+  previousClose: number | null;
+  returnPct: number | null;
+  impliedChangeBp: number | null;
+  rateChangeBp: number | null;
+  etfDirection: RateDirection;
+  rateDirection: RateDirection;
+  agreement: "agree" | "diverge" | "unknown";
+  divergeRuns: number;
+  asOf: string | null;
+  fetchedAt: string | null;
+  source: string | null;
+  reason: string | null;
+};
+
 export type RatesResponse = {
   enabled: boolean;
   status: "disabled" | "idle" | "ok" | "partial" | "unavailable";
@@ -63,6 +82,7 @@ export type RatesResponse = {
   tenors: RateTenor[];
   spreads: RateSpread[];
   directionChecks: RateDirectionCheck[];
+  etfProxies: RateEtfProxy[];
   warnings: string[];
   limitations: string[];
 };
@@ -143,6 +163,31 @@ export const normalizeRates = (value: unknown): RatesResponse | null => {
       reason: text(check.reason),
     }];
   }) : [];
+  const etfProxies = Array.isArray(root.etfProxies) ? root.etfProxies.flatMap((raw): RateEtfProxy[] => {
+    const proxy = record(raw);
+    const tenor = text(proxy?.tenor);
+    const symbol = text(proxy?.symbol);
+    if (!proxy || !tenor || !symbol) return [];
+    const agreement = text(proxy.agreement);
+    return [{
+      tenor,
+      symbol,
+      duration: finite(proxy.duration),
+      price: finite(proxy.price),
+      previousClose: finite(proxy.previousClose),
+      returnPct: finite(proxy.returnPct),
+      impliedChangeBp: finite(proxy.impliedChangeBp),
+      rateChangeBp: finite(proxy.rateChangeBp),
+      etfDirection: direction(proxy.etfDirection),
+      rateDirection: direction(proxy.rateDirection),
+      agreement: agreement === "agree" || agreement === "diverge" ? agreement : "unknown",
+      divergeRuns: Math.max(0, Math.trunc(finite(proxy.divergeRuns) ?? 0)),
+      asOf: text(proxy.asOf),
+      fetchedAt: text(proxy.fetchedAt),
+      source: text(proxy.source),
+      reason: text(proxy.reason),
+    }];
+  }) : [];
   const status = text(root.status);
   return {
     enabled: root.enabled === true,
@@ -154,6 +199,7 @@ export const normalizeRates = (value: unknown): RatesResponse | null => {
     tenors,
     spreads,
     directionChecks,
+    etfProxies,
     warnings: strings(root.warnings),
     limitations: strings(root.limitations),
   };
@@ -167,6 +213,29 @@ export const formatBp = (value: number | null, digits = 1): string => {
   const rounded = Number(value.toFixed(digits));
   const sign = rounded > 0 ? "+" : "";
   return `${sign}${rounded.toFixed(digits)}bp`;
+};
+
+export const formatPct = (value: number | null, digits = 2): string => {
+  if (value == null) return "—";
+  const rounded = Number(value.toFixed(digits));
+  const sign = rounded > 0 ? "+" : "";
+  return `${sign}${rounded.toFixed(digits)}%`;
+};
+
+export const etfAgreementLabel = (agreement: RateEtfProxy["agreement"]): string => ({
+  agree: "방향 일치",
+  diverge: "방향 불일치",
+  unknown: "비교 불가",
+})[agreement];
+
+export const etfProxyLine = (proxy: RateEtfProxy): string => {
+  if (proxy.price == null) return `ETF ${proxy.symbol} 없음${proxy.reason ? ` · ${proxy.reason}` : ""}`;
+  const parts = [`ETF ${proxy.symbol} ${formatPct(proxy.returnPct)}`];
+  if (proxy.impliedChangeBp != null) parts.push(`≈ 금리 ${formatBp(proxy.impliedChangeBp)}`);
+  parts.push(etfAgreementLabel(proxy.agreement));
+  if (proxy.agreement === "diverge" && proxy.divergeRuns > 1) parts.push(`${proxy.divergeRuns}회 연속`);
+  const line = parts.join(" · ");
+  return proxy.reason ? `${line} · ${proxy.reason}` : line;
 };
 
 export const rateChangeTone = (changeBp: number | null): "up" | "down" | "flat" | "none" => {
