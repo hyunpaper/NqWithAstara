@@ -12,13 +12,15 @@ public static class ApiEndpoints
     {
         app.MapGet("/api/health", async (MonitorRuntimeState r, FeeRateCheckService? feeCheck, NewsQueryService? news,
             BarStoreService? bars, ConfluenceOptions? confluence, ScoreCoreRuntimeState? scoreCore, RatesRuntimeState? rates, TimeProvider clock,
-            MonitorOptions? monitor, MonitorAutoStartService? autoStart) =>
+            MonitorOptions? monitor, MonitorAutoStartService? autoStart, StructuralEntryHealthService? structureEntries) =>
         {
             var s = r.Snapshot();
             var warnings = (feeCheck?.Warnings ?? Array.Empty<string>()).Concat(autoStart?.Warnings ?? Array.Empty<string>()).ToArray();
-            var barsHealth = bars is null ? null : await bars.HealthAsync(MarketRules.TradingDate(clock.GetUtcNow()),
+            var tradingDate = MarketRules.TradingDate(clock.GetUtcNow());
+            var barsHealth = bars is null ? null : await bars.HealthAsync(tradingDate,
                 confluence?.BenchmarkSymbol ?? "QQQ", CancellationToken.None);
-            return Results.Ok(new { app = "Astra", status = "ready", connection = s.ConnectionStatus, credentialsRequired = s.ConnectionStatus is "idle" or "error", guideUrl = s.ConnectionMessage.Contains("허용 IP") ? "https://developers.tossinvest.com/docs" : null, autoStart = monitor?.AutoStart ?? false, startedAt = s.StartedAt, startedBy = s.StartedBy, warnings, news = news?.Health(), bars = barsHealth, scoreCore = scoreCore?.Health(), rates = rates?.Health() });
+            var entriesHealth = structureEntries is null ? null : await structureEntries.HealthAsync(tradingDate);
+            return Results.Ok(new { app = "Astra", status = "ready", connection = s.ConnectionStatus, credentialsRequired = s.ConnectionStatus is "idle" or "error", guideUrl = s.ConnectionMessage.Contains("허용 IP") ? "https://developers.tossinvest.com/docs" : null, autoStart = monitor?.AutoStart ?? false, startedAt = s.StartedAt, startedBy = s.StartedBy, warnings, news = news?.Health(), bars = barsHealth, scoreCore = scoreCore?.Health(), rates = rates?.Health(), structureEntries = entriesHealth });
         });
         app.MapScoreCoreApi();
         app.MapRatesApi();

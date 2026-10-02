@@ -152,6 +152,11 @@ public sealed class StructureAnalysisService(
     public const string NoteEntryBlockedByStopCooldown = Domain.Validation.EntryBlockCodes.BlockedByStopCooldown;
     public const string NoteEntryUnavailable = "V5_ENTRY_PORT_UNAVAILABLE";
 
+    /// <summary>#326: 진입 시 벤치마크 수익률 출처 상태와 선택된 청산 정책 버전(동작 아님, 관측).</summary>
+    public const string NoteEntryBenchmarkAvailable = "V5_ENTRY_BENCHMARK_AVAILABLE";
+    public const string NoteEntryBenchmarkUnavailable = "V5_ENTRY_BENCHMARK_UNAVAILABLE";
+    public const string NoteExitPolicyPrefix = "V5_EXIT_POLICY:";
+
     /// <summary>
     /// #106: 이번 poll에 같은 심볼의 청산이 있었다. 청산을 만든 그 틱이 곧바로 신규 진입가가 되지 않도록
     /// 이 poll의 진입만 건너뛴다. 후보는 READY로 남고 쿨다운이 아니다.
@@ -448,6 +453,7 @@ public sealed class StructureAnalysisService(
             {
                 candidates = activeEntry.Candidates;
                 if (activeEntry.Note is { } entryNote) notes.Add(entryNote);
+                foreach (var note in EntryObservabilityNotes(activeEntry.Trade)) notes.Add(note);
                 candidateDtos = candidates.Select(StructureViewMapper.Candidate).ToArray();
                 if (activeEntry.Entered)
                 {
@@ -577,7 +583,7 @@ public sealed class StructureAnalysisService(
                     await pendingEntries.RemoveAsync(snapshot.Symbol);
                     return new ActiveEntryResult(candidates.Select(x => x.EventId == claimed.Pending.EntryEventId
                         ? x with { Disposition = CandidateDisposition.Entered } : x).ToImmutableArray(), true,
-                        NoteEntryCommitted);
+                        NoteEntryCommitted, Trade: pendingResult.Trade);
                 }
                 return new ActiveEntryResult(candidates, false,
                     pendingResult.Outcome == Domain.StructuralEntryOutcome.BlockedByMissingLiquidityCost
@@ -649,7 +655,7 @@ public sealed class StructureAnalysisService(
                 return confirmed.Outcome is Domain.StructuralEntryOutcome.Entered or Domain.StructuralEntryOutcome.AlreadyEntered
                     ? new ActiveEntryResult(candidates.Select(x => x.EventId == claimed.Pending.EntryEventId
                         ? x with { Disposition = CandidateDisposition.Entered }
-                        : x).ToImmutableArray(), true, NoteEntryCommitted)
+                        : x).ToImmutableArray(), true, NoteEntryCommitted, Trade: confirmed.Trade)
                     : Blocked(candidates, chosen,
                         confirmed.Outcome == Domain.StructuralEntryOutcome.BlockedByMissingLiquidityCost
                             ? NoteEntryBlockedByMissingLiquidity : NoteEntryPlanInvalid);
@@ -689,7 +695,7 @@ public sealed class StructureAnalysisService(
                                         .ToImmutableArray()
                             })
                         .ToImmutableArray(),
-                    true, NoteEntryCommitted),
+                    true, NoteEntryCommitted, Trade: result.Trade),
             // 한 종목 OPEN 하나 제한은 버전 공통이다(§18). 후보는 READY로 남고 새 거래는 만들지 않는다.
             Domain.StructuralEntryOutcome.BlockedByOpenTrade =>
                 Blocked(candidates, chosen, NoteEntryBlockedByOpenTrade),
@@ -721,7 +727,17 @@ public sealed class StructureAnalysisService(
             false, code, chosen.EventId);
 
     public sealed record ActiveEntryResult(ImmutableArray<EntryCandidate> Candidates, bool Entered, string? Note,
-        string? BlockedEventId = null);
+        string? BlockedEventId = null, SimTrade? Trade = null);
+
+    /// <summary>#326: 커밋된 거래의 벤치마크 출처 상태·선택된 청산 정책 버전을 관측 note로 옮긴다.</summary>
+    public static IEnumerable<string> EntryObservabilityNotes(SimTrade? trade)
+    {
+        if (trade?.Structure is not { } structure) yield break;
+        if (structure.Benchmark is { } benchmark)
+            yield return string.Equals(benchmark.Status, Domain.StructuralSimulation.BenchmarkAvailable, StringComparison.Ordinal)
+                ? NoteEntryBenchmarkAvailable : NoteEntryBenchmarkUnavailable;
+        yield return NoteExitPolicyPrefix + structure.StructuralExitPolicyVersion;
+    }
 
     /// <summary>
     /// 이슈 #26: commit 지점의 후보·진입 결과에서 알림 초안을 파생한다. 새 가격·점수를 만들지 않고
