@@ -314,7 +314,11 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                     {
                         var context = StructuralSimulation.Freeze(preferred.Plan, preferred.EventId,
                             trend.State.ToString(), trend.SignedTrend, preferred.EntryQuality,
-                            snapshot.AnalysisAsOf, snapshot.QuoteAt, sessionPolicy);
+                            snapshot.AnalysisAsOf, snapshot.QuoteAt, sessionPolicy) with
+                        {
+                            // #314: 과거 point-in-time snapshot이 없으므로 replay는 unavailable로 명시한다.
+                            ScoreCore = ScoreCore.EntryScoreCoreAttachment.HistoricalReplay()
+                        };
                         var pendingEntry = PendingEntryPolicy.Create(preferred.EventId, symbol,
                             preferred.TriggerBarStart, preferred.TriggerBarStart.Add(barSpan), preferred.ExpiresAt,
                             preferred.Plan, replayPolicy.BreakoutConfirmationGateVersion);
