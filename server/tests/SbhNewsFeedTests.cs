@@ -45,7 +45,8 @@ public sealed class SbhNewsFeedTests
         Assert.Equal(1, status.IncludedCount);
         Assert.Equal(1, status.ExcludedCount);
         Assert.Equal(1, status.ReviewCount);
-        Assert.Equal(NewsRelevancePolicy.CurrentVersion, status.FilterPolicyVersion);
+        Assert.Equal(NewsRelevancePolicy.ComposeVersion(NewsRelevancePolicy.CurrentVersion, NewsRelevanceContext.Empty),
+            status.FilterPolicyVersion);
     }
 
     [Fact]

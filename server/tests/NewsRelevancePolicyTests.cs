@@ -20,7 +20,7 @@ public sealed class NewsRelevancePolicyTests
     [InlineData("CPI beats forecast and bond yields surge", "macro_release")]
     public void 거시_지정학_대상과_사건동사가_함께_있으면_포함한다(string title, string kind)
     {
-        var result = _policy.Evaluate(Item(title));
+        var result = Evaluate(Item(title));
 
         Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
         Assert.Equal(kind, result.EventKind);
@@ -38,7 +38,7 @@ public sealed class NewsRelevancePolicyTests
     [InlineData("Tesla Inc faces regulator lawsuit", "regulatory")]
     public void 다양한_기업_행위자는_명시대상과_사건을_보존한다(string title, string kind)
     {
-        var result = _policy.Evaluate(Item(title));
+        var result = Evaluate(Item(title));
 
         Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
         Assert.Equal(kind, result.EventKind);
@@ -52,7 +52,7 @@ public sealed class NewsRelevancePolicyTests
     [InlineData("Bond actor appears at film concert", "non_market_context")]
     public void 스포츠_연예와_다의어는_제외한다(string title, string reason)
     {
-        var result = _policy.Evaluate(Item(title));
+        var result = Evaluate(Item(title));
 
         Assert.Equal(NewsRelevanceDecisions.Exclude, result.Decision);
         Assert.Equal(reason, result.Reason);
@@ -61,7 +61,7 @@ public sealed class NewsRelevancePolicyTests
     [Fact]
     public void 스포츠의_이적_시장은_거시_대상과_동사가_있어도_제외한다()
     {
-        var result = _policy.Evaluate(Item("중국 축구 이적 시장 확대 발표"));
+        var result = Evaluate(Item("중국 축구 이적 시장 확대 발표"));
 
         Assert.Equal(NewsRelevanceDecisions.Exclude, result.Decision);
         Assert.Equal("non_market_context", result.Reason);
@@ -70,7 +70,7 @@ public sealed class NewsRelevancePolicyTests
     [Fact]
     public void 스포츠와_금융_사건이_혼재하면_강한_금융_근거로_포함한다()
     {
-        var result = _policy.Evaluate(Item("월드컵 경기 중 연준 금리 인상 발표로 증시 하락"));
+        var result = Evaluate(Item("월드컵 경기 중 연준 금리 인상 발표로 증시 하락"));
 
         Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
         Assert.Equal("monetary_policy", result.EventKind);
@@ -79,7 +79,7 @@ public sealed class NewsRelevancePolicyTests
     [Fact]
     public void 스포츠_동사와_금융_명사를_서로_다른_문맥에서_결합하지_않는다()
     {
-        var result = _policy.Evaluate(Item("Football players strike as bond investors watch the match"));
+        var result = Evaluate(Item("Football players strike as bond investors watch the match"));
 
         Assert.Equal(NewsRelevanceDecisions.Exclude, result.Decision);
         Assert.Equal("non_market_context", result.Reason);
@@ -88,7 +88,7 @@ public sealed class NewsRelevancePolicyTests
     [Fact]
     public void 스포츠_기사안의_독립된_금융절은_포함한다()
     {
-        var result = _policy.Evaluate(Item("World Cup match ends; Federal Reserve raises interest rates, stocks fall"));
+        var result = Evaluate(Item("World Cup match ends; Federal Reserve raises interest rates, stocks fall"));
 
         Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
         Assert.Equal("monetary_policy", result.EventKind);
@@ -100,7 +100,7 @@ public sealed class NewsRelevancePolicyTests
     [InlineData("ACME Inc considers its options")]
     public void 사건_동사나_시장경로가_불충분하면_review로_보류한다(string title)
     {
-        var result = _policy.Evaluate(Item(title));
+        var result = Evaluate(Item(title));
 
         Assert.Equal(NewsRelevanceDecisions.Review, result.Decision);
         Assert.Equal("insufficient_actor_action_target_context", result.Reason);
@@ -109,7 +109,7 @@ public sealed class NewsRelevancePolicyTests
     [Fact]
     public void 본문에_없는_ticker는_계약의_직접대상으로_승격하지_않는다()
     {
-        var result = _policy.Evaluate(Item("Supplier signs multi-year contract") with { Tickers = ["NVDA"] });
+        var result = Evaluate(Item("Supplier signs multi-year contract") with { Tickers = ["NVDA"] });
 
         Assert.Equal(NewsRelevanceDecisions.Review, result.Decision);
         Assert.Equal("unresolved", Assert.Single(result.Targets).Relation);
@@ -118,7 +118,7 @@ public sealed class NewsRelevancePolicyTests
     [Fact]
     public void 본문에서_사건과_연결된_ticker만_직접대상으로_승격한다()
     {
-        var result = _policy.Evaluate(Item("NVDA signs multi-year contract") with { Tickers = ["NVDA", "AMD"] });
+        var result = Evaluate(Item("NVDA signs multi-year contract") with { Tickers = ["NVDA", "AMD"] });
 
         Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
         var target = Assert.Single(result.Targets);
@@ -130,7 +130,7 @@ public sealed class NewsRelevancePolicyTests
     [Fact]
     public void 스포츠절의_strike와_다음절의_bond를_결합하지_않는다()
     {
-        var result = _policy.Evaluate(Item("Football players strike during the final; bond investors watch quietly"));
+        var result = Evaluate(Item("Football players strike during the final; bond investors watch quietly"));
 
         Assert.Equal(NewsRelevanceDecisions.Exclude, result.Decision);
     }
@@ -138,7 +138,7 @@ public sealed class NewsRelevancePolicyTests
     [Fact]
     public void 선택된_사건절_밖의_기관을_actor로_사용하지_않는다()
     {
-        var result = _policy.Evaluate(Item("SEC comments on policy. Iran attacks oil supply"));
+        var result = Evaluate(Item("SEC comments on policy. Iran attacks oil supply"));
 
         Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
         Assert.Equal("Iran", result.Actor);
@@ -147,7 +147,7 @@ public sealed class NewsRelevancePolicyTests
     [Fact]
     public void 선택된_Fed_event는_같은_절의_별도_oil_target으로_덮지_않는다()
     {
-        var result = _policy.Evaluate(Item("Fed raises interest rates as oil falls"));
+        var result = Evaluate(Item("Fed raises interest rates as oil falls"));
 
         Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
         Assert.Equal(NewsSymbols.Market, Assert.Single(result.Targets).Id);
@@ -157,7 +157,7 @@ public sealed class NewsRelevancePolicyTests
     [Fact]
     public void 같은_절의_먼_기관보다_event에_인접한_actor를_선택한다()
     {
-        var result = _policy.Evaluate(Item("SEC observes while Federal Reserve raises interest rates"));
+        var result = Evaluate(Item("SEC observes while Federal Reserve raises interest rates"));
 
         Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
         Assert.Equal("Federal Reserve", result.Actor);
@@ -166,7 +166,7 @@ public sealed class NewsRelevancePolicyTests
     [Fact]
     public void 스포츠절과_별도절의_금융명사만으로_review로_우회하지_않는다()
     {
-        var result = _policy.Evaluate(Item("Football players strike during final. Bond investors watch"));
+        var result = Evaluate(Item("Football players strike during final. Bond investors watch"));
 
         Assert.Equal(NewsRelevanceDecisions.Exclude, result.Decision);
     }
@@ -178,7 +178,7 @@ public sealed class NewsRelevancePolicyTests
     [InlineData("SEC announces sanctions on Iran as markets fall", "MARKET", "market")]
     public void 기관_약어는_회사로_간주해_거시대상을_덮지_않는다(string title, string targetId, string targetKind)
     {
-        var result = _policy.Evaluate(Item(title));
+        var result = Evaluate(Item(title));
 
         Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
         var target = Assert.Single(result.Targets);
@@ -189,7 +189,7 @@ public sealed class NewsRelevancePolicyTests
     [Fact]
     public void 한국은행은_회사대상이_아니며_통화정책_시장대상으로_남긴다()
     {
-        var result = _policy.Evaluate(Item("한국은행 금리 인상 발표"));
+        var result = Evaluate(Item("한국은행 금리 인상 발표"));
 
         Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
         Assert.Equal("한국은행", result.Actor);
@@ -201,13 +201,15 @@ public sealed class NewsRelevancePolicyTests
     [Fact]
     public void 회사사건은_사건동사에_가까운_영향대상만_direct로_남긴다()
     {
-        var result = _policy.Evaluate(Item("NVIDIA Corp comments as Tesla Inc recalls vehicles"));
+        var result = Evaluate(Item("NVIDIA Corp comments as Tesla Inc recalls vehicles"));
 
         Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
         var target = Assert.Single(result.Targets);
         Assert.Equal("TESLA INC", target.Id);
         Assert.Equal("direct", target.Relation);
     }
+
+    NewsRelevanceAssessment Evaluate(NewsFeedItem item) => _policy.Evaluate(item, NewsRelevanceContext.Empty);
 
     static NewsFeedItem Item(string title) => new("id", title, "", "SBH", DateTimeOffset.UtcNow, []);
 }
