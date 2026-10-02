@@ -46,8 +46,8 @@ public sealed class StructureReboundGateOverrideTests
             AllowQualifiedTransitionBreakout = true,
             ExemptBreakoutFromPositiveBenchmarkHalfRStop = true
         };
-        Assert.Equal("abe5d3a6fa8d40b136c29223c1f713c9adcb75bb1c75bebf877a03e4d4aa8c7c", StructurePolicy.Default.PolicyHash);
-        Assert.Equal("e0894463ea0f35ecb34a128e4faca3fc4a99ea420f61c2602ef2be58906f722c", cycle45.PolicyHash);
+        Assert.Equal("d7683e146a40f5ac329b5d9bc25fe081ff6755b58c78018ac05fbb8bf6049b9b", StructurePolicy.Default.PolicyHash);
+        Assert.Equal("fff00a40fd344de6cc0d10acd4941fa8e45464b9b52a39aefd6610eb30ec1bf7", cycle45.PolicyHash);
     }
 
     [Fact]
