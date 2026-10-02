@@ -13,14 +13,17 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
 {
     public const string CurrentVersion = "sbh-relevance-v1";
     const RegexOptions Options = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled;
+    const RegexOptions CaseSensitive = RegexOptions.CultureInvariant | RegexOptions.Compiled;
 
     static readonly Regex NonMarket = new(@"\b(football|soccer|premier league|champions league|world cup|goal|match|actor|actress|celebrity|movie|film|music|concert)\b|축구|프리미어리그|챔피언스리그|월드컵|골을?\s*(?:넣|기록)|배우|연예|영화|가수|콘서트", Options);
-    static readonly Regex FinancialQualifier = new(@"\b(stocks?|equity|investors?|tariffs?|sanctions?|inflation|Federal Reserve|Fed|Treasur(?:y|ies)|bond yields?|interest rates?|CPI|PPI|payrolls?|GDP)\b|주가|증시|투자자|관세|제재|물가|연준|국채|채권금리|금리|소비자물가|생산자물가|고용|국내총생산", Options);
-    static readonly Regex MacroTarget = new(@"\b(Trump|China|Chinese|Iran|Iranian|Strait of Hormuz|Hormuz|oil|crude|Treasur(?:y|ies)|bond|yield|interest rates?|Federal Reserve|Fed|Saudi(?: Arabia)?|Houthi(?:s)?|Yemen|CPI|PPI|payrolls?|jobless claims?|durable goods|PMI|GDP)\b|트럼프|중국|이란|호르무즈|유가|원유|국채|채권금리|채권|금리|연준|사우디(?:아라비아)?|후티|예멘|미사일|공습|소비자물가|생산자물가|고용|실업수당|내구재|구매관리자지수|국내총생산", Options);
+    static readonly Regex FinancialQualifier = new(@"\b(stocks?|equity|investors?|tariffs?|sanctions?|inflation|Federal Reserve|Treasur(?:y|ies)|bond yields?|interest rates?|payrolls?)\b|주가|증시|투자자|관세|제재|물가|연준|국채|채권금리|금리|소비자물가|생산자물가|고용|국내총생산", Options);
+    static readonly Regex MacroTarget = new(@"\b(Trump|China|Chinese|Iran|Iranian|Strait of Hormuz|Hormuz|oil|crude|Treasur(?:y|ies)|bond|yield|interest rates?|Federal Reserve|Saudi(?: Arabia)?|Houthi(?:s)?|Yemen|payrolls?|jobless claims?|durable goods)\b|트럼프|중국|이란|호르무즈|유가|원유|국채|채권금리|채권|금리|연준|사우디(?:아라비아)?|후티|예멘|미사일|공습|소비자물가|생산자물가|고용|실업수당|내구재|구매관리자지수|국내총생산", Options);
     static readonly Regex MacroAction = new(@"\b(announce[ds]?|impose[ds]?|raise[ds]?|cut[s]?|hold[s]?|increase[ds]?|decrease[ds]?|rise[sn]?|fall[s]?|surge[ds]?|drop(?:ped|s)?|attack(?:ed|s)?|strike[sd]?|airstrike[sd]?|launch(?:ed|es)?|block(?:ed|s)?|close[sd]?|disrupt(?:ed|s)?|resume[ds]?|release[sd]?|report(?:ed|s)?|beat[s]?|miss(?:ed|es)?|expand(?:ed|s)?|restrict(?:ed|s)?)\b|발표|부과|인상|인하|동결|상승|하락|급등|급락|공격|타격|공습|발사|봉쇄|폐쇄|차질|재개|확대|축소|제한|상회|하회", Options);
     static readonly Regex CompanyAction = new(@"\b(sign(?:ed|s)?|win[s]?|award(?:ed|s)?|cancel(?:led|s)?|terminate[ds]?|renew(?:ed|s)?|price\s+(?:increase|cut)|raise[sd]?\s+prices?|cut[s]?\s+prices?|earnings|revenue|profit|guidance|forecast|invest(?:s|ed|ment)?|capex|launch(?:ed|es)?|recall(?:ed|s)?|discontinue[ds]?|demand|supply|shortage|cyberattack|breach(?:ed)?|vulnerability|regulat(?:or|ion)|lawsuit|settle[ds]?|fine[sd]?|sanction(?:ed|s)?|offering|convertible|capital raise|buyback|dividend|acquire[sd]?|merger)\b|계약|수주|해지|갱신|가격\s*(?:인상|인하)|실적|매출|이익|가이던스|전망|투자|설비투자|출시|리콜|단종|수요|공급|부족|사이버(?:공격|보안)|침해|취약점|규제|소송|벌금|제재|증자|전환사채|자본조달|자사주|배당|인수|합병", Options);
     static readonly Regex Company = new(@"\b[A-Z][A-Za-z&.-]+(?:\s+[A-Z][A-Za-z&.-]+){0,3}\s+(?:Inc\.?|Corp\.?|Corporation|Ltd\.?|PLC|Holdings|Systems|Technologies|Electronics|Group)\b|(?:주식회사|㈜)\s*[가-힣A-Za-z0-9]+", RegexOptions.CultureInvariant | RegexOptions.Compiled);
-    static readonly Regex Institution = new(@"\b(?:Federal Reserve|Fed|SEC|NATO|OPEC)\b|한국은행|금융위원회|금융감독원", Options);
+    static readonly Regex MacroAcronym = new(@"\b(?:(?:Fed|FED)(?!\s+[Uu][Pp]\b)|CPI|PPI|PMI|GDP)\b", CaseSensitive);
+    static readonly Regex Institution = new(@"\bFederal Reserve\b|한국은행|금융위원회|금융감독원", Options);
+    static readonly Regex InstitutionAcronym = new(@"\b(?:(?:Fed|FED)(?!\s+[Uu][Pp]\b)|SEC|NATO|OPEC)\b", CaseSensitive);
     static readonly Regex AmbiguousWord = new(@"\b(rate|strike|market|bond)\b|금리|파업|시장|채권", Options);
 
     public string Version => CurrentVersion;
@@ -31,7 +34,7 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
         if (text.Length == 0) return Result(NewsRelevanceDecisions.Exclude, "unknown", "", "", [], "", "empty_text");
 
         var macroEvent = MacroEvent(text);
-        var macroTarget = macroEvent?.Target ?? MacroTarget.Match(text);
+        var macroTarget = macroEvent?.Target ?? FirstMatch(text, MacroTarget, MacroAcronym);
         var macroAction = macroEvent?.Action ?? MacroAction.Match(text);
         var companyAction = CompanyAction.Match(text);
         var explicitTargets = Targets(item, text);
@@ -121,8 +124,8 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
     {
         foreach (Match clause in Regex.Matches(text, @"[^.;!?。！？]+", Options))
         {
-            if (NonMarket.IsMatch(clause.Value) && !FinancialQualifier.IsMatch(clause.Value)) continue;
-            var targets = MacroTarget.Matches(clause.Value).Cast<Match>().ToArray();
+            if (NonMarket.IsMatch(clause.Value) && !IsFinancial(clause.Value)) continue;
+            var targets = AllMatches(clause.Value, MacroTarget, MacroAcronym);
             var actions = MacroAction.Matches(clause.Value).Cast<Match>().ToArray();
             var pair = targets.SelectMany(target => actions.Select(action => (Target: target, Action: action)))
                 .Where(x => Math.Abs(x.Action.Index - x.Target.Index) <= 80 && Compatible(x.Target.Value, x.Action.Value))
@@ -139,6 +142,14 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
         var geopoliticalTarget = Regex.IsMatch(target, @"Iran|Hormuz|Saudi|Houthi|Yemen|oil|crude|이란|호르무즈|사우디|후티|예멘|유가|원유", Options);
         return !geopoliticalAction || geopoliticalTarget;
     }
+
+    static bool IsFinancial(string text) => FinancialQualifier.IsMatch(text) || MacroAcronym.IsMatch(text);
+
+    static Match[] AllMatches(string text, params Regex[] patterns)
+        => patterns.SelectMany(pattern => pattern.Matches(text).Cast<Match>()).OrderBy(x => x.Index).ToArray();
+
+    static Match FirstMatch(string text, params Regex[] patterns)
+        => AllMatches(text, patterns).FirstOrDefault() ?? Match.Empty;
 
     static Match Offset(Match match, int offset) => Regex.Match(new string(' ', offset + match.Index) + match.Value, Regex.Escape(match.Value), Options);
     static bool SameClause(string text, int first, int second)
@@ -172,13 +183,13 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
     }
 
     static string Actor(string text, string fallback)
-        => Institution.Match(text) is { Success: true } institution ? institution.Value
+        => FirstMatch(text, Institution, InstitutionAcronym) is { Success: true } institution ? institution.Value
             : Company.Match(text) is { Success: true } company ? company.Value : fallback;
 
     static string ActorInSpan(string text, int start, int length, string fallback, int eventIndex)
     {
         var clause = text.Substring(start, length);
-        var candidates = Institution.Matches(clause).Cast<Match>().Concat(Company.Matches(clause).Cast<Match>())
+        var candidates = AllMatches(clause, Institution, InstitutionAcronym).Concat(Company.Matches(clause).Cast<Match>())
             .Select(match => new { Match = match, Distance = Math.Abs(start + match.Index - eventIndex) })
             .OrderBy(x => x.Distance).ThenBy(x => x.Match.Index).ToArray();
         return candidates.Length > 0 ? candidates[0].Match.Value : fallback;
