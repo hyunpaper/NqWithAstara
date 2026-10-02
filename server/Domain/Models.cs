@@ -49,10 +49,16 @@ public sealed record FrozenStructureContext(string EntryEventId, FrozenPlanSnaps
     ReentryTags? Reentry = null, StrategyRegime? Regime = null,
     EntryEvidence? EntryEvidence = null,
     // #326 additive: 진입 시 벤치마크 수익률 출처 상태. 이 계약 이전 행은 null(미수집)로 복원된다.
-    EntryBenchmarkTags? Benchmark = null);
+    EntryBenchmarkTags? Benchmark = null,
+    // #314 additive: 후보 생성 시점 asOf의 Score Core snapshot 참조. 이 계약 이전 행은 null(미수집)로 복원된다.
+    EntryScoreCoreTags? ScoreCore = null);
 
 /// <summary>#326 진입 시점 벤치마크(QQQ) 관측. Status는 AVAILABLE|UNAVAILABLE이며 진입·청산 판정에 쓰이지 않는다.</summary>
 public sealed record EntryBenchmarkTags(string Status, double? ReturnPercent);
+
+/// <summary>#314 후보 생성 시점 Score Core snapshot 참조(shadow 관측). Status는 disabled|unavailable|not_found|snapshot 상태이며 진입·청산 판정에 쓰이지 않는다(§8 1단계).</summary>
+public sealed record EntryScoreCoreTags(string Status, string? CaptureId, string PolicyVersion, string? SchemaVersion,
+    DateTimeOffset? SnapshotAsOf, string? Reason = null);
 
 /// <summary>
 /// #111 재진입 코호트 태그. 진입 시점에 직전 거래를 아는 계층이 채우는 관측값이며 진입·청산 판정에 쓰이지 않는다.

@@ -129,6 +129,8 @@ builder.Services.AddSingleton<IScoreEvidenceSource, NewsScoreEvidenceSource>(); 
 builder.Services.AddSingleton<AsOfEvidenceAssembler>(); builder.Services.AddSingleton(x => new ScoreCoreSnapshotService(x.GetRequiredService<AsOfEvidenceAssembler>(), x.GetRequiredService<IScoreCoreSnapshotStore>()));
 builder.Services.AddSingleton<ScoreCoreShadowCaptureOrchestrator>(); builder.Services.AddSingleton<ScoreCoreTargetSelector>(); builder.Services.AddSingleton<ScoreCoreRuntimeState>(); builder.Services.AddSingleton<ScoreCoreQueryService>();
 builder.Services.AddHostedService<ScoreCoreShadowCaptureService>();
+// 이슈 #314: 진입 거래에 Score Core snapshot 참조를 관측용으로 붙인다. 비활성이면 disabled만 기록한다.
+builder.Services.AddSingleton<IEntryScoreCoreAttachment, EntryScoreCoreAttachment>();
 // 이슈 #316: 실시간 미국채 금리(표시·기록용). Rates:Enabled 기본 false이며 매매 판정·진입 게이트에는 쓰지 않는다.
 builder.Services.AddSingleton(_ => { var rates = new RatesOptions(); builder.Configuration.GetSection("Rates").Bind(rates); return rates; });
 builder.Services.AddSingleton<RatesRuntimeState>();
