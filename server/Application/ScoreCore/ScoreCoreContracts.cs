@@ -42,9 +42,10 @@ public sealed record ScoreCoreShadowSnapshot(
     ImmutableArray<ScoreEvidenceExclusion> AssemblyExclusions,
     string Status,
     int EvidenceCount = 0,
-    int UniqueEventCount = 0);
+    int UniqueEventCount = 0,
+    string? ContentKey = null);
 
-public enum ScoreSnapshotAppendResult { Appended, AlreadyExists }
+public enum ScoreSnapshotAppendResult { Appended, AlreadyExists, Unchanged }
 
 public interface IScoreEvidenceSource
 {

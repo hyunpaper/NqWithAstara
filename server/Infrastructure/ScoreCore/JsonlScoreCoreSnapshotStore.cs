@@ -44,6 +44,11 @@ public sealed class JsonlScoreCoreSnapshotStore(string root, IMonitorDiagnostics
                     throw new InvalidOperationException("동일한 captureId에 다른 snapshot을 추가할 수 없습니다.");
                 return ScoreSnapshotAppendResult.AlreadyExists;
             }
+            if (snapshot.ContentKey is { Length: > 0 } contentKey &&
+                index.Latest.TryGetValue(TargetKey(snapshot.Score.TargetKind, snapshot.Score.TargetId), out var latest) &&
+                string.Equals(latest.ContentKey, contentKey, StringComparison.Ordinal) &&
+                snapshot.Score.AsOf >= latest.AsOf)
+                return ScoreSnapshotAppendResult.Unchanged;
             await using var stream = await OpenWriterAsync(path, ct);
             var removed = RecoverTruncatedTail(stream);
             if (removed > 0)
@@ -57,7 +62,8 @@ public sealed class JsonlScoreCoreSnapshotStore(string root, IMonitorDiagnostics
             await stream.WriteAsync(bytes, ct);
             await stream.FlushAsync(ct);
             stream.Flush(true);
-            index.Add(snapshot.CaptureId, snapshot.Score.TargetKind, snapshot.Score.TargetId, snapshot.Score.AsOf);
+            index.Add(snapshot.CaptureId, snapshot.Score.TargetKind, snapshot.Score.TargetId, snapshot.Score.AsOf,
+                snapshot.ContentKey);
             index.KnownLength = stream.Length;
             return ScoreSnapshotAppendResult.Appended;
         }
@@ -171,7 +177,7 @@ public sealed class JsonlScoreCoreSnapshotStore(string root, IMonitorDiagnostics
         try { row = JsonSerializer.Deserialize<IndexRow>(line, Json); }
         catch (JsonException) { return; }
         if (row?.CaptureId is not { Length: > 0 } id || row.Score?.TargetId is not { Length: > 0 } target) return;
-        index.Add(id, row.Score.TargetKind, target, row.Score.AsOf);
+        index.Add(id, row.Score.TargetKind, target, row.Score.AsOf, row.ContentKey);
     }
 
     static async Task<ScoreCoreShadowSnapshot?> ReadSnapshotAsync(string path, string captureId, CancellationToken ct)
@@ -239,14 +245,15 @@ public sealed class JsonlScoreCoreSnapshotStore(string root, IMonitorDiagnostics
     sealed class DayIndex
     {
         public HashSet<string> Ids { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, (DateTimeOffset AsOf, string CaptureId)> Latest { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, (DateTimeOffset AsOf, string CaptureId, string? ContentKey)> Latest { get; } = new(StringComparer.Ordinal);
         public long KnownLength { get; set; }
 
-        public void Add(string captureId, ImpactTargetKind kind, string targetId, DateTimeOffset asOf)
+        public void Add(string captureId, ImpactTargetKind kind, string targetId, DateTimeOffset asOf,
+            string? contentKey)
         {
             Ids.Add(captureId);
             var key = TargetKey(kind, targetId);
-            if (!Latest.TryGetValue(key, out var current) || asOf >= current.AsOf) Latest[key] = (asOf, captureId);
+            if (!Latest.TryGetValue(key, out var current) || asOf >= current.AsOf) Latest[key] = (asOf, captureId, contentKey);
         }
 
         public void Reset()
@@ -257,6 +264,6 @@ public sealed class JsonlScoreCoreSnapshotStore(string root, IMonitorDiagnostics
         }
     }
 
-    sealed record IndexRow(string? CaptureId, IndexScore? Score);
+    sealed record IndexRow(string? CaptureId, IndexScore? Score, string? ContentKey);
     sealed record IndexScore(string? TargetId, ImpactTargetKind TargetKind, DateTimeOffset AsOf);
 }
