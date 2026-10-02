@@ -110,7 +110,6 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
             impactScores = record.ImpactScores, model = record.Model,
             promptVersion = record.PromptVersion, classifiedAt = record.ClassifiedAt,
             relevance = record.Relevance,
-            scoreCore = NewsScoreCoreBridge.Snapshots(record, now),
             evidenceSymbol = selectedSymbol,
             snapshotId = snapshot is null ? SnapshotId(now) : SnapshotId(now),
             asOf = now,
