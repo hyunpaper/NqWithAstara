@@ -24,15 +24,25 @@ public sealed class NewsFeedServiceTests
         public NewsTranslationQueue? TranslationQueue { get; }
         public NewsFeedService Service { get; }
 
-        public Harness(params WatchItem[] watchlist) : this(null, watchlist) { }
+        public Harness(params WatchItem[] watchlist) : this(null, null, watchlist) { }
 
-        public Harness(INewsTranslator? translator, params WatchItem[] watchlist)
+        public Harness(INewsTranslator? translator, params WatchItem[] watchlist) : this(translator, null, watchlist) { }
+
+        public Harness(INewsRelevanceAdjudicator adjudicator, Action<NewsOptions> configure)
+        {
+            configure(Options);
+            Local = new NewsLocalStore();
+            Service = new NewsFeedService(Options, Feed, Classifier, Store, Local, State, Diagnostics, Clock,
+                null, adjudicator);
+        }
+
+        public Harness(INewsTranslator? translator, INewsRelevanceAdjudicator? adjudicator, params WatchItem[] watchlist)
         {
             Local = new NewsLocalStore(watchlist);
             TranslationQueue = translator is null ? null
                 : new NewsTranslationQueue(Options, translator, Store, State, Diagnostics, Clock);
             Service = new NewsFeedService(Options, Feed, Classifier, Store, Local, State, Diagnostics, Clock,
-                TranslationQueue);
+                TranslationQueue, adjudicator);
         }
 
         public Task PollAsync() => Service.PollAsync(CancellationToken.None);
@@ -906,6 +916,193 @@ public sealed class NewsFeedServiceTests
         Assert.Null(harness.State.LastSuccessAt);
         Assert.NotNull(harness.State.LastFetchAt);
         Assert.Equal("marketaux", Assert.Single(harness.State.Providers).Provider);
+    }
+
+    [Fact]
+    public async Task 제외와_review는_cursor에_영속되지만_분류큐와_사용자뉴스에는_들어가지_않는다()
+    {
+        var harness = new Harness();
+        harness.Feed.Name = NewsFeedProviders.SbhNews;
+        harness.Page(1, Relevant("base", "Fed raises interest rates", NewsRelevanceDecisions.Include));
+        await harness.PollAsync();
+        harness.Page(1,
+            Relevant("sports", "United striker scores a goal", NewsRelevanceDecisions.Exclude),
+            Relevant("unclear", "Market reaction remains unclear", NewsRelevanceDecisions.Review),
+            Relevant("base", "Fed raises interest rates", NewsRelevanceDecisions.Include));
+
+        await harness.PollAsync();
+
+        Assert.Empty(harness.Classifier.Requests);
+        Assert.Empty(harness.Saved());
+        var savedState = JsonSerializer.Deserialize<NewsFeedState>(harness.Store.Texts[NewsFeedService.StateFile],
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.Contains("sports", savedState.SeenIds!);
+        Assert.Contains("unclear", savedState.SeenIds!);
+        Assert.True(savedState.Inbox!.Single(x => x.Item.Id == "sports").Processed);
+        Assert.False(savedState.Inbox!.Single(x => x.Item.Id == "unclear").Processed);
+
+        var restarted = new Harness();
+        restarted.Feed.Name = NewsFeedProviders.SbhNews;
+        restarted.Store.Texts[NewsFeedService.StateFile] = harness.Store.Texts[NewsFeedService.StateFile];
+        restarted.Page(1,
+            Relevant("sports", "United striker scores a goal", NewsRelevanceDecisions.Exclude),
+            Relevant("unclear", "Market reaction remains unclear", NewsRelevanceDecisions.Review));
+        await restarted.PollAsync();
+        Assert.Empty(restarted.Classifier.Requests);
+    }
+
+    [Fact]
+    public async Task 상위_page가_제외기사뿐이어도_다음_page의_관련기사를_수집한다()
+    {
+        var harness = new Harness();
+        harness.Options.MaxPages = 2;
+        harness.Feed.Name = NewsFeedProviders.SbhNews;
+        harness.Page(1, Relevant("base", "Fed raises interest rates", NewsRelevanceDecisions.Include));
+        await harness.PollAsync();
+        harness.Page(1,
+            Relevant("sports-2", "Football match result", NewsRelevanceDecisions.Exclude),
+            Relevant("sports-1", "Premier League goal", NewsRelevanceDecisions.Exclude));
+        harness.Page(2, Relevant("market-2", "Iran strike disrupts oil supply", NewsRelevanceDecisions.Include));
+
+        await harness.PollAsync();
+
+        Assert.Equal("Iran strike disrupts oil supply", Assert.Single(harness.Classifier.Requests).Title);
+        Assert.Equal("market-2", Assert.Single(harness.Saved()).Id);
+    }
+
+    static NewsFeedItem Relevant(string id, string title, string decision)
+        => Item(id, title) with
+        {
+            Provider = NewsFeedProviders.SbhNews,
+            Relevance = new NewsRelevanceAssessment(NewsRelevancePolicy.CurrentVersion, decision, "test", "actor",
+                "action", [new("MARKET", "market", "direct", "evidence")], "evidence", "test")
+        };
+
+    [Fact]
+    public async Task review는_poll을_막지_않고_pending으로_영속되며_worker_성공만_반영한다()
+    {
+        var adjudicator = new FakeRelevanceAdjudicator(new NewsRelevanceAssessment(
+            NewsRelevancePolicy.CurrentVersion, NewsRelevanceDecisions.Include, "macro_policy", "Fed", "raises",
+            [new("MARKET", "market", "direct", "Fed raises rates")], "Fed raises rates", "ollama_adjudicated"));
+        var harness = new Harness(null, adjudicator);
+        harness.Options.SbhRelevanceAdjudicationEnabled = true;
+        harness.Feed.Name = NewsFeedProviders.SbhNews;
+        harness.Page(1, Relevant("base", "base", NewsRelevanceDecisions.Include));
+        await harness.PollAsync();
+        harness.Page(1, Relevant("review", "Fed discusses policy", NewsRelevanceDecisions.Review));
+
+        await harness.PollAsync();
+        var pending = JsonSerializer.Deserialize<NewsFeedState>(harness.Store.Texts[NewsFeedService.StateFile],
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.False(pending.Inbox!.Single(x => x.Item.Id == "review").Processed);
+
+        using var stop = new CancellationTokenSource();
+        var worker = harness.Service.RunRelevanceAdjudicationWorkerAsync(stop.Token);
+        await adjudicator.Called.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        stop.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => worker);
+        var saved = JsonSerializer.Deserialize<NewsFeedState>(harness.Store.Texts[NewsFeedService.StateFile],
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.Equal(NewsRelevanceDecisions.Include, saved.Inbox!.Single(x => x.Item.Id == "review").Item.Relevance!.Decision);
+    }
+
+    [Fact]
+    public async Task 재시작은_pending_inbox를_재큐하고_실패시_pending을_유지한다()
+    {
+        var first = new Harness();
+        first.Feed.Name = NewsFeedProviders.SbhNews;
+        first.Page(1, Relevant("base", "base", NewsRelevanceDecisions.Include));
+        await first.PollAsync();
+        first.Page(1, Relevant("review", "unclear", NewsRelevanceDecisions.Review));
+        await first.PollAsync();
+
+        var unavailable = new FakeRelevanceAdjudicator(null);
+        var restarted = new Harness(null, unavailable);
+        restarted.Options.SbhRelevanceAdjudicationEnabled = true;
+        restarted.Feed.Name = NewsFeedProviders.SbhNews;
+        restarted.Store.Texts[NewsFeedService.StateFile] = first.Store.Texts[NewsFeedService.StateFile];
+        restarted.Page(1, Relevant("review", "unclear", NewsRelevanceDecisions.Review));
+        await restarted.PollAsync();
+        using var stop = new CancellationTokenSource();
+        var worker = restarted.Service.RunRelevanceAdjudicationWorkerAsync(stop.Token);
+        await unavailable.Called.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        stop.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => worker);
+        var state = JsonSerializer.Deserialize<NewsFeedState>(restarted.Store.Texts[NewsFeedService.StateFile],
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.False(state.Inbox!.Single(x => x.Item.Id == "review").Processed);
+        Assert.Equal(NewsRelevanceDecisions.Review, state.Inbox.Single(x => x.Item.Id == "review").Item.Relevance!.Decision);
+    }
+
+    [Fact]
+    public async Task 재심_queue는_설정용량을_넘지_않고_inbox_pending을_보존한다()
+    {
+        var harness = new Harness(null, new FakeRelevanceAdjudicator(null));
+        harness.Options.SbhRelevanceAdjudicationEnabled = true;
+        harness.Feed.Name = NewsFeedProviders.SbhNews;
+        harness.Page(1, Relevant("base", "base", NewsRelevanceDecisions.Include));
+        await harness.PollAsync();
+        harness.Page(1, Enumerable.Range(1, 33)
+            .Select(x => Relevant($"review-{x}", $"unclear {x}", NewsRelevanceDecisions.Review)).ToArray());
+
+        await harness.PollAsync();
+
+        Assert.Equal("queue_full", harness.State.RelevanceAdjudicationStatus);
+        Assert.Equal(32, harness.State.RelevanceAdjudicationQueue);
+        var state = JsonSerializer.Deserialize<NewsFeedState>(harness.Store.Texts[NewsFeedService.StateFile],
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.Equal(33, state.Inbox!.Count(x => x.Item.Id.StartsWith("review-") && !x.Processed));
+    }
+
+    [Fact]
+    public async Task worker_timeout은_poll을_막지_않고_review_pending과_사유를_유지한다()
+    {
+        var blocking = new BlockingRelevanceAdjudicator();
+        var harness = new Harness(blocking, options =>
+        {
+            options.SbhRelevanceAdjudicationEnabled = true;
+            options.SbhRelevanceAdjudicationTimeoutSeconds = 1;
+        });
+        harness.Feed.Name = NewsFeedProviders.SbhNews;
+        harness.Page(1, Relevant("base", "base", NewsRelevanceDecisions.Include));
+        await harness.PollAsync();
+        harness.Page(1, Relevant("review", "unclear", NewsRelevanceDecisions.Review));
+
+        await harness.PollAsync().WaitAsync(TimeSpan.FromMilliseconds(500));
+        using var stop = new CancellationTokenSource();
+        var worker = harness.Service.RunRelevanceAdjudicationWorkerAsync(stop.Token);
+        await blocking.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        await Task.Delay(1200);
+
+        var state = JsonSerializer.Deserialize<NewsFeedState>(harness.Store.Texts[NewsFeedService.StateFile],
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.False(state.Inbox!.Single(x => x.Item.Id == "review").Processed);
+        Assert.Equal(NewsRelevanceDecisions.Review, state.Inbox.Single(x => x.Item.Id == "review").Item.Relevance!.Decision);
+        Assert.Equal("pending", harness.State.RelevanceAdjudicationStatus);
+        Assert.Equal("timeout_offline_or_invalid_response", harness.State.RelevanceAdjudicationReason);
+        stop.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => worker);
+    }
+
+    sealed class FakeRelevanceAdjudicator(NewsRelevanceAssessment? result) : INewsRelevanceAdjudicator
+    {
+        public TaskCompletionSource Called { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task<NewsRelevanceAssessment?> AdjudicateAsync(NewsFeedItem item, CancellationToken ct)
+        {
+            Called.TrySetResult();
+            return Task.FromResult(result);
+        }
+    }
+
+    sealed class BlockingRelevanceAdjudicator : INewsRelevanceAdjudicator
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async Task<NewsRelevanceAssessment?> AdjudicateAsync(NewsFeedItem item, CancellationToken ct)
+        {
+            Started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return null;
+        }
     }
 
 }

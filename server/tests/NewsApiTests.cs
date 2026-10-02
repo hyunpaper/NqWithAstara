@@ -143,6 +143,42 @@ public sealed class NewsQueryServiceTests
     }
 
     [Fact]
+    public void HealthExposesSbhRelevanceFilterCountsAndPolicyVersion()
+    {
+        var (query, state, _) = Build();
+        state.CollectionCompleted(Now, "ok", true, 2, Now,
+            [new NewsProviderFetchStatus(NewsFeedProviders.SbhNews, "ok", 7, 2,
+                IncludedCount: 2, ExcludedCount: 4, ReviewCount: 1,
+                FilterPolicyVersion: NewsRelevancePolicy.CurrentVersion)]);
+
+        var provider = Serialize(query.Health()).GetProperty("providers")[0];
+
+        Assert.Equal(2, provider.GetProperty("includedCount").GetInt32());
+        Assert.Equal(4, provider.GetProperty("excludedCount").GetInt32());
+        Assert.Equal(1, provider.GetProperty("reviewCount").GetInt32());
+        Assert.Equal(NewsRelevancePolicy.CurrentVersion, provider.GetProperty("filterPolicyVersion").GetString());
+    }
+
+    [Fact]
+    public void HealthPreservesLastSbhFilterSnapshotAfterNotModified()
+    {
+        var state = new NewsRuntimeState();
+        var now = DateTimeOffset.UtcNow;
+        state.CollectionCompleted(now, "ok", true, 2, now,
+            [new NewsProviderFetchStatus(NewsFeedProviders.SbhNews, "ok", 7, 2,
+                IncludedCount: 2, ExcludedCount: 4, ReviewCount: 1,
+                FilterPolicyVersion: NewsRelevancePolicy.CurrentVersion)]);
+        state.CollectionCompleted(now.AddMinutes(15), "empty", true, 0, null,
+            [new NewsProviderFetchStatus(NewsFeedProviders.SbhNews, "empty", 0)]);
+
+        var provider = Assert.Single(state.Providers);
+        Assert.Equal(2, provider.IncludedCount);
+        Assert.Equal(4, provider.ExcludedCount);
+        Assert.Equal(1, provider.ReviewCount);
+        Assert.Equal(NewsRelevancePolicy.CurrentVersion, provider.FilterPolicyVersion);
+    }
+
+    [Fact]
     public void ArticlesExposeThePromptVersion()
     {
         var (query, state, options) = Build();

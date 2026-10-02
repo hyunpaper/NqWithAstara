@@ -26,14 +26,16 @@ public sealed record NewsFeedItem(
     IReadOnlyList<NewsEntity>? Entities = null,
     string Content = "",
     string? Url = null,
-    string Provider = "");
+    string Provider = "",
+    NewsRelevanceAssessment? Relevance = null);
 
 
 /// <summary>기사 상세(#151). AI 요약이 있으면 본문 대신 그것을 분류 입력으로 쓴다.</summary>
 public sealed record NewsDetail(string Summary, string Body);
 
 public sealed record NewsProviderFetchStatus(string Provider, string Status, int Count, int NewCount = 0,
-    TimeSpan? RetryAfter = null);
+    TimeSpan? RetryAfter = null, int IncludedCount = 0, int ExcludedCount = 0, int ReviewCount = 0,
+    string? FilterPolicyVersion = null);
 
 public sealed record NewsFeedBatch(
     IReadOnlyList<NewsFeedItem> Items,
@@ -87,6 +89,11 @@ public interface INewsTranslator
 public interface INewsClassifier
 {
     Task<NewsClassificationResult> ClassifyAsync(NewsClassificationRequest request, CancellationToken ct);
+}
+
+public interface INewsRelevanceAdjudicator
+{
+    Task<NewsRelevanceAssessment?> AdjudicateAsync(NewsFeedItem item, CancellationToken ct);
 }
 
 /// <summary>`App_Data/news` 전용 파일 포트(#151 §5). 실거래·v5 관측 파일과 분리한다.</summary>
