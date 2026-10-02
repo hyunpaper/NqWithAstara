@@ -81,7 +81,7 @@ export default function NewsPanel({ symbol, onSelectArticle }: { symbol: string;
             const evidenceId = badge ? `news-evidence-${encodeURIComponent(a.id)}` : undefined;
             return (
               <li key={a.id}>
-                  <button type="button" className="news-row-button" onClick={(event: MouseEvent<HTMLButtonElement>) => onSelectArticle(a, event.currentTarget)} aria-label={`${a.titleKo ?? a.title} 상세 보기`} aria-describedby={evidenceId}>
+                  <button type="button" className="news-row-button" onClick={(event: MouseEvent<HTMLButtonElement>) => onSelectArticle(a, event.currentTarget)} aria-label={`${a.title} 상세 보기`} aria-describedby={evidenceId}>
                   <div className="news-row-head">
                     <span
                       className="news-time"
@@ -89,10 +89,10 @@ export default function NewsPanel({ symbol, onSelectArticle }: { symbol: string;
                     >
                       {relativeTimeKo(a.createdAt)}
                     </span>
-                    {(a.sourceKo ?? a.source) && <span className="news-source">{a.sourceKo ?? a.source}</span>}
+                    {a.source && <span className="news-source">{a.source}</span>}
                     {badge && <span className="news-badge-wrap"><span className={badge.className}>{badge.label}</span><NewsEvidenceTooltip id={evidenceId} article={a} /></span>}
                   </div>
-                  <div className="news-title">{a.titleKo ?? a.title}</div>
+                  <div className="news-title">{a.title}</div>
                   {a.reason && <div className="news-reason">{a.reason}</div>}
                   {kind && <span className="news-kind">{kind}</span>}
                 </button>

@@ -14,7 +14,7 @@ export default function NewsEvidenceTooltip({ article, id }: { article: NewsArti
     {article.inputKind && <span>분석 입력: {article.inputKind === "body" ? "본문" : article.inputKind === "summary" ? "요약" : "헤드라인"}</span>}
     {impacts.map(([symbol, score]) => <span key={symbol}>{symbol} 영향도 {score >= 0 ? "+" : ""}{score.toFixed(1)}</span>)}
     {article.evidenceArticleId && <span>동일 기사 분석 근거로 연결됨</span>}
-    {article.evidence?.slice(0, 3).map((item) => <span key={item.id}>근거 기사: {item.titleKo ?? item.title} ({item.sourceKo ?? item.source ?? "출처 미상"})</span>)}
+    {article.evidence?.slice(0, 3).map((item) => <span key={item.id}>근거 기사: {item.title} ({item.source ?? "출처 미상"})</span>)}
     {article.createdAt && <span>{absoluteTimeKst(article.createdAt)}</span>}
   </span>;
 }
@@ -97,7 +97,7 @@ export function NewsScorePopover({ score, label, className, onSelectEvidence }: 
     {(score.evidence ?? []).length === 0
       ? <span>표시할 동일 시점 근거 기사가 없습니다.</span>
       : score.evidence!.map((item) => <button key={item.id} type="button" onClick={(event) => { event.stopPropagation(); setOpen(false); onSelectEvidence(item, triggerRef.current ?? event.currentTarget); }}>
-        <span>{item.titleKo ?? item.title}</span>
+        <span>{item.title}</span>
         <small>{item.contribution == null ? "기여도 없음" : `점수 기여 ${item.contribution >= 0 ? "+" : ""}${item.contribution.toFixed(2)}`}</small>
       </button>)}
     {(score.remainingEvidenceCount ?? 0) > 0 && <span>외 {score.remainingEvidenceCount}건 · 나머지 기여 {(score.remainingContribution ?? 0) >= 0 ? "+" : ""}{(score.remainingContribution ?? 0).toFixed(2)}</span>}
