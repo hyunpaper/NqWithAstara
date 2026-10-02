@@ -5,6 +5,7 @@ using Astra.Server.Domain.ScoreCore;
 using Astra.Server.Infrastructure.ScoreCore;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace Astra.Server.Tests;
@@ -37,6 +38,9 @@ public sealed class ScoreCoreApiTests
         using var host = new Host(enabled: true);
         var captured = await host.SeedAsync();
         using var client = host.Factory.CreateClient();
+        host.Factory.Services.GetRequiredService<ScoreCoreRuntimeState>().RunCompleted(AsOf.AddMinutes(10),
+            AsOf.AddMinutes(10),
+            [new("NVDA", ImpactTargetKind.Company, captured, ScoreSnapshotAppendResult.Unchanged, null)]);
 
         var latestResponse = await client.GetAsync("/api/score-core/company/nvda");
         using var latest = JsonDocument.Parse(await latestResponse.Content.ReadAsStringAsync());
@@ -48,13 +52,16 @@ public sealed class ScoreCoreApiTests
         var root = latest.RootElement;
         Assert.Equal(
         [
-            "enabled", "captureId", "targetId", "targetKind", "asOf", "status", "calibrationStatus", "schemaVersion",
+            "enabled", "captureId", "targetId", "targetKind", "asOf", "capturedAt", "lastConfirmedAt", "status", "calibrationStatus", "schemaVersion",
             "policyVersion", "classifierVersion", "evidenceCount", "uniqueEventCount", "inputCount", "includedCount",
             "unknownCount", "horizons", "coverage", "exclusionSummary", "excludedEvidence",
         ], root.EnumerateObject().Select(x => x.Name));
         Assert.Equal(captured.CaptureId, root.GetProperty("captureId").GetString());
         Assert.Equal("NVDA", root.GetProperty("targetId").GetString());
         Assert.Equal("company", root.GetProperty("targetKind").GetString());
+        Assert.Equal(AsOf, root.GetProperty("capturedAt").GetDateTimeOffset());
+        Assert.Equal(AsOf.AddMinutes(10), root.GetProperty("lastConfirmedAt").GetDateTimeOffset());
+        Assert.Equal(AsOf.AddMinutes(10), detail.RootElement.GetProperty("lastConfirmedAt").GetDateTimeOffset());
         Assert.Equal("uncalibrated", root.GetProperty("calibrationStatus").GetString());
         Assert.Equal(2, root.GetProperty("evidenceCount").GetInt32());
         Assert.Equal(1, root.GetProperty("uniqueEventCount").GetInt32());

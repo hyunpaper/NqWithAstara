@@ -56,7 +56,7 @@ public sealed class ScoreCoreShadowCaptureServiceTests
     public async Task FailedCycleIsReportedAndNextCycleContinues()
     {
         var fixture = new Fixture(enabled: true);
-        fixture.Store.FailNextAppend = true;
+        fixture.Local.FailNextRead = true;
 
         await fixture.Service.RunOnceAsync(default);
         var failed = fixture.State.Health();
@@ -69,8 +69,10 @@ public sealed class ScoreCoreShadowCaptureServiceTests
         Assert.Contains(fixture.Diagnostics.Failures, x => x.Scope == "score-core-capture");
         Assert.Equal("ok", recovered.Status);
         Assert.Null(recovered.LastError);
+        Assert.Empty(recovered.FailedTargets);
         Assert.Equal(3, recovered.TargetCount);
         Assert.Equal(3, recovered.SnapshotCount);
+        Assert.Equal(3, recovered.AppendedCount);
         Assert.Equal(3, recovered.InsufficientCount);
         Assert.Equal(0, recovered.UnavailableCount);
         Assert.Equal(Now.AddMinutes(5), recovered.LastSuccessAt);
@@ -115,6 +117,7 @@ public sealed class ScoreCoreShadowCaptureServiceTests
         public NewsClock Clock { get; } = new(Now);
         public RecordingStore Store { get; } = new();
         public NewsDiagnostics Diagnostics { get; } = new();
+        public FlakyLocalStore Local { get; } = new();
         public ScoreCoreRuntimeState State { get; }
         public ScoreCoreShadowCaptureService Service { get; }
 
@@ -126,30 +129,40 @@ public sealed class ScoreCoreShadowCaptureServiceTests
                 [new NewsScoreEvidenceSource(reader, options), new MacroCalendarEvidenceSource()]);
             State = new ScoreCoreRuntimeState(options);
             Service = new ScoreCoreShadowCaptureService(options,
-                new ScoreCoreTargetSelector(new NewsLocalStore(), reader, options),
+                new ScoreCoreTargetSelector(Local, reader, options),
                 new ScoreCoreShadowCaptureOrchestrator(new ScoreCoreSnapshotService(assembler, Store)),
                 Store, State, Diagnostics, Clock);
         }
     }
 
+    sealed class FlakyLocalStore : ILocalStore
+    {
+        readonly NewsLocalStore _inner = new();
+        public bool FailNextRead { get; set; }
+
+        public Task<T> Read<T>(string file, T fallback)
+        {
+            if (!FailNextRead) return _inner.Read(file, fallback);
+            FailNextRead = false;
+            throw new IOException("watchlist");
+        }
+
+        public Task Write<T>(string file, T data) => _inner.Write(file, data);
+
+        public Task<TResult> Update<T, TResult>(string file, T fallback, Func<T, (T Data, TResult Result)> change)
+            => _inner.Update(file, fallback, change);
+    }
+
     sealed class RecordingStore : IScoreCoreSnapshotStore
     {
         public Dictionary<string, ScoreCoreShadowSnapshot> Values { get; } = [];
-        public bool FailNextAppend { get; set; }
         public int PruneCalls { get; private set; }
         public int LastRetentionDays { get; private set; }
 
         public Task<ScoreSnapshotAppendResult> AppendAsync(ScoreCoreShadowSnapshot snapshot, CancellationToken ct)
-        {
-            if (FailNextAppend)
-            {
-                FailNextAppend = false;
-                throw new IOException("disk");
-            }
-            return Task.FromResult(Values.TryAdd(snapshot.CaptureId, snapshot)
+            => Task.FromResult(Values.TryAdd(snapshot.CaptureId, snapshot)
                 ? ScoreSnapshotAppendResult.Appended
                 : ScoreSnapshotAppendResult.AlreadyExists);
-        }
 
         public Task<ScoreCoreShadowSnapshot?> FindAsync(string captureId, CancellationToken ct)
             => Task.FromResult(Values.GetValueOrDefault(captureId));
