@@ -254,15 +254,17 @@ public sealed class MarketMoodQueryService(
             if (!double.IsFinite(quote.Price) || quote.Price <= 0)
                 return Unavailable(definition, "open", "유효한 현재가가 없습니다.", quote.At);
 
+            var sessionDate = session.Start is { } start ? MarketRules.TradingDate(start) : (DateOnly?)null;
             var previousClose = daily
                 .Where(candle => double.IsFinite(candle.Close) && candle.Close > 0 &&
-                                 (session.Start is null || candle.Timestamp < session.Start.Value))
+                                 (sessionDate is null || MarketRules.TradingDate(candle.Timestamp) < sessionDate.Value))
                 .OrderBy(candle => candle.Timestamp)
                 .LastOrDefault();
             if (previousClose is null)
                 return Unavailable(definition, "open", "전일 종가가 없어 등락률을 계산할 수 없습니다.", quote.At);
 
             var change = Math.Round((quote.Price / previousClose.Close - 1d) * 100d, 2, MidpointRounding.AwayFromZero);
+            if (change == 0d) change = 0d;
             var stale = quote.At > now || now - quote.At >= StaleAfter;
             return new(
                 definition.Key,

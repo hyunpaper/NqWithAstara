@@ -42,6 +42,39 @@ public sealed class MarketMoodQueryServiceTests
     }
 
     [Fact]
+    public async Task TodaysDailyCandleStampedBeforeTheSessionIsNotUsedAsPreviousClose()
+    {
+        var gateway = OpenGateway();
+        var todayMidnightEastern = DateTimeOffset.Parse("2026-09-22T04:00:00Z");
+        gateway.Daily["QQQ"] =
+        [
+            new(todayMidnightEastern.AddDays(-1), 100, 100, 100, 100, 1),
+            new(todayMidnightEastern, 101, 102, 100, 102, 1)
+        ];
+        gateway.Prices["QQQ"] = (102, Now.AddMinutes(-1));
+
+        var result = await Service(gateway).GetAsync();
+
+        var nasdaq = Assert.Single(result.Assets, asset => asset.Symbol == "QQQ");
+        Assert.Equal(2, nasdaq.ChangePercent);
+        Assert.Equal("up", nasdaq.Direction);
+    }
+
+    [Fact]
+    public async Task OnlyTodaysDailyCandleLeavesTheAssetWithoutPreviousClose()
+    {
+        var gateway = OpenGateway();
+        gateway.Daily["GLD"] = [new(DateTimeOffset.Parse("2026-09-22T04:00:00Z"), 100, 100, 100, 100, 1)];
+
+        var result = await Service(gateway).GetAsync();
+
+        var gold = Assert.Single(result.Assets, asset => asset.Symbol == "GLD");
+        Assert.False(gold.IsAvailable);
+        Assert.Null(gold.ChangePercent);
+        Assert.Contains("전일 종가", gold.Reason);
+    }
+
+    [Fact]
     public async Task MissingAndStaleAssetsAreExcludedFromTheAggregate()
     {
         var gateway = OpenGateway();
