@@ -37,8 +37,10 @@ public sealed class ScoreCoreShadowCaptureService(
         try
         {
             var targets = await selector.SelectAsync(asOf, ct);
-            var snapshots = await orchestrator.CaptureAsync(targets, asOf, ct);
-            state.RunCompleted(clock.GetUtcNow(), targets.Count, snapshots);
+            var outcomes = await orchestrator.CaptureTargetsAsync(targets, asOf, ct);
+            foreach (var failed in outcomes.Where(x => x.Error is not null))
+                diagnostics.PollFailed($"score-core-capture:{failed.TargetKind}:{failed.TargetId}", failed.Error!);
+            state.RunCompleted(clock.GetUtcNow(), asOf, outcomes);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception exception)
