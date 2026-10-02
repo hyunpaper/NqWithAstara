@@ -13,6 +13,9 @@ public static class NewsSentiments
     public const string Neutral = "neutral";
     public const string Unclassified = "unclassified";
 
+    /// <summary>LLM 출력 전용 라벨. 저장 시 <see cref="Neutral"/>·strength 0으로 정규화한다.</summary>
+    public const string Irrelevant = "irrelevant";
+
     public static bool IsKnown(string? value)
         => value is Positive or Negative or Neutral;
 
@@ -35,6 +38,7 @@ public static class NewsPromptVersions
 {
     public const string V2b = "v2b";
     public const string V2c = "v2c";
+    public const string V2d = "v2d";
 }
 
 /// <summary>
@@ -200,7 +204,7 @@ public static class NewsSentimentDecay
 /// <summary>로컬 LLM 분류 결과(#151 §3). 심볼은 관심종목에 한정하지 않는다.</summary>
 public sealed record NewsClassification(IReadOnlyList<string> Symbols, string Sentiment, int Strength, string Reason,
     string? KoreanTitle = null, string? KoreanSource = null,
-    IReadOnlyDictionary<string, int>? ImpactScores = null);
+    IReadOnlyDictionary<string, int>? ImpactScores = null, bool Irrelevant = false);
 
 /// <summary>
 /// 분류 JSON 파서(#151 §3). 코드펜스·앞뒤 잡문을 제거하고 첫 JSON 객체만 읽는다.
@@ -221,10 +225,16 @@ public static class NewsClassificationParser
             if (root.ValueKind != JsonValueKind.Object) return null;
 
             var sentiment = Text(root, "sentiment")?.Trim().ToLowerInvariant();
-            if (!NewsSentiments.IsKnown(sentiment)) return null;
+            var irrelevant = sentiment == NewsSentiments.Irrelevant;
+            if (!irrelevant && !NewsSentiments.IsKnown(sentiment)) return null;
 
             var symbols = Symbols(root);
             if (symbols.Count == 0) symbols = [NewsSymbols.Market];
+
+            if (irrelevant)
+                return new NewsClassification(symbols, NewsSentiments.Neutral, 0, Reason(root),
+                    Text(root, "title_ko"), Text(root, "source_ko"),
+                    symbols.ToDictionary(x => x, _ => 0, StringComparer.OrdinalIgnoreCase), Irrelevant: true);
 
             return new NewsClassification(symbols, sentiment!, Strength(root), Reason(root),
                 Text(root, "title_ko"), Text(root, "source_ko"), ImpactScores(root));

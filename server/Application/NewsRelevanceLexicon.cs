@@ -5,7 +5,7 @@ namespace Astra.Server.Application;
 /// <summary>SBH 관련성 판정 키워드 사전. 키워드를 바꾸면 <see cref="Version"/>을 올린다(§A R6, #310).</summary>
 public static class NewsRelevanceLexicon
 {
-    public const string Version = "lexicon-2026-10-02.2";
+    public const string Version = "lexicon-2026-10-03";
 
     const RegexOptions IgnoreCase = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled;
     const RegexOptions CaseSensitive = RegexOptions.CultureInvariant | RegexOptions.Compiled;
@@ -15,8 +15,14 @@ public static class NewsRelevanceLexicon
     const string ResumeAction = @"(?<=(?:수출|생산|가동|운항|항행|폭격|공습|협상|회담|거래|공급)\s?)재개";
 
     public static readonly Regex NonMarket = new(
-        @"\b(football|soccer|premier league|champions league|world cup|scor(?:e|es|ed|ing)\s+(?:a\s+|the\s+|his\s+|her\s+|their\s+)?(?:winning\s+|late\s+)?goals?|(?:football|soccer)\s+match(?:es)?|match\s+against|actor|actress|celebrity|movie|film|music|concert)\b"
-        + @"|축구|프리미어리그|챔피언스리그|월드컵|골을?\s*(?:넣|기록)|배우|연예|영화|가수|콘서트|예측시장", IgnoreCase);
+        @"\b(football|soccer|premier league|champions league|world cup|scor(?:e|es|ed|ing)\s+(?:a\s+|the\s+|his\s+|her\s+|their\s+)?(?:winning\s+|late\s+)?goals?|(?:football|soccer)\s+match(?:es)?|match\s+against|actor|actress|celebrit(?:y|ies)|movie|film|music|concert"
+        + @"|sportsbook|promo code|NFL|NBA|MLB|NHL|WNBA|NCAA|quarterback|touchdown|playoffs?|Super Bowl|sports ad|Hollywood|box office|sitcom|reality (?:TV|show)|red carpet|recipes?|horoscopes?|news quiz)\b"
+        + @"|축구|프리미어리그|챔피언스리그|월드컵|골을?\s*(?:넣|기록)|배우|연예|영화|가수|콘서트|예측시장|예능|드라마|아이돌", IgnoreCase);
+
+    /// <summary>기사 URL 경로의 선두 섹션이 연예·스포츠·생활이면 본문과 무관하게 제외한다(모든 피드 공통).</summary>
+    public static readonly Regex NonMarketSection = new(
+        @"^/(?:[a-z-]+/)?(?:sports?|outkick(?:-[a-z]+)?|entertainment|lifestyle|travel|food(?:-drink)?|health|fitness|celebrity|tv|movies|music|style|fashion|faith(?:-values)?|games|quiz|horoscopes?|weather|betting|shopping|deals)(?:/|$)",
+        IgnoreCase);
 
     public static readonly Regex FinancialQualifier = new(
         @"\b(stocks?|equity|investors?|tariffs?|sanctions?|inflation|Federal Reserve|Treasur(?:y|ies)|bond yields?|interest rates?|payrolls?)\b"

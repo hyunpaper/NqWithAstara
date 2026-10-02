@@ -212,4 +212,67 @@ public sealed class NewsRelevancePolicyTests
     NewsRelevanceAssessment Evaluate(NewsFeedItem item) => _policy.Evaluate(item, NewsRelevanceContext.Empty);
 
     static NewsFeedItem Item(string title) => new("id", title, "", "SBH", DateTimeOffset.UtcNow, []);
+
+    [Fact]
+    public void 스포츠_섹션의_연예_기사는_평가액이_있어도_제외한다()
+    {
+        var item = new NewsFeedItem("sweeney",
+            "Jealous media attack Sydney Sweeney's sports ad while her $2B valuation proves she's the ultimate boss",
+            "Sydney Sweeney's Novig stake surged from $500 million to $2 billion after her viral sports ad sparked fierce debate over women's sports imagery.",
+            "Fox News", DateTimeOffset.UtcNow, [],
+            Url: "https://www.foxnews.com/outkick-sports/jealous-columnists-attack-sydney-sweeney-sports-ad-2b-valuation-proves-ultimate-boss");
+
+        var result = Evaluate(item);
+
+        Assert.Equal(NewsRelevanceDecisions.Exclude, result.Decision);
+        Assert.Equal("non_market_section", result.Reason);
+    }
+
+    [Fact]
+    public void 섹션_URL이_없어도_연예_스포츠_본문은_포함되지_않는다()
+    {
+        var result = Evaluate(new NewsFeedItem("sweeney", "Jealous media attack Sydney Sweeney's sports ad while her $2B valuation proves she's the ultimate boss",
+            "Sydney Sweeney's Novig stake surged from $500 million to $2 billion after her viral sports ad.", "Fox News", DateTimeOffset.UtcNow, []));
+
+        Assert.Equal(NewsRelevanceDecisions.Exclude, result.Decision);
+    }
+
+    [Theory]
+    [InlineData("https://www.foxnews.com/sports/nfl-week-3", true)]
+    [InlineData("https://www.foxnews.com/outkick-betting/promo-code", true)]
+    [InlineData("https://www.foxnews.com/entertainment/stallone", true)]
+    [InlineData("https://www.foxnews.com/lifestyle/news-quiz", true)]
+    [InlineData("https://www.foxnews.com/food-drink/deli-meat", true)]
+    [InlineData("https://www.foxnews.com/travel/noahs-ark", true)]
+    [InlineData("https://www.foxnews.com/politics/fed-rate-decision", false)]
+    [InlineData("https://www.foxnews.com/world/iran-strike", false)]
+    [InlineData("https://www.sbhnews.com/news/fed-rate-2026-10-02", false)]
+    [InlineData(null, false)]
+    public void 섹션_URL_규칙은_연예_스포츠_생활만_가른다(string? url, bool nonMarket)
+    {
+        Assert.Equal(nonMarket, NewsRelevancePolicy.IsNonMarketSection(url));
+    }
+
+    [Theory]
+    [InlineData("Fed raises interest rates by a quarter point as inflation stays high", "https://www.foxnews.com/politics/fed-raises-rates", "monetary_policy")]
+    [InlineData("Apple Inc reports record earnings and raises guidance", "https://www.foxnews.com/us/apple-earnings", "guidance_earnings")]
+    [InlineData("Trump imposes new tariffs on China and stocks fall", "https://www.foxnews.com/world/trump-tariffs", "macro_policy")]
+    public void 영문_시장_기사는_섹션_게이트를_지나_포함된다(string title, string url, string kind)
+    {
+        var result = Evaluate(new NewsFeedItem("id", title, "", "Fox News", DateTimeOffset.UtcNow, [], Url: url));
+
+        Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
+        Assert.Equal(kind, result.EventKind);
+    }
+
+    [Theory]
+    [InlineData("Fanatics Sportsbook promo code: bet $20, get $350 on NFL Week 3")]
+    [InlineData("Hollywood star stuns on the red carpet ahead of box office weekend")]
+    public void 영문_스포츠_연예_키워드는_비시장_문맥으로_제외한다(string title)
+    {
+        var result = Evaluate(Item(title));
+
+        Assert.Equal(NewsRelevanceDecisions.Exclude, result.Decision);
+        Assert.Equal("non_market_context", result.Reason);
+    }
 }

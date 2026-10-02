@@ -218,8 +218,8 @@ public sealed class NewsRelevanceLexiconTests
         var dell = _policy.Evaluate(Item("Oil prices surge"), Context(("DELL", "Dell")));
         var same = _policy.Evaluate(Item("Oil prices surge"), Context(("DELL", "Dell")));
 
-        Assert.StartsWith("sbh-relevance-v3+entities:", empty.PolicyVersion);
-        Assert.Equal(8, empty.PolicyVersion["sbh-relevance-v3+entities:".Length..].Length);
+        Assert.StartsWith("news-relevance-v4+entities:", empty.PolicyVersion);
+        Assert.Equal(8, empty.PolicyVersion["news-relevance-v4+entities:".Length..].Length);
         Assert.NotEqual(empty.PolicyVersion, dell.PolicyVersion);
         Assert.Equal(dell.PolicyVersion, same.PolicyVersion);
     }
@@ -227,8 +227,8 @@ public sealed class NewsRelevanceLexiconTests
     [Fact]
     public void 사전은_버전을_가진다()
     {
-        Assert.Equal("lexicon-2026-10-02.2", NewsRelevanceLexicon.Version);
-        Assert.Equal("sbh-relevance-v3", NewsRelevancePolicy.CurrentVersion);
+        Assert.Equal("lexicon-2026-10-03", NewsRelevanceLexicon.Version);
+        Assert.Equal("news-relevance-v4", NewsRelevancePolicy.CurrentVersion);
     }
 
     [Fact]
