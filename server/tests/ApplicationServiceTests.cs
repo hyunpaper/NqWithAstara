@@ -144,6 +144,62 @@ public sealed class ApplicationServiceTests
         Assert.Equal(running ? durable.Select(x => x.Symbol).Order() : [], fixture.Stream.Symbols.Order());
     }
 
+    [Fact]
+    public async Task AutoStartEnabledStartsMonitoringOnceAsAuto()
+    {
+        var fixture = new ControlFixture(); await fixture.Store.Write("watchlist.json", new List<WatchItem> { new("AAPL", "Apple") });
+        var service = new MonitorAutoStartService(new MonitorOptions { AutoStart = true }, fixture.Control, new FakeCredentials(true));
+        var result = await service.RunOnceAsync(default);
+        Assert.Equal(MonitorAutoStartOutcome.Started, result.Outcome);
+        var snapshot = fixture.Runtime.Snapshot();
+        Assert.True(snapshot.Running);
+        Assert.Equal("auto", snapshot.StartedBy);
+        Assert.NotNull(snapshot.StartedAt);
+        Assert.Equal(1, fixture.Stream.StartCalls);
+        Assert.Empty(service.Warnings);
+    }
+
+    [Fact]
+    public async Task AutoStartDisabledLeavesMonitoringIdle()
+    {
+        var fixture = new ControlFixture(); await fixture.Store.Write("watchlist.json", new List<WatchItem> { new("AAPL", "Apple") });
+        var service = new MonitorAutoStartService(new MonitorOptions(), fixture.Control, new FakeCredentials(true));
+        var result = await service.RunOnceAsync(default);
+        Assert.Equal(MonitorAutoStartOutcome.Disabled, result.Outcome);
+        var snapshot = fixture.Runtime.Snapshot();
+        Assert.False(snapshot.Running);
+        Assert.Null(snapshot.StartedBy);
+        Assert.Null(snapshot.StartedAt);
+        Assert.Equal(0, fixture.Stream.StartCalls);
+    }
+
+    [Fact]
+    public async Task AutoStartWithoutCredentialsWarnsAndDoesNotStart()
+    {
+        var fixture = new ControlFixture(); await fixture.Store.Write("watchlist.json", new List<WatchItem> { new("AAPL", "Apple") });
+        var service = new MonitorAutoStartService(new MonitorOptions { AutoStart = true }, fixture.Control, new FakeCredentials(false));
+        var result = await service.RunOnceAsync(default);
+        Assert.Equal(MonitorAutoStartOutcome.CredentialsMissing, result.Outcome);
+        Assert.False(fixture.Runtime.Snapshot().Running);
+        Assert.Equal(0, fixture.Stream.StartCalls);
+        Assert.Single(service.Warnings);
+        Assert.Contains("자격 증명", service.Warnings[0]);
+    }
+
+    [Fact]
+    public async Task ManualStartIsRecordedAsManualAndStopClearsIt()
+    {
+        var fixture = new ControlFixture(); await fixture.Store.Write("watchlist.json", new List<WatchItem> { new("AAPL", "Apple") });
+        await fixture.Control.StartAsync(default);
+        Assert.Equal("manual", fixture.Runtime.Snapshot().StartedBy);
+        await fixture.Control.StopAsync(default);
+        var snapshot = fixture.Runtime.Snapshot();
+        Assert.Null(snapshot.StartedBy);
+        Assert.Null(snapshot.StartedAt);
+    }
+
+    sealed class FakeCredentials(bool configured) : IMarketCredentialProbe { public Task<bool> HasCredentialsAsync(CancellationToken ct) => Task.FromResult(configured); }
+
     static SimTrade Trade(string id, DateTimeOffset at, string? logic) => new(id, "AAPL", "SETUP", at, 100, 102, 99, null, null, "TARGET", 102, at.AddMinutes(5), 1.8, 102, Logic: logic);
 
     sealed class MemoryStore : ILocalStore

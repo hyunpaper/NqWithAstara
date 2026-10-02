@@ -8,7 +8,7 @@ namespace Astra.Server;
 
 public static class TossRateLimitGroups { public const int MarketData = 15; public const int Stock = 5; public const int MarketDataChart = 20; public const int OrderInfo = 6; public const int OrderHistory = 5; public const int Asset = 5; }
 
-public sealed class TossClient(HttpClient http)
+public sealed class TossClient(HttpClient http) : Application.IMarketCredentialProbe
 {
     readonly SemaphoreSlim _requestGate = new(4, 4); readonly SemaphoreSlim _tokenGate = new(1, 1); string? _token; DateTimeOffset _expires;
     readonly SemaphoreSlim _chartRateGate = new(1, 1);
@@ -23,6 +23,11 @@ public sealed class TossClient(HttpClient http)
         string? Find(params string[] keys) => lines.Select(x => x.Split(new[] { '=', ':' }, 2)).Where(x => x.Length == 2 && keys.Any(k => x[0].Contains(k, StringComparison.OrdinalIgnoreCase))).Select(x => x[1].Trim()).FirstOrDefault();
         var id = Find("client_id", "api key"); var secret = Find("client_secret", "secret key");
         if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(secret)) throw new InvalidOperationException("tossapi.txt must contain client id and secret on separate lines or key=value lines."); return (id, secret);
+    }
+    public async Task<bool> HasCredentialsAsync(CancellationToken ct)
+    {
+        try { await Credentials(); return true; }
+        catch (Exception e) when (e is InvalidOperationException or IOException or UnauthorizedAccessException) { return false; }
     }
     public async Task<string> GetAccessTokenAsync(CancellationToken ct)
     {

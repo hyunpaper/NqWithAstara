@@ -164,6 +164,56 @@ public sealed class HistoricalStructureTradeReplayTests
     }
 
     [Fact]
+    public async Task 메타표가_없거나_허용종목만_있으면_기존Replay와_같다()
+    {
+        var bars = new RandomWalkBars(6);
+        var common = new Dictionary<string, StockInfo>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["TSLA"] = new("TSLA", "Tesla", "STOCK", "NASDAQ", true, "ACTIVE", 1m)
+        };
+        var unrelated = new Dictionary<string, StockInfo>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["SOXL"] = new("SOXL", "Direxion", "ETF", "NYSE", false, "ACTIVE", 3m)
+        };
+
+        var baseline = await RunRandomWalk(bars, null);
+        var withCommon = await RunRandomWalk(bars, common);
+        var withMissing = await RunRandomWalk(bars, unrelated);
+
+        Assert.Contains(baseline.Candidates, x => x.StructuralReady);
+        Assert.Equal(JsonSerializer.Serialize(baseline), JsonSerializer.Serialize(withCommon));
+        Assert.Equal(JsonSerializer.Serialize(baseline), JsonSerializer.Serialize(withMissing));
+    }
+
+    [Fact]
+    public async Task 레버리지ETF메타는_실시간과_같은_종목유형사유로_신규진입을_막는다()
+    {
+        var bars = new RandomWalkBars(6);
+        var leveraged = new StockInfo("TSLA", "Leveraged", "ETF", "NYSE", false, "ACTIVE", 3m);
+        var metadata = new Dictionary<string, StockInfo>(StringComparer.OrdinalIgnoreCase) { ["TSLA"] = leveraged };
+
+        var baseline = await RunRandomWalk(bars, null);
+        var run = await RunRandomWalk(bars, metadata);
+
+        Assert.Equal(SymbolEligibility.CodeTypeUnsupported, SymbolEligibility.Note(leveraged, StructurePolicy.Default));
+        Assert.Contains(baseline.Candidates, x => x.StructuralReady);
+        Assert.Equal(baseline.Candidates.Select(x => x.EventId), run.Candidates.Select(x => x.EventId));
+        Assert.All(run.Candidates, x =>
+        {
+            Assert.Contains(SymbolEligibility.CodeTypeUnsupported, x.RejectionReasons);
+            Assert.False(x.StructuralReady);
+            Assert.False(x.Filled);
+        });
+        Assert.Empty(run.Trades["TSLA"]);
+    }
+
+    static Task<HistoricalStructureTradeReplay.ReplayRun> RunRandomWalk(IBarStore bars,
+        IReadOnlyDictionary<string, StockInfo>? metadata) =>
+        new HistoricalStructureTradeReplay(bars, StructurePolicy.Default with { RequireCompleteLiquidityCost = false },
+                symbolMetadata: metadata)
+            .RunDetailedAsync(new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 9), ["TSLA"], default);
+
+    [Fact]
     public async Task 상세Replay는_제공된_과거호가를_비용입력으로_전달한다()
     {
         var source = new FixedLiquiditySource();
@@ -488,6 +538,50 @@ public sealed class HistoricalStructureTradeReplayTests
             Task.FromResult(_lines.Count);
         public Task<IReadOnlyList<string>> ReadLinesAsync(string day, string symbol, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<string>>(_lines);
+        public Task DeleteDayAsync(string day, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    sealed class RandomWalkBars : IBarStore
+    {
+        readonly Dictionary<string, IReadOnlyList<string>> _days = new(StringComparer.Ordinal);
+
+        public RandomWalkBars(int seed)
+        {
+            var random = new Random(seed);
+            foreach (var day in new[] { "2026-09-08", "2026-09-09" })
+            {
+                var start = DateTimeOffset.Parse(day + "T13:30:00Z");
+                var lines = new List<string>();
+                var price = 100d;
+                for (var i = 0; i < 390; i++)
+                {
+                    var open = price;
+                    price *= 1 + (random.NextDouble() - .5) * .006;
+                    lines.Add(JsonSerializer.Serialize(new
+                    {
+                        t = start.AddMinutes(i).UtcDateTime,
+                        o = Math.Round(open, 2),
+                        h = Math.Round(Math.Max(open, price) + random.NextDouble() * .15, 2),
+                        l = Math.Round(Math.Min(open, price) - random.NextDouble() * .15, 2),
+                        c = Math.Round(price, 2),
+                        v = Math.Round(1000 + random.NextDouble() * 4000)
+                    }));
+                }
+                _days[day] = lines;
+            }
+        }
+
+        public Task<string?> LastLineAsync(string day, string symbol, CancellationToken ct) =>
+            Task.FromResult(_days.GetValueOrDefault(day)?.LastOrDefault());
+        public Task AppendAsync(string day, string symbol, string line, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<string>> ListDaysAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(_days.Keys.Order(StringComparer.Ordinal).ToArray());
+        public Task<IReadOnlyList<string>> ListSymbolsAsync(string day, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(["TSLA"]);
+        public Task<int> CountLinesAsync(string day, string symbol, CancellationToken ct) =>
+            Task.FromResult(symbol == "TSLA" ? _days[day].Count : 0);
+        public Task<IReadOnlyList<string>> ReadLinesAsync(string day, string symbol, CancellationToken ct) =>
+            Task.FromResult(symbol == "TSLA" ? _days[day] : []);
         public Task DeleteDayAsync(string day, CancellationToken ct) => Task.CompletedTask;
     }
 

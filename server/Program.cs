@@ -32,6 +32,7 @@ builder.Services.AddSingleton<ILocalStore>(x => x.GetRequiredService<LocalStore>
 builder.Services.AddSingleton(_ => new HttpClient { BaseAddress = new Uri("https://openapi.tossinvest.com/"), Timeout = TimeSpan.FromSeconds(12) });
 builder.Services.AddSingleton<TossClient>(); builder.Services.AddSingleton<TossMarketDataGateway>(); builder.Services.AddSingleton<IMarketDataGateway>(x => x.GetRequiredService<TossMarketDataGateway>());
 builder.Services.AddSingleton<IOrderBookGateway>(x => x.GetRequiredService<TossMarketDataGateway>());
+builder.Services.AddSingleton<IMarketCredentialProbe>(x => x.GetRequiredService<TossClient>());
 builder.Services.AddSingleton<IMonitorDiagnostics, MonitorDiagnostics>();
 builder.Services.AddSingleton<TickFlowTape>(); builder.Services.AddSingleton<TradeTapeFallbackService>();
 builder.Services.AddSingleton<TossStreamService>(); builder.Services.AddSingleton<IRealtimeMarketStream>(x => x.GetRequiredService<TossStreamService>());
@@ -113,6 +114,10 @@ builder.Services.AddSingleton<NewsTranslationQueue>();
 builder.Services.AddSingleton<NewsStorageMigrationService>();
 builder.Services.AddSingleton<NewsFeedService>(); builder.Services.AddSingleton<NewsQueryService>();
 builder.Services.AddHostedService(x => x.GetRequiredService<MonitorService>());
+// 이슈 #324: Monitor:AutoStart 기본 false. true면 기동 완료 후 /api/start와 같은 경로를 1회 호출한다(재시도 없음).
+builder.Services.AddSingleton(_ => { var monitor = new MonitorOptions(); builder.Configuration.GetSection("Monitor").Bind(monitor); return monitor; });
+builder.Services.AddSingleton<MonitorAutoStartService>();
+builder.Services.AddHostedService<MonitorAutoStartLifetime>();
 builder.Services.AddHostedService<NewsService>();
 builder.Services.AddHostedService<NewsTranslationService>();
 builder.Services.AddHostedService<NewsRelevanceAdjudicationService>();

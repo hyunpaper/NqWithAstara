@@ -6,7 +6,9 @@ public sealed record MonitorRuntimeSnapshot(
     string ConnectionStatus,
     string ConnectionMessage,
     MarketSession Market,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    DateTimeOffset? StartedAt = null,
+    string? StartedBy = null);
 
 /// <summary>Single synchronization boundary for lifecycle commands and poll-result commits.</summary>
 public sealed class MonitorRuntimeState
@@ -24,11 +26,12 @@ public sealed class MonitorRuntimeState
         return new Lease(_control);
     }
 
-    public long CommitStart()
+    public long CommitStart(string startedBy = "manual")
     {
         lock (_stateGate)
         {
-            _state = _state with { Running = true, Generation = _state.Generation + 1, ConnectionStatus = "connecting", ConnectionMessage = "Toss Open API 연결 중", UpdatedAt = DateTimeOffset.UtcNow };
+            var now = DateTimeOffset.UtcNow;
+            _state = _state with { Running = true, Generation = _state.Generation + 1, ConnectionStatus = "connecting", ConnectionMessage = "Toss Open API 연결 중", UpdatedAt = now, StartedAt = now, StartedBy = startedBy };
             return _state.Generation;
         }
     }
@@ -37,7 +40,7 @@ public sealed class MonitorRuntimeState
     {
         lock (_stateGate)
         {
-            _state = _state with { Running = false, Generation = _state.Generation + 1, ConnectionStatus = "idle", ConnectionMessage = "모니터링 중지됨", UpdatedAt = DateTimeOffset.UtcNow };
+            _state = _state with { Running = false, Generation = _state.Generation + 1, ConnectionStatus = "idle", ConnectionMessage = "모니터링 중지됨", UpdatedAt = DateTimeOffset.UtcNow, StartedAt = null, StartedBy = null };
             return _state.Generation;
         }
     }
