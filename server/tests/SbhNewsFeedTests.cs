@@ -31,7 +31,7 @@ public sealed class SbhNewsFeedTests
             <rss><channel>
               <item><guid>market</guid><title>Iran missile strike disrupts oil supply</title></item>
               <item><guid>sports</guid><title>United striker scores goal in football match</title></item>
-              <item><guid>review</guid><title>Market reaction remains unclear</title></item>
+              <item><guid>review</guid><title>Fed official gives a general interview</title></item>
             </channel></rss>
             """);
 
@@ -174,7 +174,7 @@ public sealed class SbhNewsFeedTests
         var relevance = Assert.Single(batch.Items).Relevance!;
         Assert.Equal(NewsRelevanceDecisions.Include, relevance.Decision);
         Assert.Equal("DELL", Assert.Single(relevance.Targets).Id);
-        Assert.Equal("sbh-relevance-v2+" + context.Version, relevance.PolicyVersion);
+        Assert.Equal("sbh-relevance-v3+" + context.Version, relevance.PolicyVersion);
         Assert.Equal(relevance.PolicyVersion, Assert.Single(batch.Providers).FilterPolicyVersion);
     }
 
@@ -189,7 +189,9 @@ public sealed class SbhNewsFeedTests
         var batch = await feed.FetchAsync(1, CancellationToken.None);
 
         Assert.Equal("ok", batch.Status);
-        Assert.Equal(NewsRelevanceDecisions.Review, Assert.Single(batch.Items).Relevance!.Decision);
+        var relevance = Assert.Single(batch.Items).Relevance!;
+        Assert.Equal(NewsRelevanceDecisions.Exclude, relevance.Decision);
+        Assert.Equal("action_without_target", relevance.Reason);
     }
 
     sealed class StaticContextSource(NewsRelevanceContext context) : INewsRelevanceContextSource
