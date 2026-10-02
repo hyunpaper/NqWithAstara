@@ -77,13 +77,14 @@ public sealed class SimulationSummaryCumulativeTests : IDisposable
     }
 
     static string Observation(string symbol, DateTimeOffset observedAt, string policyHash, string state, string eventId,
-        string[]? rejectionCodes = null, string[]? blockersForReady = null, string bar = "2026-10-02T14:29:00+00:00") =>
+        string[]? rejectionCodes = null, string[]? blockersForReady = null, string bar = "2026-10-02T14:29:00+00:00",
+        string kind = "BREAKOUT") =>
         JsonSerializer.Serialize(new
         {
             observationId = Guid.NewGuid().ToString("N"), symbol, observedAt, policyHash, lastCompletedBarStart = bar,
             candidates = eventId.Length == 0 ? Array.Empty<object>() : new object[]
             {
-                new { eventId, kind = "BREAKOUT", state, triggerBarStart = bar, rejectionCodes = rejectionCodes ?? [] }
+                new { eventId, kind, state, triggerBarStart = bar, rejectionCodes = rejectionCodes ?? [] }
             },
             quality = new { blockersForCandidate = Array.Empty<string>(), blockersForReady = blockersForReady ?? [] }
         }, Json);
@@ -134,6 +135,40 @@ public sealed class SimulationSummaryCumulativeTests : IDisposable
         Assert.Equal("REJECTED", rejected.State);
         Assert.Equal(["STALE_QUOTE", "V5_ENTRY_NET_R"], rejected.RejectionCodes);
         Assert.Equal("ENTERED", Assert.Single(report.RecentCandidates, x => x.EventId == "e1").State);
+    }
+
+    [Fact]
+    public async Task ShortCandidatesAreReportedSeparatelyWhenPolicyCannotEnterShort()
+    {
+        var store = new MemoryObservationStore();
+        var hash = StructurePolicy.Default.PolicyHash;
+        store.Files[StructureObservationWriter.FileName(Today)] =
+        [
+            Observation("AAA", Now.AddMinutes(-9), hash, "REJECTED", "long", ["NO_TARGET_STRUCTURE"]),
+            Observation("AAA", Now.AddMinutes(-8), hash, "REJECTED", "short", ["SHORT_BORROW_COST_MISSING", "NO_TARGET_STRUCTURE"],
+                kind: "PULLBACK_SHORT"),
+        ];
+
+        var report = await History(store).GetAsync(CancellationToken.None);
+
+        Assert.Equal(1, report.Today.Candidates);
+        Assert.Equal(1, report.Today.Rejected);
+        Assert.DoesNotContain(report.Today.TopReasons, x => x.Code == "SHORT_BORROW_COST_MISSING");
+        Assert.Equal(1, Assert.Single(report.Today.TopReasons, x => x.Code == "NO_TARGET_STRUCTURE").Count);
+        Assert.Equal(1, report.Today.NonEntrySideCandidates);
+        Assert.Equal(1, Assert.Single(report.Today.NonEntrySideTopReasons!, x => x.Code == "SHORT_BORROW_COST_MISSING").Count);
+        Assert.Contains(report.RecentCandidates, x => x.EventId == "short");
+    }
+
+    [Fact]
+    public void LegacyHistoryWindowDefaultsNewSideFieldsToEmptyValues()
+    {
+        var window = new EntryObservationHistoryWindow("오늘", Today, Today, 1, 1, 1, 1, 0, 0, 1, [], 0);
+        var json = JsonSerializer.SerializeToElement(window, Json);
+
+        Assert.Equal(0, json.GetProperty("nonEntrySideCandidates").GetInt32());
+        Assert.Equal(JsonValueKind.Array, json.GetProperty("nonEntrySideTopReasons").ValueKind);
+        Assert.Empty(json.GetProperty("nonEntrySideTopReasons").EnumerateArray());
     }
 
     [Fact]
