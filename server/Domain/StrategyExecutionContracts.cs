@@ -1,3 +1,5 @@
+using Astra.Server.Domain.Structure;
+
 namespace Astra.Server;
 
 /// <summary>구조 엔진이 판단한 거래 방향. 기존 저장 행은 기본값 Long으로 읽어 하위 호환한다.</summary>
@@ -22,15 +24,19 @@ public sealed record PendingEntry(
     double PlannedTarget,
     double? PlannedEntry,
     string PlanId,
-    string PlanPolicyHash);
+    string PlanPolicyHash,
+    string? SetupKind = null,
+    double? ConfirmationBoundary = null,
+    string? ConfirmationPolicyVersion = null);
 
 public enum PendingEntryDecision
 {
-    Confirmed,
-    Expired,
-    RejectedGap,
-    RejectedUnobservedFill,
-    RejectedInvalidPlan
+    Confirmed = 0,
+    Expired = 1,
+    RejectedGap = 2,
+    RejectedUnobservedFill = 3,
+    RejectedInvalidPlan = 4,
+    RejectedThesisInvalidated = 5
 }
 
 /// <summary>확인봉 OHLC에서 실제로 관측한 진입 결과. 결정 시각 이후 데이터만 담는다.</summary>
@@ -45,6 +51,20 @@ public sealed record EntryConfirmation(
 
 public static class PendingEntryPolicy
 {
+    public static PendingEntry Create(string entryEventId, string symbol, DateTimeOffset signalBarStart,
+        DateTimeOffset confirmationBarStart, DateTimeOffset expiresAt, StructuralTradePlan plan,
+        string confirmationPolicyVersion)
+    {
+        var boundary = string.Equals(plan.Kind, "BREAKOUT", StringComparison.Ordinal)
+            ? (double)(plan.Side == TradeSide.Long
+                ? plan.InvalidationZoneSnapshot.Upper
+                : plan.InvalidationZoneSnapshot.Lower)
+            : (double?)null;
+        return new PendingEntry(entryEventId, symbol, plan.Side, signalBarStart, confirmationBarStart, expiresAt,
+            (double)plan.Stop, (double)plan.Target, (double)plan.EntryReference, plan.PlanId, plan.PolicyHash,
+            plan.Kind, boundary, confirmationPolicyVersion);
+    }
+
     /// <summary>확인봉의 OHLC만 사용한다. 신호봉의 종가나 이후 봉을 체결가로 재사용하지 않는다.</summary>
     public static EntryConfirmation Confirm(PendingEntry pending, Candle confirmationBar, DateTimeOffset observedAt,
         double? observedFill, string priceSource = "CONFIRMATION_BAR", TimeSpan? barDuration = null)
@@ -61,6 +81,10 @@ public static class PendingEntryPolicy
             return new(pending, PendingEntryDecision.RejectedUnobservedFill, observedAt, null, null, priceSource, "UNOBSERVED");
         if (fill < confirmationBar.Low || fill > confirmationBar.High)
             return new(pending, PendingEntryDecision.RejectedUnobservedFill, observedAt, null, null, priceSource, "UNOBSERVED");
+        if (UsesBreakoutBoundaryConfirmation(pending) && pending.ConfirmationBoundary is { } boundary &&
+            (pending.Side == TradeSide.Long ? confirmationBar.Close <= boundary : confirmationBar.Close >= boundary))
+            return new(pending, PendingEntryDecision.RejectedThesisInvalidated, observedAt, null, null,
+                priceSource, "OBSERVED");
         var valid = pending.Side == TradeSide.Long
             ? pending.PlannedStop < fill && pending.PlannedTarget > fill
             : pending.PlannedTarget < fill && pending.PlannedStop > fill;
@@ -68,6 +92,11 @@ public static class PendingEntryPolicy
             ? new(pending, PendingEntryDecision.Confirmed, observedAt, fill, null, priceSource, "OBSERVED")
             : new(pending, PendingEntryDecision.RejectedInvalidPlan, observedAt, null, null, priceSource, "OBSERVED");
     }
+
+    static bool UsesBreakoutBoundaryConfirmation(PendingEntry pending) =>
+        string.Equals(pending.SetupKind, "BREAKOUT", StringComparison.Ordinal) &&
+        string.Equals(pending.ConfirmationPolicyVersion, "hold-breakout-boundary.1", StringComparison.Ordinal) &&
+        pending.ConfirmationBoundary is { } boundary && double.IsFinite(boundary) && boundary > 0;
 }
 
 /// <summary>walk-forward 한 구간의 결과. 승률은 목표가 아니라 검증 지표다.</summary>

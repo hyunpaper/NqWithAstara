@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Astra.Server;
 using Astra.Server.Domain.Structure;
 using Xunit;
 
@@ -8,6 +9,49 @@ using Xunit;
 /// </summary>
 public sealed class StructureD2CandidateTests
 {
+    [Theory]
+    [InlineData(.75, 1.4, true)]
+    [InlineData(.74, 1.4, false)]
+    [InlineData(.75, 1.41, false)]
+    public void QualifiedTransitionPullbackUsesVolumeAndNetRBoundaries(double volume, double netR, bool expected)
+    {
+        var policy = StructurePolicy.Default with { AllowQualifiedTransitionPullback = true };
+        Assert.Equal(expected, SetupDetector.AllowsQualifiedTransitionPullback(volume, netR, policy));
+    }
+
+    [Theory]
+    [InlineData(25, TradeSide.Long, 1.4, true)]
+    [InlineData(24.99, TradeSide.Long, 1.4, false)]
+    [InlineData(-25, TradeSide.Short, 1.4, true)]
+    [InlineData(25, TradeSide.Short, 1.4, false)]
+    [InlineData(25, TradeSide.Long, 1.41, false)]
+    public void TrendAlignedTransitionPullbackUsesDirectionalTrendAndNetRBoundaries(
+        double trend, TradeSide side, double netR, bool expected)
+    {
+        var policy = StructurePolicy.Default with { AllowTrendAlignedTransitionPullback = true };
+        Assert.Equal(expected, SetupDetector.AllowsTrendAlignedTransitionPullback(trend, side, netR, policy));
+    }
+
+    [Theory]
+    [InlineData(.9, 1.65, true)]
+    [InlineData(.89, 1.65, false)]
+    [InlineData(.9, 1.66, false)]
+    public void QualifiedTransitionBreakoutUsesVolumeAndNetRBoundaries(double volume, double netR, bool expected)
+    {
+        var policy = StructurePolicy.Default with { AllowQualifiedTransitionBreakout = true };
+        Assert.Equal(expected, SetupDetector.AllowsQualifiedTransitionBreakout(volume, netR, policy));
+    }
+    [Fact]
+    public void HighVolatilityRangeGateIsExplicitAndDefaultDisabled()
+    {
+        var rangeHigh = new StrategyRegime(StrategyDirection.Range, VolatilityBand.High);
+        var trendHigh = new StrategyRegime(StrategyDirection.TrendUp, VolatilityBand.High);
+
+        Assert.False(SetupDetector.RejectsHighVolatilityRange(rangeHigh, StructurePolicy.Default));
+        var enabled = StructurePolicy.Default with { RejectHighVolatilityRangeEntries = true };
+        Assert.True(SetupDetector.RejectsHighVolatilityRange(rangeHigh, enabled));
+        Assert.False(SetupDetector.RejectsHighVolatilityRange(trendHigh, enabled));
+    }
     static readonly StructurePolicy P = StructurePolicy.Default;
     const int TriggerMinute = 30;
 
@@ -150,6 +194,11 @@ public sealed class StructureD2CandidateTests
             D2.Trend(TrendState.Transition, 10)), P);
         var transitionCandidate = Assert.Single(transition.Candidates.Where(x => x.Kind == SetupKind.Pullback));
         Assert.Contains(SetupDetector.CodeTransitionPullbackBlocked, transitionCandidate.RejectionCodes);
+
+        var enabled = SetupDetector.Detect(Request(PullbackBars(), PullbackZones(), PullbackEpisodes(),
+            D2.Trend(TrendState.Transition, 10)), P with { AllowTransitionPullback = true });
+        var enabledCandidate = Assert.Single(enabled.Candidates.Where(x => x.Kind == SetupKind.Pullback));
+        Assert.DoesNotContain(SetupDetector.CodeTransitionPullbackBlocked, enabledCandidate.RejectionCodes);
     }
 
     /// <summary>히스테리시스로 UP이 유지되는 efficiency 1봉 딥에서는 PULLBACK 가설이 그대로 생성된다(§7, #148).</summary>
@@ -449,9 +498,9 @@ public sealed class StructureD2CandidateTests
         var bars = BreakoutBars(101.00m, 101.10m);
 
         var invalidated = SetupDetector.Detect(Request(bars, zones, ImmutableArray<TouchEpisode>.Empty,
-            live: 100.95m), P).Candidates.Single();
+            live: 100.95m), D2.PreCycle45).Candidates.Single();
         var recovered = SetupDetector.Detect(Request(bars, zones, ImmutableArray<TouchEpisode>.Empty,
-            live: 101.20m, liquidity: D2.Quote(101.19m, 101.21m, TriggerMinute + 1)), P).Candidates.Single();
+            live: 101.20m, liquidity: D2.Quote(101.19m, 101.21m, TriggerMinute + 1)), D2.PreCycle45).Candidates.Single();
 
         Assert.Equal(invalidated.EventId, recovered.EventId);
         Assert.Equal(CandidateDisposition.Ready, recovered.Disposition);       // 계산만 보면 유효해 보인다
@@ -503,6 +552,317 @@ public sealed class StructureD2CandidateTests
         Assert.Contains("reclaimQuality", candidate.Quality.UsedComponents);
         // 추세 점수가 낮다는 이유만으로 거절되지 않는다.
         Assert.Empty(candidate.RejectionCodes);
+    }
+
+    [Fact]
+    public void ReboundLongAboveVwapIsRejectedByTheSharedCandidatePolicy()
+    {
+        var trend = D2.Trend(TrendState.Range, -20) with { Vwap = 99.70, Atr1m = .20 };
+
+        var result = SetupDetector.Detect(Request(PullbackBars(), PullbackZones(), PullbackEpisodes(), trend), P);
+        var candidate = result.Candidates.Single(x => x.Kind == SetupKind.Rebound);
+
+        Assert.Equal(.5, candidate.Evidence!.VwapDistanceAtr!.Value, 10);
+        Assert.Equal(CandidateDisposition.Rejected, candidate.Disposition);
+        Assert.Contains(SetupDetector.CodeReboundLongAboveVwap, candidate.RejectionCodes);
+        Assert.Null(candidate.Plan);
+        Assert.Null(result.PreferredCandidateId);
+    }
+
+    [Theory]
+    [InlineData(99.80, 0)]
+    [InlineData(100.00, -1)]
+    public void ReboundLongAtOrBelowVwapKeepsTheExistingReadyPath(double vwap, double expectedDistance)
+    {
+        var trend = D2.Trend(TrendState.Range, -20) with { Vwap = vwap, Atr1m = .20 };
+
+        var candidate = SetupDetector.Detect(
+            Request(PullbackBars(), PullbackZones(), PullbackEpisodes(), trend), P)
+            .Candidates.Single(x => x.Kind == SetupKind.Rebound);
+
+        Assert.Equal(expectedDistance, candidate.Evidence!.VwapDistanceAtr!.Value, 10);
+        Assert.Equal(CandidateDisposition.Ready, candidate.Disposition);
+        Assert.DoesNotContain(SetupDetector.CodeReboundLongAboveVwap, candidate.RejectionCodes);
+    }
+
+    [Fact]
+    public void ReboundLongWithMissingVwapKeepsTheExistingReadyPath()
+    {
+        var trend = D2.Trend(TrendState.Range, -20) with { Vwap = null };
+
+        var candidate = SetupDetector.Detect(
+            Request(PullbackBars(), PullbackZones(), PullbackEpisodes(), trend), P)
+            .Candidates.Single(x => x.Kind == SetupKind.Rebound);
+
+        Assert.Null(candidate.Evidence!.VwapDistanceAtr);
+        Assert.Equal(CandidateDisposition.Ready, candidate.Disposition);
+        Assert.DoesNotContain(SetupDetector.CodeReboundLongAboveVwap, candidate.RejectionCodes);
+    }
+
+    [Theory]
+    [InlineData(SetupKind.Breakout)]
+    [InlineData(SetupKind.Pullback)]
+    public void AboveVwapPolicyDoesNotRejectOtherSetupKinds(SetupKind kind)
+    {
+        Assert.False(SetupDetector.RejectsReboundLongAboveVwap(kind, TradeSide.Long, .01));
+    }
+
+    [Fact]
+    public void AboveVwapPolicyDoesNotRejectShortRebounds()
+    {
+        Assert.False(SetupDetector.RejectsReboundLongAboveVwap(SetupKind.Rebound, TradeSide.Short, .01));
+    }
+
+    [Fact]
+    public void PullbackNearVwapGateIsEnabledByDefault()
+    {
+        Assert.True(SetupDetector.RejectsPullbackTooFarFromVwap(
+            SetupKind.Pullback, TradeSide.Long, 2.11, P));
+        Assert.False(SetupDetector.RejectsPullbackTooFarFromVwap(
+            SetupKind.Pullback, TradeSide.Long, 2.11, D2.PreCycle45));
+    }
+
+    [Theory]
+    [InlineData(2.1, false)]
+    [InlineData(2.11, true)]
+    public void EnabledPullbackNearVwapGateUsesTheFrozenAtrBoundary(double distance, bool expected)
+    {
+        var policy = P with { RequirePullbackNearVwap = true };
+
+        Assert.Equal(expected, SetupDetector.RejectsPullbackTooFarFromVwap(
+            SetupKind.Pullback, TradeSide.Long, distance, policy));
+    }
+
+    [Fact]
+    public void EnabledPullbackNearVwapGateRejectsTheSharedCandidatePath()
+    {
+        var trend = D2.Trend(TrendState.Up, 40) with { Vwap = 99.30, Atr1m = .20 };
+        var policy = P with { RequirePullbackNearVwap = true };
+
+        var candidate = SetupDetector.Detect(
+            Request(PullbackBars(), PullbackZones(), PullbackEpisodes(), trend), policy)
+            .Candidates.Single(x => x.Kind == SetupKind.Pullback);
+
+        Assert.Equal(2.5, candidate.Evidence!.VwapDistanceAtr!.Value, 10);
+        Assert.Equal(CandidateDisposition.Rejected, candidate.Disposition);
+        Assert.Contains(SetupDetector.CodePullbackTooFarFromVwap, candidate.RejectionCodes);
+        Assert.Null(candidate.Plan);
+    }
+
+    [Fact]
+    public void PullbackNearVwapGateDoesNotRejectMissingContextOrOtherSidesAndKinds()
+    {
+        var policy = P with { RequirePullbackNearVwap = true };
+
+        Assert.False(SetupDetector.RejectsPullbackTooFarFromVwap(
+            SetupKind.Pullback, TradeSide.Long, null, policy));
+        Assert.False(SetupDetector.RejectsPullbackTooFarFromVwap(
+            SetupKind.Pullback, TradeSide.Short, 3, policy));
+        Assert.False(SetupDetector.RejectsPullbackTooFarFromVwap(
+            SetupKind.Breakout, TradeSide.Long, 3, policy));
+    }
+
+    [Fact]
+    public void BreakoutNearVwapGateIsEnabledByDefault()
+    {
+        Assert.True(SetupDetector.RejectsBreakoutTooFarFromVwap(
+            SetupKind.Breakout, TradeSide.Long, 5.1, P));
+        Assert.False(SetupDetector.RejectsBreakoutTooFarFromVwap(
+            SetupKind.Breakout, TradeSide.Long, 5.1, D2.PreCycle45));
+    }
+
+    [Theory]
+    [InlineData(5.0, false)]
+    [InlineData(5.01, true)]
+    public void EnabledBreakoutNearVwapGateUsesTheFrozenAtrBoundary(double distance, bool expected)
+    {
+        var policy = P with { RequireBreakoutNearVwap = true };
+
+        Assert.Equal(expected, SetupDetector.RejectsBreakoutTooFarFromVwap(
+            SetupKind.Breakout, TradeSide.Long, distance, policy));
+    }
+
+    [Fact]
+    public void EnabledBreakoutNearVwapGateRejectsTheSharedCandidatePath()
+    {
+        var trend = D2.Trend(TrendState.Up, 40) with { Vwap = 99.20, Atr1m = .20 };
+        var policy = P with { RequireBreakoutNearVwap = true };
+        var zones = ImmutableArray.Create(D2.Resistance(99.90m, 100.10m, id: "breakout-zone"),
+            D2.Resistance(101.80m, 102.10m, id: "target-zone"));
+
+        var candidate = SetupDetector.Detect(
+            Request(BreakoutBars(100.10m, 100.30m), zones, ImmutableArray<TouchEpisode>.Empty, trend,
+                live: 100.30m, liquidity: D2.Quote(100.29m, 100.31m, TriggerMinute + 1)), policy)
+            .Candidates.Single(x => x.Kind == SetupKind.Breakout);
+
+        Assert.True(candidate.Evidence!.VwapDistanceAtr > 5);
+        Assert.Equal(CandidateDisposition.Rejected, candidate.Disposition);
+        Assert.Contains(SetupDetector.CodeBreakoutTooFarFromVwap, candidate.RejectionCodes);
+        Assert.Null(candidate.Plan);
+    }
+
+    [Fact]
+    public void BreakoutNearVwapGateDoesNotRejectMissingContextOrOtherSidesAndKinds()
+    {
+        var policy = P with { RequireBreakoutNearVwap = true };
+
+        Assert.False(SetupDetector.RejectsBreakoutTooFarFromVwap(
+            SetupKind.Breakout, TradeSide.Long, null, policy));
+        Assert.False(SetupDetector.RejectsBreakoutTooFarFromVwap(
+            SetupKind.Breakout, TradeSide.Short, 6, policy));
+        Assert.False(SetupDetector.RejectsBreakoutTooFarFromVwap(
+            SetupKind.Pullback, TradeSide.Long, 6, policy));
+    }
+
+    [Fact]
+    public void MinimumReboundEntryQualityGateIsEnabledByDefault()
+    {
+        Assert.True(SetupDetector.RejectsLowQualityRebound(SetupKind.Rebound, 49, P));
+        Assert.False(SetupDetector.RejectsLowQualityRebound(SetupKind.Rebound, 49, D2.PreCycle45));
+    }
+
+    [Theory]
+    [InlineData(50.0, false)]
+    [InlineData(49.99, true)]
+    public void EnabledMinimumReboundEntryQualityGateUsesTheFrozenBoundary(double quality, bool expected)
+    {
+        var policy = P with { RequireMinimumReboundEntryQuality = true };
+
+        Assert.Equal(expected, SetupDetector.RejectsLowQualityRebound(SetupKind.Rebound, quality, policy));
+    }
+
+    [Fact]
+    public void EnabledMinimumReboundEntryQualityGateRejectsTheSharedCandidatePath()
+    {
+        var policy = P with { RequireMinimumReboundEntryQuality = true, MinimumReboundEntryQuality = 100 };
+
+        var candidate = SetupDetector.Detect(
+            Request(PullbackBars(episodeLow: 99.10m), PullbackZones(), PullbackEpisodes(),
+                D2.Trend(TrendState.Range, -20)), policy)
+            .Candidates.Single(x => x.Kind == SetupKind.Rebound);
+
+        Assert.Equal(CandidateDisposition.Rejected, candidate.Disposition);
+        Assert.Contains(SetupDetector.CodeReboundEntryQualityTooLow, candidate.RejectionCodes);
+        Assert.Null(candidate.Plan);
+    }
+
+    [Fact]
+    public void MinimumReboundEntryQualityGateDoesNotRejectMissingQualityOrOtherKinds()
+    {
+        var policy = P with { RequireMinimumReboundEntryQuality = true };
+
+        Assert.False(SetupDetector.RejectsLowQualityRebound(SetupKind.Rebound, null, policy));
+        Assert.False(SetupDetector.RejectsLowQualityRebound(SetupKind.Pullback, 49, policy));
+        Assert.False(SetupDetector.RejectsLowQualityRebound(SetupKind.Breakout, 49, policy));
+    }
+
+    [Fact]
+    public void BreakoutAboveVwapGateIsEnabledByDefault()
+    {
+        Assert.True(SetupDetector.RejectsBreakoutBelowVwap(
+            SetupKind.Breakout, TradeSide.Long, -0.01, P));
+        Assert.False(SetupDetector.RejectsBreakoutBelowVwap(
+            SetupKind.Breakout, TradeSide.Long, -0.01, D2.PreCycle45));
+    }
+
+    [Theory]
+    [InlineData(0.0, false)]
+    [InlineData(-0.01, true)]
+    public void EnabledBreakoutAboveVwapGateUsesVwapAsTheBoundary(double distance, bool expected)
+    {
+        var policy = P with { RequireBreakoutAboveVwap = true };
+
+        Assert.Equal(expected, SetupDetector.RejectsBreakoutBelowVwap(
+            SetupKind.Breakout, TradeSide.Long, distance, policy));
+    }
+
+    [Fact]
+    public void EnabledBreakoutAboveVwapGateRejectsTheSharedCandidatePath()
+    {
+        var trend = D2.Trend(TrendState.Up, 40) with { Vwap = 100.50, Atr1m = .20 };
+        var policy = P with { RequireBreakoutAboveVwap = true };
+        var zones = ImmutableArray.Create(D2.Resistance(99.90m, 100.10m, id: "breakout-zone"),
+            D2.Resistance(101.80m, 102.10m, id: "target-zone"));
+
+        var candidate = SetupDetector.Detect(
+            Request(BreakoutBars(100.10m, 100.30m), zones, ImmutableArray<TouchEpisode>.Empty, trend,
+                live: 100.30m, liquidity: D2.Quote(100.29m, 100.31m, TriggerMinute + 1)), policy)
+            .Candidates.Single(x => x.Kind == SetupKind.Breakout);
+
+        Assert.Equal(-1, candidate.Evidence!.VwapDistanceAtr!.Value, 10);
+        Assert.Equal(CandidateDisposition.Rejected, candidate.Disposition);
+        Assert.Contains(SetupDetector.CodeBreakoutBelowVwap, candidate.RejectionCodes);
+        Assert.Null(candidate.Plan);
+    }
+
+    [Fact]
+    public void BreakoutAboveVwapGateDoesNotRejectMissingContextOrOtherSidesAndKinds()
+    {
+        var policy = P with { RequireBreakoutAboveVwap = true };
+
+        Assert.False(SetupDetector.RejectsBreakoutBelowVwap(
+            SetupKind.Breakout, TradeSide.Long, null, policy));
+        Assert.False(SetupDetector.RejectsBreakoutBelowVwap(
+            SetupKind.Breakout, TradeSide.Short, -1, policy));
+        Assert.False(SetupDetector.RejectsBreakoutBelowVwap(
+            SetupKind.Pullback, TradeSide.Long, -1, policy));
+    }
+
+    [Fact]
+    public void MaximumReboundNetRGateIsEnabledByDefault()
+    {
+        Assert.True(SetupDetector.RejectsReboundNetR(SetupKind.Rebound, 1.91, P));
+        Assert.False(SetupDetector.RejectsReboundNetR(SetupKind.Rebound, 1.91, D2.PreCycle45));
+    }
+
+    [Theory]
+    [InlineData(1.9, false)]
+    [InlineData(1.91, true)]
+    public void EnabledMaximumReboundNetRGateUsesTheFrozenBoundary(double netR, bool expected)
+    {
+        var policy = P with { RequireMaximumReboundNetR = true };
+
+        Assert.Equal(expected, SetupDetector.RejectsReboundNetR(SetupKind.Rebound, netR, policy));
+    }
+
+    [Fact]
+    public void EnabledMaximumReboundNetRGateRejectsTheSharedCandidatePath()
+    {
+        var policy = P with { RequireMaximumReboundNetR = true, MaximumReboundNetR = 1.0 };
+
+        var candidate = SetupDetector.Detect(
+            Request(PullbackBars(episodeLow: 99.10m), PullbackZones(), PullbackEpisodes(),
+                D2.Trend(TrendState.Range, -20)), policy)
+            .Candidates.Single(x => x.Kind == SetupKind.Rebound);
+
+        Assert.True(candidate.Evidence!.ExpectedNetR > 1);
+        Assert.Equal(CandidateDisposition.Rejected, candidate.Disposition);
+        Assert.Contains(SetupDetector.CodeReboundNetRTooHigh, candidate.RejectionCodes);
+        Assert.Null(candidate.Plan);
+    }
+
+    [Fact]
+    public void MaximumReboundNetRGateDoesNotRejectMissingNetROrOtherKinds()
+    {
+        var policy = P with { RequireMaximumReboundNetR = true };
+
+        Assert.False(SetupDetector.RejectsReboundNetR(SetupKind.Rebound, null, policy));
+        Assert.False(SetupDetector.RejectsReboundNetR(SetupKind.Pullback, 1.91, policy));
+        Assert.False(SetupDetector.RejectsReboundNetR(SetupKind.Breakout, 1.91, policy));
+    }
+
+    [Fact]
+    public void LiveAndReplayInputsShareTheSameReboundVwapDisposition()
+    {
+        var trend = D2.Trend(TrendState.Range, -20) with { Vwap = 99.70, Atr1m = .20 };
+        var request = Request(PullbackBars(), PullbackZones(), PullbackEpisodes(), trend);
+
+        var live = SetupDetector.Detect(request, P);
+        var replay = SetupDetector.Detect(request, P);
+
+        Assert.Equal(live.Candidates.Select(x => x.Fingerprint()), replay.Candidates.Select(x => x.Fingerprint()));
+        Assert.Equal(CandidateDisposition.Rejected,
+            replay.Candidates.Single(x => x.Kind == SetupKind.Rebound).Disposition);
     }
 
     [Fact]
@@ -722,6 +1082,61 @@ public sealed class StructureD2CandidateTests
     }
 
     [Fact]
+    public void Range롱_복수후보는_VWAP이하중_가장가까운_후보를_우선한다()
+    {
+        var below = WithContext(Candidate("PULLBACK", "zone-p", 60, 2m, "below"),
+            StrategyDirection.Range, TradeSide.Long, 0);
+        var farBelow = WithContext(Candidate("REBOUND", "zone-r", 60, 2m, "far"),
+            StrategyDirection.Range, TradeSide.Long, -.6);
+        var above = WithContext(Candidate("BREAKOUT", "zone-b", 60, 2m, "above"),
+            StrategyDirection.Range, TradeSide.Long, .01);
+
+        Assert.Equal(below.EventId, CandidateSelection.SelectPreferred([above, farBelow, below])!.EventId);
+    }
+
+    [Fact]
+    public void Range롱_VWAP거리동률은_기존_ordinal순서로_해소한다()
+    {
+        var breakout = WithContext(Candidate("BREAKOUT", "zone-b", 60, 2m, "same"),
+            StrategyDirection.Range, TradeSide.Long, -.2);
+        var pullback = WithContext(Candidate("PULLBACK", "zone-p", 60, 2m, "same"),
+            StrategyDirection.Range, TradeSide.Long, -.2);
+
+        Assert.Equal(breakout.EventId, CandidateSelection.SelectPreferred([pullback, breakout])!.EventId);
+        Assert.Equal(breakout.EventId, CandidateSelection.SelectPreferred([breakout, pullback])!.EventId);
+    }
+
+    [Fact]
+    public void VWAP_tieBreak비대상은_기존_ordinal선택을_보존한다()
+    {
+        var ordinal = WithContext(Candidate("BREAKOUT", "zone-b", 60, 2m, "ordinal"),
+            StrategyDirection.Range, TradeSide.Long, .5);
+        var favored = WithContext(Candidate("PULLBACK", "zone-p", 60, 2m, "favored"),
+            StrategyDirection.Range, TradeSide.Long, -.1);
+
+        Assert.Equal(ordinal.EventId, CandidateSelection.SelectPreferred([ordinal])!.EventId);
+        Assert.Equal(ordinal.EventId, CandidateSelection.SelectPreferred([ordinal, favored with { Evidence = null }])!.EventId);
+        Assert.Equal(ordinal.EventId, CandidateSelection.SelectPreferred([
+            ordinal with { Regime = new StrategyRegime(StrategyDirection.TrendUp, VolatilityBand.Normal) },
+            favored with { Regime = new StrategyRegime(StrategyDirection.TrendUp, VolatilityBand.Normal) }
+        ])!.EventId);
+        Assert.Equal(ordinal.EventId, CandidateSelection.SelectPreferred([
+            ordinal, favored with { Side = TradeSide.Short }
+        ])!.EventId);
+    }
+
+    [Fact]
+    public void Range롱_VWAP우선에서도_Ready가아닌_후보는_선택하지않는다()
+    {
+        var ready = WithContext(Candidate("PULLBACK", "zone-p", 60, 2m, "ready"),
+            StrategyDirection.Range, TradeSide.Long, .5);
+        var rejected = WithContext(Candidate("BREAKOUT", "zone-b", 60, 2m, "rejected"),
+            StrategyDirection.Range, TradeSide.Long, 0) with { Disposition = CandidateDisposition.Rejected };
+
+        Assert.Equal(ready.EventId, CandidateSelection.SelectPreferred([rejected, ready])!.EventId);
+    }
+
+    [Fact]
     public void OnlyOneCandidatePerDuplicateGuardKeySurvivesSelection()
     {
         // 같은 트리거가 여러 저항을 동시에 넘어도 이 키당 신규 거래 후보는 1개다(§8).
@@ -762,6 +1177,16 @@ public sealed class StructureD2CandidateTests
             Fx.At(TriggerMinute), Fx.At(TriggerMinute + 1), Fx.At(TriggerMinute), Fx.At(TriggerMinute + 1),
             Fx.At(TriggerMinute + 6), CandidateDisposition.Ready, 100m, 99.15m, quality, qualityResult, null,
             planning, ImmutableArray<string>.Empty, ImmutableArray<string>.Empty, false, false, null);
+    }
+
+    static EntryCandidate WithContext(EntryCandidate candidate, StrategyDirection direction, TradeSide side,
+        double? vwapDistance)
+    {
+        var regime = new StrategyRegime(direction, VolatilityBand.Normal);
+        var evidence = new EntryEvidence(candidate.TriggerBarStart, candidate.TriggerConfirmedAt, side, regime,
+            null, null, candidate.Planning.NetR, null, null, vwapDistance, null, TimeSpan.Zero,
+            true, true, [], []);
+        return candidate with { Side = side, Regime = regime, Evidence = evidence };
     }
 
     // ── D1 파이프라인과의 결합: 트리거 봉 격리와 예시 E ──

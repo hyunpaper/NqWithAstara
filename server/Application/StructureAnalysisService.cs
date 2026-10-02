@@ -123,7 +123,8 @@ public sealed class StructureAnalysisService(
     SymbolMetadataService? metadata = null,
     ConfluenceService? confluence = null,
     RejectedPlanResearchService? research = null,
-    StructuralPendingEntryService? pendingEntries = null)
+    StructuralPendingEntryService? pendingEntries = null,
+    IBenchmarkBarSource? benchmark = null)
 {
     public enum LivePendingDecision { Wait, Confirm, Missed }
     public sealed record LivePendingResolution(LivePendingDecision Decision, Candle? ConfirmationBar, string Reason);
@@ -549,7 +550,18 @@ public sealed class StructureAnalysisService(
                 var confirmation = stored.Confirmation ?? PendingEntryPolicy.Confirm(stored.Pending, bar!, now, bar!.Close,
                     "LIVE_CONFIRMATION_BAR_CLOSE");
                 if (confirmation.Decision != PendingEntryDecision.Confirmed)
+                {
+                    if (confirmation.Decision == PendingEntryDecision.RejectedThesisInvalidated)
+                        await pendingEntries.RemoveAsync(snapshot.Symbol);
                     return new ActiveEntryResult(candidates, false, "V5_PENDING_CONFIRMATION_REJECTED");
+                }
+                var benchmarkDecision = BenchmarkEntryGate.Evaluate(_policy, stored.Context.PlanSnapshot.Kind,
+                    stored.Pending.Side, benchmark?.Bars, stored.Pending.ConfirmationBarStart.AddMinutes(1));
+                if (!benchmarkDecision.Allowed)
+                {
+                    await pendingEntries.RemoveAsync(snapshot.Symbol);
+                    return new ActiveEntryResult(candidates, false, benchmarkDecision.Reason);
+                }
                 var claimed = await pendingEntries.ClaimAndPersistConfirmationAsync(snapshot.Symbol, confirmation, now);
                 if (claimed is null) return new ActiveEntryResult(candidates, false, "V5_PENDING_ALREADY_CLAIMED");
                 var pendingContext = claimed.Context;
@@ -557,7 +569,9 @@ public sealed class StructureAnalysisService(
                 var pendingResult = await tradeEntries.TryEnterAsync(new Domain.StructuralEntryRequest(snapshot.Symbol,
                     claimed.Pending.SignalBarStart, now, snapshot.SessionEnd, pendingContext,
                     completedBarStarts, snapshot.SessionStart, null, confirmation,
-                    RequireCompleteLiquidityCost: _policy.RequireCompleteLiquidityCost), ct);
+                    RequireCompleteLiquidityCost: _policy.RequireCompleteLiquidityCost,
+                    BenchmarkReturnPercent: BenchmarkEntryGate.SessionReturnPercent(benchmark?.Bars,
+                        stored.Pending.ConfirmationBarStart.AddMinutes(1))), ct);
                 if (pendingResult.Outcome is Domain.StructuralEntryOutcome.Entered or Domain.StructuralEntryOutcome.AlreadyEntered)
                 {
                     await pendingEntries.RemoveAsync(snapshot.Symbol);
@@ -609,14 +623,27 @@ public sealed class StructureAnalysisService(
                 var confirmation = PendingEntryPolicy.Confirm(stored.Pending, confirmationBar, now,
                     confirmationBar.Close, "LIVE_CONFIRMATION_BAR_CLOSE");
                 if (confirmation.Decision != PendingEntryDecision.Confirmed)
+                {
+                    if (confirmation.Decision == PendingEntryDecision.RejectedThesisInvalidated)
+                        await pendingEntries.RemoveAsync(snapshot.Symbol);
                     return Blocked(candidates, chosen, "V5_PENDING_CONFIRMATION_REJECTED");
+                }
+                var benchmarkDecision = BenchmarkEntryGate.Evaluate(_policy, stored.Context.PlanSnapshot.Kind,
+                    stored.Pending.Side, benchmark?.Bars, stored.Pending.ConfirmationBarStart.AddMinutes(1));
+                if (!benchmarkDecision.Allowed)
+                {
+                    await pendingEntries.RemoveAsync(snapshot.Symbol);
+                    return Blocked(candidates, chosen, benchmarkDecision.Reason);
+                }
                 var claimed = await pendingEntries.ClaimAndPersistConfirmationAsync(snapshot.Symbol, confirmation, now);
                 if (claimed is null) return Blocked(candidates, chosen, "V5_PENDING_ALREADY_CLAIMED");
                 confirmation = claimed.Confirmation!;
                 var confirmed = await tradeEntries.TryEnterAsync(new Domain.StructuralEntryRequest(snapshot.Symbol,
                     claimed.Pending.SignalBarStart, now, snapshot.SessionEnd, claimed.Context,
                     completedBarStarts, snapshot.SessionStart, null,
-                    confirmation, RequireCompleteLiquidityCost: _policy.RequireCompleteLiquidityCost), ct);
+                    confirmation, RequireCompleteLiquidityCost: _policy.RequireCompleteLiquidityCost,
+                    BenchmarkReturnPercent: BenchmarkEntryGate.SessionReturnPercent(benchmark?.Bars,
+                        stored.Pending.ConfirmationBarStart.AddMinutes(1))), ct);
                 if (confirmed.Outcome is Domain.StructuralEntryOutcome.Entered or Domain.StructuralEntryOutcome.AlreadyEntered)
                     await pendingEntries.RemoveAsync(snapshot.Symbol);
                 return confirmed.Outcome is Domain.StructuralEntryOutcome.Entered or Domain.StructuralEntryOutcome.AlreadyEntered
@@ -632,13 +659,12 @@ public sealed class StructureAnalysisService(
         // §10: 체결 시 FrozenPlan을 저장한다. 진입 이후 이 스냅샷은 다시 만들지 않는다.
         var context = Domain.StructuralSimulation.Freeze(chosen.Plan, chosen.EventId,
             (trend?.State ?? TrendState.Unknown).ToString().ToUpperInvariant(), trend?.SignedTrend,
-            chosen.EntryQuality, snapshot.AnalysisAsOf, snapshot.QuoteAt);
+            chosen.EntryQuality, snapshot.AnalysisAsOf, snapshot.QuoteAt, _policy);
         if (pendingEntries is not null)
         {
-            var pending = new PendingEntry(chosen.EventId, snapshot.Symbol, chosen.Side,
-                chosen.TriggerBarStart, chosen.TriggerBarStart.AddMinutes(1), chosen.ExpiresAt,
-                (double)chosen.Plan.Stop, (double)chosen.Plan.Target, (double)chosen.Plan.EntryReference,
-                chosen.Plan.PlanId, chosen.Plan.PolicyHash);
+            var pending = PendingEntryPolicy.Create(chosen.EventId, snapshot.Symbol, chosen.TriggerBarStart,
+                chosen.TriggerBarStart.AddMinutes(1), chosen.ExpiresAt, chosen.Plan,
+                _policy.BreakoutConfirmationGateVersion);
             await pendingEntries.QueueAsync(new StoredPendingStructuralEntry(pending, context, now));
             return Blocked(candidates, chosen, "V5_ENTRY_PENDING_CONFIRMATION");
         }
@@ -1170,3 +1196,5 @@ public static class StructureViewMapper
             quality.BlockersForCandidate.ToArray(), quality.BlockersForReady.ToArray());
     }
 }
+
+
