@@ -1,4 +1,5 @@
 using Astra.Server.Domain;
+using Astra.Server.Domain.Structure;
 
 namespace Astra.Server.Application;
 
@@ -8,16 +9,47 @@ public sealed record SimulationAnalysis(DateTimeOffset GeneratedAt, int ClosedCo
 public sealed record SimulationKindReport(string Kind, SimulationStats Stats);
 public sealed record SimulationVersionReport(string Version, string Label, SimulationStats Stats, SimulationAnalysis? Analysis, IEnumerable<SimulationKindReport> ByKind);
 /// <summary>이슈 #27: <paramref name="Structure"/>는 additive 필드다 — 기존 /api/sim 소비자의 필드 의미를 바꾸지 않는다.</summary>
-public sealed record SimulationReport(SimulationStats Summary, IEnumerable<SimulationKindReport> ByKind, SimulationAnalysis? Analysis, IEnumerable<SimulationVersionReport> ByVersion, IEnumerable<SimTrade> Trades, StructureCohortReport Structure, EntryObservabilityReport? EntryObservability = null);
+public sealed record SimulationReport(SimulationStats Summary, IEnumerable<SimulationKindReport> ByKind, SimulationAnalysis? Analysis, IEnumerable<SimulationVersionReport> ByVersion, IEnumerable<SimTrade> Trades, StructureCohortReport Structure, EntryObservabilityReport? EntryObservability = null,
+    SimulationPolicyReport? CurrentPolicy = null, EntryObservationHistoryReport? EntryObservationHistory = null);
+
+/// <summary>현재 StructurePolicy 해시 구간의 성과. 해시 없는 거래는 "정책 미상"으로 분리하고 섞지 않는다.</summary>
+public sealed record SimulationPolicyReport(string PolicyHash, SimulationStats Stats, int OtherPolicyCount, int UnknownPolicyCount, DateTimeOffset? FirstEnteredAt);
 
 public sealed record SimulationResetResult(int Removed, int Kept, string? Backup);
 
+public sealed record SimulationResetRequester(string? RemoteAddress, string? UserAgent);
+
+public sealed record SimulationResetAuditEntry(DateTimeOffset At, bool IncludeOpen, int Removed, int Kept, string? Backup,
+    string? RemoteAddress, string? UserAgent);
+
+/// <summary>리셋 감사 장부(append 전용). 쓰기 실패가 리셋 결과를 바꾸지 않는다.</summary>
+public interface ISimulationResetAuditLog
+{
+    Task AppendAsync(SimulationResetAuditEntry entry);
+}
+
 /// <summary>시뮬 거래 이력 초기화(#228). 삭제 전 백업이 성공해야만 원본을 바꾼다.</summary>
-public sealed class SimulationResetService(ILocalStore store, TimeProvider clock)
+public sealed class SimulationResetService(ILocalStore store, TimeProvider clock, ISimulationResetAuditLog? audit = null,
+    IMonitorDiagnostics? diagnostics = null)
 {
     public const string TradesFile = "simtrades.json";
 
-    public async Task<SimulationResetResult> ResetAsync(bool includeOpen)
+    public Task<SimulationResetResult> ResetAsync(bool includeOpen) => ResetAsync(includeOpen, null);
+
+    public async Task<SimulationResetResult> ResetAsync(bool includeOpen, SimulationResetRequester? requester)
+    {
+        var result = await RemoveAsync(includeOpen);
+        var entry = new SimulationResetAuditEntry(clock.GetUtcNow(), includeOpen, result.Removed, result.Kept, result.Backup,
+            requester?.RemoteAddress, requester?.UserAgent);
+        if (audit is not null)
+        {
+            try { await audit.AppendAsync(entry); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { diagnostics?.PollFailed("sim-reset-audit", ex); }
+        }
+        return result;
+    }
+
+    async Task<SimulationResetResult> RemoveAsync(bool includeOpen)
     {
         var current = await store.Read(TradesFile, new List<SimTrade>());
         var removable = current.Count(x => includeOpen || !IsOpen(x));
@@ -35,16 +67,26 @@ public sealed class SimulationResetService(ILocalStore store, TimeProvider clock
 }
 
 public sealed class SimulationReportQueryService(ILocalStore store, TimeProvider clock,
-    EntryObservabilityQueryService? entryObservability = null)
+    EntryObservabilityQueryService? entryObservability = null, StructurePolicy? policy = null,
+    EntryObservationHistoryQueryService? history = null)
 {
-    public async Task<SimulationReport> GetAsync()
+    public async Task<SimulationReport> GetAsync(CancellationToken ct = default)
     {
         var trades = await store.Read("simtrades.json", new List<SimTrade>());
         var versions = trades.GroupBy(VersionOf).OrderByDescending(g => g.Max(x => x.EnteredAt)).Select(g =>
             new SimulationVersionReport(g.Key, g.Key == "legacy" ? "Legacy / unknown" : g.Key, Stats(g), Analysis(g.ToArray()), g.GroupBy(x => x.Kind).Select(k => new SimulationKindReport(k.Key, Stats(k))).ToArray())).ToArray();
         var rootAnalysis = versions.Length <= 1 ? Analysis(trades) : null;
+        var historyReport = history is null ? null : await history.GetAsync(ct);
         return new(Stats(trades), trades.GroupBy(x => x.Kind).Select(g => new SimulationKindReport(g.Key, Stats(g))), rootAnalysis, versions, trades.OrderByDescending(x => x.EnteredAt).Take(200),
-            SimulationCohorts.Build(trades), entryObservability?.Get());
+            SimulationCohorts.Build(trades), entryObservability?.Get(), policy is null ? null : PolicySegment(trades, policy.PolicyHash), historyReport);
+    }
+
+    public static SimulationPolicyReport PolicySegment(IReadOnlyCollection<SimTrade> trades, string policyHash)
+    {
+        var current = trades.Where(x => string.Equals(x.Structure?.PlanSnapshot.PolicyHash, policyHash, StringComparison.Ordinal)).ToArray();
+        var unknown = trades.Count(x => string.IsNullOrEmpty(x.Structure?.PlanSnapshot.PolicyHash));
+        return new(policyHash, Stats(current), trades.Count - current.Length - unknown, unknown,
+            current.Length == 0 ? null : current.Min(x => x.EnteredAt));
     }
 
     static string VersionOf(SimTrade trade) => string.IsNullOrWhiteSpace(trade.Logic) ? "legacy" : trade.Logic.Trim();
