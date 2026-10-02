@@ -100,19 +100,11 @@ builder.Services.AddSingleton(_ => { var news = new NewsOptions(); builder.Confi
 builder.Services.AddSingleton<INewsStore, NewsStore>();
 builder.Services.AddSingleton<INewsRelevancePolicy, NewsRelevancePolicy>();
 builder.Services.AddSingleton<INewsRelevanceContextSource>(x => new WatchlistNewsRelevanceContextSource(x.GetRequiredService<ILocalStore>()));
-builder.Services.AddSingleton<INewsFeed>(x =>
-{
-    var options = x.GetRequiredService<NewsOptions>();
-    if (options.UseSbhNews) return new SbhNewsFeed(options, relevance: x.GetRequiredService<INewsRelevancePolicy>(),
-        context: x.GetRequiredService<INewsRelevanceContextSource>());
-    if (options.UseFoxNewsRss) return new FoxNewsRssFeed(options);
-    return options.UseSaveTicker ? new SaveTickerNewsFeed(options) : new MarketauxNewsFeed(options);
-});
+builder.Services.AddSingleton<INewsFeed>(x => new SbhNewsFeed(x.GetRequiredService<NewsOptions>(),
+    relevance: x.GetRequiredService<INewsRelevancePolicy>(), context: x.GetRequiredService<INewsRelevanceContextSource>()));
 builder.Services.AddSingleton<INewsClassifier>(x => new OllamaNewsClassifier(x.GetRequiredService<NewsOptions>()));
 builder.Services.AddSingleton<INewsRelevanceAdjudicator>(x => new OllamaNewsRelevanceAdjudicator(x.GetRequiredService<NewsOptions>()));
-builder.Services.AddSingleton<INewsTranslator>(x => new PapagoNewsTranslator(x.GetRequiredService<NewsOptions>()));
 builder.Services.AddSingleton<NewsRuntimeState>();
-builder.Services.AddSingleton<NewsTranslationQueue>();
 builder.Services.AddSingleton<NewsStorageMigrationService>();
 builder.Services.AddSingleton<NewsFeedService>(); builder.Services.AddSingleton<NewsQueryService>();
 builder.Services.AddHostedService(x => x.GetRequiredService<MonitorService>());
@@ -121,7 +113,6 @@ builder.Services.AddSingleton(_ => { var monitor = new MonitorOptions(); builder
 builder.Services.AddSingleton<MonitorAutoStartService>();
 builder.Services.AddHostedService<MonitorAutoStartLifetime>();
 builder.Services.AddHostedService<NewsService>();
-builder.Services.AddHostedService<NewsTranslationService>();
 builder.Services.AddHostedService<NewsRelevanceAdjudicationService>();
 // 이슈 #309: Score Core shadow 수집. ScoreCore:Enabled 기본 false이며 진입 판정에는 쓰지 않는다.
 builder.Services.AddSingleton(_ => { var scoreCore = new ScoreCoreOptions(); builder.Configuration.GetSection("ScoreCore").Bind(scoreCore); return scoreCore; });

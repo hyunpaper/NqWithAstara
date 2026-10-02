@@ -6,7 +6,7 @@ import { WatchList } from "./WatchRowContent";
 
 const score: NewsSymbolScore = {
   symbol: "AAPL", score: 3, count: 2, latestAt: "2026-09-21T00:00:00Z", evidence: [
-    { id: "opaque:e/1", title: "Evidence", titleKo: "근거 기사", sentiment: "positive", strength: 2, weight: 0.8, contribution: 2.4, createdAt: "2026-09-21T00:00:00Z" },
+    { id: "opaque:e/1", title: "근거 기사", sentiment: "positive", strength: 2, weight: 0.8, contribution: 2.4, createdAt: "2026-09-21T00:00:00Z" },
   ], remainingEvidenceCount: 1, remainingContribution: 0.6, remainingWeight: 0.2, snapshotId: "snap-1", asOf: "2026-09-21T00:00:00Z", totalWeight: 1,
 };
 

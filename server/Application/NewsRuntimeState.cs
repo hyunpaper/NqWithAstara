@@ -1,22 +1,15 @@
+using System.Text.Json.Serialization;
 using Astra.Server.Domain.News;
 
 namespace Astra.Server.Application;
 
-/// <summary>`News` 설정 섹션(#151 §7). Enabled 기본 false이며 false면 어떤 외부 호출도 하지 않는다.</summary>
+/// <summary>`News` 설정 섹션(#151 §7). Enabled 기본 false이며 false면 어떤 외부 호출도 하지 않는다. 피드는 SBHNews 하나다(#339).</summary>
 public sealed class NewsOptions
 {
     public bool Enabled { get; set; }
-    public string FeedUrl { get; set; } = "https://www.saveticker.com";
-    /// <summary>구형 SAVE 피드는 명시적으로 켠 경우에만 사용한다. 기본은 Marketaux/RSS 경로다.</summary>
-    public bool UseSaveTicker { get; set; }
-    public bool UseFoxNewsRss { get; set; }
-    public string FoxNewsRssUrl { get; set; } = "https://moxie.foxnews.com/google-publisher/latest.xml";
+    /// <summary>SBH 공개 데이터(정책금리) 연결 여부. 뉴스 피드 자체는 항상 SBHNews다(#339).</summary>
     public bool UseSbhNews { get; set; }
     public string SbhNewsRssUrl { get; set; } = "https://www.sbhnews.com/feed.xml";
-    public string MarketauxApiKey { get; set; } = "";
-    public string MarketauxUrl { get; set; } = "https://api.marketaux.com/v1/news/all";
-    public string GoogleNewsUrl { get; set; } = "https://news.google.com/rss/search?q=stock%20market%20OR%20semiconductor%20OR%20earnings&hl=en-US&gl=US&ceid=US:en";
-    public string YahooNewsUrl { get; set; } = "https://finance.yahoo.com/rss/2.0/headline?s=SOXL,SOXX,NVDA,AMD,INTC&region=US&lang=en-US";
     public int PollSeconds { get; set; } = 60;
     public string OllamaUrl { get; set; } = "http://localhost:11434";
     public string Model { get; set; } = "qwen2.5:7b-instruct";
@@ -33,17 +26,10 @@ public sealed class NewsOptions
     public int MaxClassificationsPerMinute { get; set; } = 12;
     public double HalfLifeMinutes { get; set; } = NewsSentimentDecay.DefaultHalfLifeMinutes;
     public string KeepAlive { get; set; } = "30m";
-    public string PapagoClientId { get; set; } = "";
-    public string PapagoClientSecret { get; set; } = "";
 
-    public int MarketauxPollMinutes { get; set; } = 15;
-    public int MarketauxDailyRequestLimit { get; set; } = 96;
     public int RssDailyRequestLimit { get; set; } = 1440;
     public int InboxRetentionHours { get; set; } = 168;
     public int InboxCapacity { get; set; } = 5000;
-    public int TranslationDailyCharacterBudget { get; set; } = 50000;
-    public int TranslationMaxRetries { get; set; } = 2;
-    public int TranslationRetryDelaySeconds { get; set; } = 5;
 
     /// <summary>목록 확장 상한. 신규가 한 페이지를 넘칠 때만 다음 페이지를 본다.</summary>
     public int MaxPages { get; set; } = 1;
@@ -56,7 +42,7 @@ public sealed class NewsOptions
 
     public int MaxQueue { get; set; } = 100;
 
-    /// <summary>재기동 시 번역·영향도 누락 기사에 대한 분류 재시도 상한.</summary>
+    /// <summary>재기동 시 영향도 누락·미분류 기사에 대한 분류 재시도 상한.</summary>
     public int ReclassifyUnclassifiedPerPoll { get; set; } = 3;
 
     /// <summary>일자 파일 상한(바이트). 넘으면 더 쓰지 않되 기존 기록은 지우지 않는다.</summary>
@@ -68,6 +54,7 @@ public sealed class NewsOptions
 /// <summary>
 /// 저장·조회 공용 기사 레코드(#151 §5). <see cref="ClassifiedFrom"/>은 사건 그룹 대표의 판정을
 /// 복사해 저장한 팔로워 기사에만 대표 기사 id로 채워진다(#171). 그룹이 없거나 자신이 대표면 null이다.
+/// <c>*Ko</c>·<c>*TranslationStatus</c>·<see cref="TranslationContentHash"/>는 구 번역 레코드 읽기 호환용이며 새 레코드에는 쓰지 않는다(#339).
 /// </summary>
 public sealed record NewsRecord(
     string Id,
@@ -87,27 +74,27 @@ public sealed record NewsRecord(
     string PromptVersion = "",
     string? ClassifiedFrom = null,
     IReadOnlyList<NewsEntity>? Entities = null,
-    string? TitleKo = null,
-    string? SourceKo = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TitleKo = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SourceKo = null,
     IReadOnlyDictionary<string, int>? ImpactScores = null,
     string Summary = "",
     string Content = "",
     string? Url = null,
     DateTimeOffset? CollectedAt = null,
     string EvidenceSource = "",
-    string TranslationStatus = "not_requested",
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TranslationStatus = null,
     string ClassificationText = "",
     string ClassificationSource = "",
     string? EvidenceArticleId = null,
-    string? SummaryKo = null,
-    string? ContentKo = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SummaryKo = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ContentKo = null,
     string PublishedAtStatus = "known",
-    string TitleTranslationStatus = "not_requested",
-    string SummaryTranslationStatus = "not_requested",
-    string ContentTranslationStatus = "not_requested",
-    string ClassificationTranslationStatus = "not_requested",
-    string? ClassificationTextKo = null,
-    string? TranslationContentHash = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TitleTranslationStatus = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SummaryTranslationStatus = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ContentTranslationStatus = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ClassificationTranslationStatus = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ClassificationTextKo = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TranslationContentHash = null,
     NewsRelevanceAssessment? Relevance = null);
 
 public sealed record NewsProviderRuntimeStatus(

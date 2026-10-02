@@ -259,28 +259,36 @@ public sealed class NewsQueryServiceTests
     }
 
     [Fact]
-    public void Fox_RSS_설정은_상태에_선택된_공급자를_노출한다()
+    public void health는_SBHNews_단일_피드를_노출하고_번역_큐_필드가_없다()
     {
-        var (query, _, options) = Build();
-        Assert.False(options.UseFoxNewsRss);
-        Assert.Equal("rss", Serialize(query.Health()).GetProperty("feed").GetString());
-        options.UseSaveTicker = true;
-        options.UseFoxNewsRss = true;
+        var (query, _, _) = Build();
 
         var health = Serialize(query.Health());
 
-        Assert.Equal(NewsFeedProviders.FoxNewsRss, health.GetProperty("feed").GetString());
+        Assert.Equal(NewsFeedProviders.SbhNews, health.GetProperty("feed").GetString());
+        Assert.False(health.TryGetProperty("translationQueue", out _));
     }
 
     [Fact]
-    public void SBHNews_설정은_다른_뉴스_공급자보다_우선한다()
+    public void 조회_응답은_번역_필드를_노출하지_않고_원문만_돌려준다()
     {
-        var (query, _, options) = Build();
-        options.UseSaveTicker = true;
-        options.UseFoxNewsRss = true;
-        options.UseSbhNews = true;
+        var (query, state, options) = Build();
+        state.Add(Record("1", NewsSentiments.Positive, 3, Now, "NVDA") with
+        {
+            TitleKo = "구 번역 제목", SourceKo = "구 출처", SummaryKo = "구 요약", ContentKo = "구 본문",
+            ClassificationTextKo = "구 분류", TranslationStatus = "translated"
+        }, options.RecentCapacity);
 
-        Assert.Equal(NewsFeedProviders.SbhNews, Serialize(query.Health()).GetProperty("feed").GetString());
+        var article = Serialize(query.Articles(null, null)).GetProperty("articles")[0];
+        var detail = Serialize(query.Detail("1", "NVDA")!);
+        var evidence = Serialize(query.Sentiment()).GetProperty("symbols")[0].GetProperty("evidence")[0];
+
+        Assert.Equal("제목 1", article.GetProperty("title").GetString());
+        Assert.Equal("제목 1", detail.GetProperty("title").GetString());
+        Assert.Equal("제목 1", evidence.GetProperty("title").GetString());
+        foreach (var element in new[] { article, detail, evidence })
+            foreach (var name in new[] { "titleKo", "sourceKo", "summaryKo", "contentKo", "classificationTextKo", "translationStatus", "contentTranslationStatus" })
+                Assert.False(element.TryGetProperty(name, out _), name);
     }
 
     static NewsRelevanceAssessment Decided(string decision, string reason = "test")
@@ -310,7 +318,7 @@ public sealed class NewsQueryServiceTests
     {
         var options = new NewsOptions { Enabled = true, HalfLifeMinutes = 30 };
         var state = new NewsRuntimeState();
-        var query = new NewsQueryService(options, state, new NewsClock(Now), null, new NewsRelevancePolicy());
+        var query = new NewsQueryService(options, state, new NewsClock(Now), new NewsRelevancePolicy());
         state.Add(Legacy("sweeney", "Jealous media attack Sydney Sweeney's sports ad while her $2B valuation proves she's the ultimate boss",
             "https://www.foxnews.com/outkick-sports/jealous-columnists-attack-sydney-sweeney-sports-ad", NewsSentiments.Positive, 3), options.RecentCapacity);
         state.Add(Legacy("fed", "Fed raises interest rates by a quarter point as inflation stays high",
@@ -339,7 +347,6 @@ public sealed class NewsHostContractTests(AstraHostFixture host) : IClassFixture
         Assert.NotNull(services.GetRequiredService<INewsClassifier>());
         Assert.NotNull(services.GetRequiredService<INewsStore>());
         Assert.NotNull(services.GetRequiredService<NewsRuntimeState>());
-        Assert.NotNull(services.GetRequiredService<NewsTranslationQueue>());
         Assert.NotNull(services.GetRequiredService<NewsFeedService>());
         Assert.NotNull(services.GetRequiredService<NewsQueryService>());
     }
@@ -348,7 +355,6 @@ public sealed class NewsHostContractTests(AstraHostFixture host) : IClassFixture
     public void NewsHostedServiceIsRegisteredAndDisabledByDefault()
     {
         Assert.Contains(host.Factory.Services.GetServices<IHostedService>(), s => s is NewsService);
-        Assert.Contains(host.Factory.Services.GetServices<IHostedService>(), s => s is NewsTranslationService);
         Assert.False(host.Factory.Services.GetRequiredService<NewsOptions>().Enabled);
     }
 
@@ -364,6 +370,8 @@ public sealed class NewsHostContractTests(AstraHostFixture host) : IClassFixture
         Assert.Equal("ok", news.GetProperty("ollama").GetString());
         Assert.Equal(JsonValueKind.Null, news.GetProperty("lastPollAt").ValueKind);
         Assert.Equal("v2d", news.GetProperty("promptVersion").GetString());
+        Assert.Equal(NewsFeedProviders.SbhNews, news.GetProperty("feed").GetString());
+        Assert.False(news.TryGetProperty("translationQueue", out _));
     }
 
     [Fact]

@@ -5,127 +5,6 @@ using Xunit;
 
 namespace Astra.Server.Tests;
 
-public sealed class NewsTranslationQueueTests
-{
-    static readonly DateTimeOffset Now = new(2026, 9, 22, 1, 0, 0, TimeSpan.Zero);
-
-    static NewsRecord Record(string id, string text = "English evidence")
-        => new(id, text, "한국어 출처", Now, [], [], ["AAPL"], NewsSentiments.Positive, 3,
-            "이유", "qwen", 10, Now, Summary: text, ClassificationText: text);
-
-    [Fact]
-    public async Task 동일내용_예약과_번역요청을_해시캐시로_한번만_처리한다()
-    {
-        var options = new NewsOptions
-        {
-            Enabled = true,
-            TranslationDailyCharacterBudget = 1000,
-            TranslationMaxRetries = 2,
-            TranslationRetryDelaySeconds = 0
-        };
-        var translator = new FakeNewsTranslator { TextRespond = text => "번역:" + text };
-        var store = new MemoryNewsStore();
-        var state = new NewsRuntimeState();
-        var diagnostics = new NewsDiagnostics();
-        var clock = new NewsClock(Now);
-        state.Add(Record("one"), options.RecentCapacity);
-        var queue = new NewsTranslationQueue(options, translator, store, state, diagnostics, clock);
-
-        queue.Enqueue(state.Find("one")!);
-        queue.Enqueue(state.Find("one")!);
-        Assert.Equal(1, queue.QueueDepth);
-        Assert.True(await queue.ProcessNextAsync());
-
-        Assert.Single(translator.TextCalls);
-        var translated = state.Find("one")!;
-        Assert.Equal("번역:English evidence", translated.TitleKo);
-        Assert.Equal(translated.TitleKo, translated.SummaryKo);
-        Assert.Equal(translated.TitleKo, translated.ClassificationTextKo);
-        Assert.Equal("translated", translated.TranslationStatus);
-        Assert.Equal("not_available", translated.ContentTranslationStatus);
-
-        var restartedState = new NewsRuntimeState();
-        restartedState.Add(Record("two"), options.RecentCapacity);
-        var restarted = new NewsTranslationQueue(options, translator, store, restartedState, diagnostics, clock);
-        restarted.Enqueue(restartedState.Find("two")!);
-        Assert.True(await restarted.ProcessNextAsync());
-        Assert.Single(translator.TextCalls);
-    }
-
-    [Fact]
-    public async Task 실패는_제한횟수만_재시도하고_성공결과를_저장한다()
-    {
-        var options = new NewsOptions
-        {
-            Enabled = true,
-            TranslationDailyCharacterBudget = 1000,
-            TranslationMaxRetries = 2,
-            TranslationRetryDelaySeconds = 0
-        };
-        var calls = 0;
-        var translator = new FakeNewsTranslator
-        {
-            TextRespond = text => ++calls == 1 ? null : "번역:" + text
-        };
-        var store = new MemoryNewsStore();
-        var state = new NewsRuntimeState();
-        var clock = new NewsClock(Now);
-        state.Add(Record("retry", "English"), options.RecentCapacity);
-        var queue = new NewsTranslationQueue(options, translator, store, state, new NewsDiagnostics(), clock);
-
-        queue.Enqueue(state.Find("retry")!);
-        Assert.True(await queue.ProcessNextAsync());
-
-        Assert.Equal(2, translator.TextCalls.Count);
-        Assert.Equal("translated", state.Find("retry")!.TitleTranslationStatus);
-    }
-
-    [Fact]
-    public async Task 문자예산을_넘으면_외부호출없이_quota_wait를_기록한다()
-    {
-        var options = new NewsOptions
-        {
-            Enabled = true,
-            TranslationDailyCharacterBudget = 2,
-            TranslationMaxRetries = 2,
-            TranslationRetryDelaySeconds = 0
-        };
-        var translator = new FakeNewsTranslator { TextRespond = text => "번역:" + text };
-        var store = new MemoryNewsStore();
-        var state = new NewsRuntimeState();
-        state.Add(Record("quota", "English"), options.RecentCapacity);
-        var queue = new NewsTranslationQueue(options, translator, store, state, new NewsDiagnostics(), new NewsClock(Now));
-
-        queue.Enqueue(state.Find("quota")!);
-        Assert.True(await queue.ProcessNextAsync());
-
-        Assert.Empty(translator.TextCalls);
-        Assert.Equal("quota_wait", state.Find("quota")!.TranslationStatus);
-    }
-
-    [Fact]
-    public async Task 자격증명이_나중에_설정되면_not_configured_기사를_다시_예약한다()
-    {
-        var options = new NewsOptions { Enabled = true, TranslationRetryDelaySeconds = 0 };
-        var store = new MemoryNewsStore();
-        var state = new NewsRuntimeState();
-        state.Add(Record("credentials", "English"), options.RecentCapacity);
-        var unavailable = new FakeNewsTranslator { IsConfigured = false };
-        var first = new NewsTranslationQueue(options, unavailable, store, state, new NewsDiagnostics(), new NewsClock(Now));
-        first.Enqueue(state.Find("credentials")!);
-        Assert.True(await first.ProcessNextAsync());
-        Assert.Equal("not_configured", state.Find("credentials")!.TranslationStatus);
-
-        var configured = new FakeNewsTranslator { TextRespond = text => "번역:" + text };
-        var second = new NewsTranslationQueue(options, configured, store, state, new NewsDiagnostics(), new NewsClock(Now));
-        second.Enqueue(state.Find("credentials")!);
-        Assert.True(await second.ProcessNextAsync());
-
-        Assert.Equal("translated", state.Find("credentials")!.TranslationStatus);
-        Assert.NotEmpty(configured.TextCalls);
-    }
-}
-
 public sealed class NewsEvidenceQueryTests
 {
     static readonly DateTimeOffset Now = new(2026, 9, 22, 2, 0, 0, TimeSpan.Zero);
@@ -147,7 +26,6 @@ public sealed class NewsEvidenceQueryTests
         var representative = Record("provider:root/1", NewsSentiments.Positive, 4, Now, ["AAPL"]) with
         {
             ClassificationText = "대표 실제 입력",
-            ClassificationTextKo = "대표 한국어 입력",
             ClassificationSource = "detail_body"
         };
         var followerId = "https://news.example/item/a/b?x=1";
@@ -165,7 +43,7 @@ public sealed class NewsEvidenceQueryTests
 
         Assert.Equal(followerId, detail.GetProperty("id").GetString());
         Assert.Equal("대표 실제 입력", detail.GetProperty("classificationText").GetString());
-        Assert.Equal("대표 한국어 입력", detail.GetProperty("classificationTextKo").GetString());
+        Assert.False(detail.TryGetProperty("classificationTextKo", out _));
         Assert.Equal(representative.Id, detail.GetProperty("evidenceArticleId").GetString());
         Assert.Equal("AAPL", detail.GetProperty("evidenceSymbol").GetString());
     }

@@ -7,9 +7,7 @@ export type NewsInputKind = "summary" | "body" | "headline";
 export type NewsArticle = {
   id: string;
   title: string;
-  titleKo?: string | null;
   source: string | null;
-  sourceKo?: string | null;
   createdAt: string | null;
   tickers: string[];
   matchedSymbols: string[];
@@ -26,17 +24,13 @@ export type NewsArticle = {
   url?: string | null;
   summary?: string | null;
   body?: string | null;
-  summaryKo?: string | null;
-  contentKo?: string | null;
   classificationText?: string | null;
-  classificationTextKo?: string | null;
   classificationSource?: string | null;
   publishedAtStatus?: string | null;
   evidence?: NewsEvidenceItem[];
   remainingEvidenceCount?: number | null;
   remainingContribution?: number | null;
   provenance?: string | null;
-  translationStatus?: string | null;
   collectedAt?: string | null;
   evidenceSource?: string | null;
   promptVersion?: string | null;
@@ -48,17 +42,11 @@ export type NewsArticle = {
   score?: number | null;
   totalWeight?: number | null;
   remainingWeight?: number | null;
-  titleTranslationStatus?: string | null;
-  summaryTranslationStatus?: string | null;
-  contentTranslationStatus?: string | null;
-  classificationTranslationStatus?: string | null;
 };
 export type NewsEvidenceItem = {
   id: string;
   title: string;
-  titleKo?: string | null;
   source?: string | null;
-  sourceKo?: string | null;
   sentiment: NewsSentimentLabel;
   strength: number | null;
   weight: number | null;
@@ -70,9 +58,7 @@ export type NewsEntity = { symbol: string; name: string; industry: string; senti
 export const articleFromEvidence = (evidence: NewsEvidenceItem): NewsArticle => ({
   id: evidence.id,
   title: evidence.title,
-  titleKo: evidence.titleKo,
   source: evidence.source ?? null,
-  sourceKo: evidence.sourceKo,
   createdAt: evidence.createdAt,
   tickers: [],
   matchedSymbols: [],
@@ -151,9 +137,7 @@ const normalizeEvidence = (raw: unknown): NewsEvidenceItem[] =>
     return [{
       id,
       title: str(e.title) ?? "(제목 없음)",
-      titleKo: str(e.titleKo),
       source: str(e.source),
-      sourceKo: str(e.sourceKo),
       sentiment: sentimentOf(e.sentiment),
       strength: num(e.strength),
       weight: num(e.weight),
@@ -171,9 +155,7 @@ export const normalizeArticle = (raw: unknown): NewsArticle | null => {
   return {
     id,
     title: str(r.title) ?? "(제목 없음)",
-    titleKo: str(r.titleKo),
     source: str(r.source),
-    sourceKo: str(r.sourceKo),
     createdAt: str(r.createdAt),
     tickers: strArray(r.tickers),
     matchedSymbols: strArray(r.matchedSymbols),
@@ -192,14 +174,10 @@ export const normalizeArticle = (raw: unknown): NewsArticle | null => {
     url: str(r.url) ?? str(r.link),
     summary: str(r.summary),
     body: str(r.body) ?? str(r.content),
-    summaryKo: str(r.summaryKo),
-    contentKo: str(r.contentKo),
     classificationText: str(r.classificationText),
-    classificationTextKo: str(r.classificationTextKo),
     classificationSource: str(r.classificationSource),
     publishedAtStatus: str(r.publishedAtStatus),
     provenance: str(r.provenance) ?? str(r.sourceType),
-    translationStatus: str(r.translationStatus),
     collectedAt: str(r.collectedAt),
     evidenceSource: str(r.evidenceSource),
     promptVersion: str(r.promptVersion),
@@ -211,10 +189,6 @@ export const normalizeArticle = (raw: unknown): NewsArticle | null => {
     score: num(r.score),
     totalWeight: num(r.totalWeight),
     remainingWeight: num(r.remainingWeight),
-    titleTranslationStatus: str(r.titleTranslationStatus),
-    summaryTranslationStatus: str(r.summaryTranslationStatus),
-    contentTranslationStatus: str(r.contentTranslationStatus),
-    classificationTranslationStatus: str(r.classificationTranslationStatus),
     evidence: normalizeEvidence(r.evidence),
     remainingEvidenceCount: num(r.remainingEvidenceCount),
     remainingContribution: num(r.remainingContribution),

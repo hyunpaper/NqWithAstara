@@ -1424,7 +1424,7 @@ export default function App() {
           />
         )}
         {selected && newsUiEnabled && <NewsPanel key={selected} symbol={selected} onSelectArticle={(article, trigger) => newsDetail.open(article, trigger, selected)} />}
-        {newsDetail.selected && <NewsDetailPanel article={newsDetail.detail ?? newsDetail.selected} state={newsDetail.state} translationState={newsDetail.translationState} onRetryTranslation={newsDetail.retryTranslation} onClose={newsDetail.close} />}
+        {newsDetail.selected && <NewsDetailPanel article={newsDetail.detail ?? newsDetail.selected} state={newsDetail.state} onClose={newsDetail.close} />}
         </div>
         <footer>
           본 화면의 시그널은 기술적 조건 충족 점수이며 수익 확률이나 투자 권유가

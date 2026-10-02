@@ -2,6 +2,7 @@ using Astra.Server.Domain.News;
 
 namespace Astra.Server.Application;
 
+/// <summary>피드 공급자 식별자. <see cref="FoxNewsRss"/>는 구 state·레코드 판별용으로만 남는다(#339).</summary>
 public static class NewsFeedProviders
 {
     public const string FoxNewsRss = "fox-news-rss";
@@ -73,17 +74,6 @@ public sealed record NewsClassificationRequest(string Title, string Body, IReadO
 public sealed record NewsClassificationResult(
     NewsClassification? Classification, string Model, long LatencyMs, bool Available, string PromptVersion = "");
 
-
-/// <summary>기사 제목·출처 번역 포트. 자격증명은 구현체 설정에서만 읽는다.</summary>
-public interface INewsTranslator
-{
-    bool IsConfigured => true;
-
-    Task<(string Title, string Source)?> TranslateAsync(string title, string source, CancellationToken ct);
-
-    /// <summary>본문/요약 번역. 기존 구현체와 호환되는 선택적 확장이다.</summary>
-    Task<string?> TranslateTextAsync(string text, CancellationToken ct) => Task.FromResult<string?>(null);
-}
 
 /// <summary>로컬 LLM 분류기 포트(#151 §3).</summary>
 public interface INewsClassifier
