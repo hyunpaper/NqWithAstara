@@ -20,9 +20,13 @@ public sealed class BarStoreService(IBarStore store, TimeProvider clock)
 {
     public const int RetentionDays = 30;
 
-    readonly ConcurrentDictionary<string, (string Day, DateTimeOffset LastAt)> _last = new(StringComparer.OrdinalIgnoreCase);
+    readonly ConcurrentDictionary<string, (string Day, DateTimeOffset LastAt, string Convention)> _last = new(StringComparer.OrdinalIgnoreCase);
+    readonly ConcurrentDictionary<string, string> _conventionConflicts = new(StringComparer.Ordinal);
     readonly SemaphoreSlim _cleanupGate = new(1, 1);
     DateOnly? _cleanedThrough;
+
+    /// <summary>현재 규약과 다른 봉이 이미 들어 있어 추가 저장을 거부한 `day/SYMBOL` 목록(#332).</summary>
+    public IReadOnlyCollection<string> ConventionConflicts => _conventionConflicts.Keys.Order(StringComparer.Ordinal).ToArray();
 
     public async Task SaveNewBarsAsync(string symbol, IReadOnlyList<Candle> bars, CancellationToken ct)
     {
@@ -31,14 +35,19 @@ public sealed class BarStoreService(IBarStore store, TimeProvider clock)
         foreach (var group in bars.GroupBy(b => MarketRules.TradingDate(b.Timestamp)).OrderBy(g => g.Key))
         {
             var day = group.Key.ToString("yyyy-MM-dd");
-            var last = await LastSavedAsync(symbol, day, ct);
+            var (last, convention) = await LastSavedAsync(symbol, day, ct);
+            if (!string.Equals(convention, BarTimeConvention.Current, StringComparison.Ordinal))
+            {
+                _conventionConflicts[$"{day}/{symbol.ToUpperInvariant()}"] = convention;
+                continue;
+            }
             foreach (var bar in group.OrderBy(b => b.Timestamp))
             {
                 if (bar.Timestamp <= last) continue;
-                await store.AppendAsync(day, symbol, ToLine(bar), ct);
+                await store.AppendAsync(day, symbol, StoredBarLine.Serialize(bar, BarTimeConvention.Current), ct);
                 last = bar.Timestamp;
             }
-            _last[symbol] = (day, last);
+            _last[symbol] = (day, last, convention);
         }
     }
 
@@ -53,16 +62,21 @@ public sealed class BarStoreService(IBarStore store, TimeProvider clock)
                 total += await store.CountLinesAsync(todayKey, symbol, ct);
         var benchmarkBars = symbols.Any(x => string.Equals(x, benchmarkSymbol, StringComparison.OrdinalIgnoreCase))
             ? await store.CountLinesAsync(todayKey, benchmarkSymbol, ct) : 0;
-        return new { days = days.Count, todayBars = total, benchmark = new { symbol = benchmarkSymbol, todayBars = benchmarkBars } };
+        return new
+        {
+            days = days.Count, todayBars = total, benchmark = new { symbol = benchmarkSymbol, todayBars = benchmarkBars },
+            barTimeConvention = BarTimeConvention.Current, conventionConflicts = ConventionConflicts
+        };
     }
 
-    async Task<DateTimeOffset> LastSavedAsync(string symbol, string day, CancellationToken ct)
+    async Task<(DateTimeOffset LastAt, string Convention)> LastSavedAsync(string symbol, string day, CancellationToken ct)
     {
-        if (_last.TryGetValue(symbol, out var cached) && cached.Day == day) return cached.LastAt;
+        if (_last.TryGetValue(symbol, out var cached) && cached.Day == day) return (cached.LastAt, cached.Convention);
         var line = await store.LastLineAsync(day, symbol, ct);
         var last = line is null ? DateTimeOffset.MinValue : ParseTimestamp(line);
-        _last[symbol] = (day, last);
-        return last;
+        var convention = line is null ? BarTimeConvention.Current : BarTimeConvention.Of(line);
+        _last[symbol] = (day, last, convention);
+        return (last, convention);
     }
 
     async Task CleanupIfNeededAsync(DateOnly today, CancellationToken ct)
@@ -80,16 +94,6 @@ public sealed class BarStoreService(IBarStore store, TimeProvider clock)
         }
         finally { _cleanupGate.Release(); }
     }
-
-    static string ToLine(Candle bar) => JsonSerializer.Serialize(new
-    {
-        t = bar.Timestamp.UtcDateTime,
-        o = bar.Open,
-        h = bar.High,
-        l = bar.Low,
-        c = bar.Close,
-        v = bar.Volume,
-    });
 
     static DateTimeOffset ParseTimestamp(string line) =>
         JsonDocument.Parse(line).RootElement.GetProperty("t").GetDateTimeOffset();

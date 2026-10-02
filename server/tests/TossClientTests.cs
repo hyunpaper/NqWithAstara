@@ -74,7 +74,7 @@ public sealed class TossClientTests : IDisposable
 
         Assert.True(result.ReachedRequestedStart);
         Assert.Equal(2, result.RawBarCount);
-        Assert.Equal(DateTimeOffset.Parse("2026-09-07T13:30:00Z"), result.OldestBar);
+        Assert.Equal(DateTimeOffset.Parse("2026-09-07T13:29:00Z"), result.OldestBar);
         Assert.Single(result.Bars);
         Assert.Null(result.StopReason);
         Assert.Equal(2, handler.Paths.Count(x => x == "/api/v1/candles"));
@@ -91,7 +91,7 @@ public sealed class TossClientTests : IDisposable
         await Client(handler).HistoricalCandles("TSLA", DateTimeOffset.Parse("2026-06-29T04:00:00Z"),
             DateTimeOffset.Parse("2026-09-27T04:00:00Z"), CancellationToken.None);
 
-        Assert.Contains("before=2026-09-27T04%3A00%3A00.0000000%2B00%3A00", query);
+        Assert.Contains("before=2026-09-27T04%3A01%3A00.0000000%2B00%3A00", query);
         Assert.Contains("count=200", query);
     }
 

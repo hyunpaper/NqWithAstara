@@ -33,7 +33,7 @@ public sealed class StructurePolicyTests
             StructurePolicy.Default with { ReactionWindowBars = 6 },
             StructurePolicy.Default with { MinimumNetR = 1.3 },
             StructurePolicy.Default with { RecencyTradingMinutes = 391 },
-            StructurePolicy.Default with { Version = "v5-structure.2" },
+            StructurePolicy.Default with { Version = "v5-structure.3" },
             StructurePolicy.Default with { ReboundLongVwapGateVersion = "reject-positive-distance.2" },
             StructurePolicy.Default with { BreakoutConfirmationGateVersion = "hold-breakout-boundary.2" },
             StructurePolicy.Default with { AllowTransitionPullback = true },
@@ -144,7 +144,7 @@ public sealed class StructurePolicyTests
         Assert.NotEqual(PolicyHashBeforeReboundLongVwapGate, policy.PolicyHash);
         Assert.NotEqual(policy.PolicyHash,
             (policy with { ReboundLongVwapGateVersion = "reject-positive-distance.2" }).PolicyHash);
-        Assert.Equal("v5-structure.1", policy.Version);
+        Assert.Equal("v5-structure.2", policy.Version);
     }
 
     [Fact]

@@ -160,7 +160,9 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
         foreach (var day in days)
         {
                 ct.ThrowIfCancellationRequested();
-                var bars = ConfluenceReplay.Parse(await store.ReadLinesAsync(day, symbol, ct))
+                var session = StoredBarLine.ParseSession(await store.ReadLinesAsync(day, symbol, ct));
+                if (session.Rejection is { } rejection) { coverage.Reject(day, rejection); continue; }
+                var bars = session.Bars
                     .Select(x => new Candle(x.Start, (double)x.Open, (double)x.High, (double)x.Low,
                         (double)x.Close, (double)x.Volume)).ToImmutableArray();
                 if (bars.Length == 0) continue;
@@ -486,6 +488,9 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
             _expected += expected;
             _actual += Math.Min(actual, expected);
         }
+
+        public void Reject(string day, string reason) =>
+            _limitations.Add($"{reason.Split(':', 2)[0]}@{day}");
 
         public ReplaySourceCoverage Build(string symbol)
         {

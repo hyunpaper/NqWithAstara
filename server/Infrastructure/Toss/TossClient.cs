@@ -67,7 +67,7 @@ public sealed class TossClient(HttpClient http) : Application.IMarketCredentialP
         {
             var path = $"api/v1/candles?symbol={Uri.EscapeDataString(symbol)}&interval=1m&count=200&adjusted=true" + (before is null ? "" : "&before=" + Uri.EscapeDataString(before));
             using var d = await GetChart(path, ct); var result = d.RootElement.GetProperty("result");
-            bars.AddRange(result.GetProperty("candles").EnumerateArray().Select(x => new Candle(x.GetProperty("timestamp").GetDateTimeOffset(), D(x, "openPrice"), D(x, "highPrice"), D(x, "lowPrice"), D(x, "closePrice"), D(x, "volume"))));
+            bars.AddRange(result.GetProperty("candles").EnumerateArray().Select(MinuteCandle));
             before = NextBefore(result); if (before is null) break;
         }
         return bars.DistinctBy(x => x.Timestamp).OrderBy(x => x.Timestamp).ToArray();
@@ -94,7 +94,7 @@ public sealed class TossClient(HttpClient http) : Application.IMarketCredentialP
         [EnumeratorCancellation] CancellationToken ct)
     {
         if (to <= from) throw new ArgumentException("과거 캔들 종료 시각은 시작 시각보다 늦어야 합니다.");
-        var before = string.IsNullOrWhiteSpace(resumeBefore) ? to.ToString("O") : resumeBefore;
+        var before = string.IsNullOrWhiteSpace(resumeBefore) ? TossBarTime.LabelOf(to).ToString("O") : resumeBefore;
         var seenCursors = visitedCursors.ToHashSet(StringComparer.Ordinal);
         var pageBudget = HistoricalCandlePageBudget(from, to);
         for (var page = completedPages; page < pageBudget; page++)
@@ -104,9 +104,7 @@ public sealed class TossClient(HttpClient http) : Application.IMarketCredentialP
             var path = $"api/v1/candles?symbol={Uri.EscapeDataString(symbol)}&interval=1m&count={CandlePageSize}&adjusted=true" +
                        "&before=" + Uri.EscapeDataString(before);
             using var d = await GetChart(path, ct); var result = d.RootElement.GetProperty("result");
-            var fetched = result.GetProperty("candles").EnumerateArray()
-                .Select(x => new Candle(x.GetProperty("timestamp").GetDateTimeOffset(), D(x, "openPrice"),
-                    D(x, "highPrice"), D(x, "lowPrice"), D(x, "closePrice"), D(x, "volume"))).ToArray();
+            var fetched = result.GetProperty("candles").EnumerateArray().Select(MinuteCandle).ToArray();
             var oldest = fetched.Length == 0 ? (DateTimeOffset?)null : fetched.Min(x => x.Timestamp);
             var reachedStart = oldest <= from;
             var nextBefore = NextBefore(result);
@@ -120,7 +118,8 @@ public sealed class TossClient(HttpClient http) : Application.IMarketCredentialP
                 stopReason = "Toss가 이전 페이지 커서를 순환해서 반환했습니다.";
             else if (page == pageBudget - 1)
                 stopReason = $"요청 기간 안전 페이지 상한({pageBudget})에 도달했습니다.";
-            yield return new(requestCursor, nextBefore, fetched, fetched.Length, reachedStart, oldest, stopReason);
+            yield return new(requestCursor, nextBefore, fetched, fetched.Length, reachedStart, oldest, stopReason,
+                BarTimeConvention.Current);
             if (reachedStart || nextBefore is null || stopReason is not null) yield break;
             before = nextBefore;
         }
@@ -148,6 +147,9 @@ public sealed class TossClient(HttpClient http) : Application.IMarketCredentialP
         finally { _chartRateGate.Release(); }
     }
     public async Task<IReadOnlyList<Candle>> DailyCandles(string symbol, CancellationToken ct) { using var d = await GetChart($"api/v1/candles?symbol={Uri.EscapeDataString(symbol)}&interval=1d&count=30&adjusted=true", ct); return d.RootElement.GetProperty("result").GetProperty("candles").EnumerateArray().Select(x => new Candle(x.GetProperty("timestamp").GetDateTimeOffset(), D(x, "openPrice"), D(x, "highPrice"), D(x, "lowPrice"), D(x, "closePrice"), D(x, "volume"))).DistinctBy(x => x.Timestamp).OrderBy(x => x.Timestamp).ToArray(); }
+    /// <summary>1분봉 전용 — Toss 종료 라벨을 시작 시각으로 정규화한다(#332). 일봉은 의미 미검증이라 그대로 둔다.</summary>
+    static Candle MinuteCandle(JsonElement x) => new(TossBarTime.StartOf(x.GetProperty("timestamp").GetDateTimeOffset()),
+        D(x, "openPrice"), D(x, "highPrice"), D(x, "lowPrice"), D(x, "closePrice"), D(x, "volume"));
     static string? NextBefore(JsonElement result)
     {
         if (!result.TryGetProperty("nextBefore", out var next) || next.ValueKind != JsonValueKind.String)

@@ -36,7 +36,7 @@ public sealed class StructureD2PlanTests
         Assert.Equal(.88, Math.Round(result.RiskPercent!.Value, 10));
         Assert.False(result.MissingLiquidity);
         Assert.Equal(P.PolicyHash, result.Plan.PolicyHash);
-        Assert.Equal("v5-structure.1", result.Plan.EngineVersion);
+        Assert.Equal("v5-structure.2", result.Plan.EngineVersion);
     }
 
     /// <summary>손익비가 먼저 정해진 뒤 목표가 만들어진 것이 아니다(§14 A 마지막 문장).</summary>
