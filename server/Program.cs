@@ -2,10 +2,12 @@ using Astra.Server;
 using Astra.Server.Api;
 using Astra.Server.Application;
 using Astra.Server.Application.Backtest;
+using Astra.Server.Application.Rates;
 using Astra.Server.Application.ScoreCore;
 using Astra.Server.Backtest;
 using Astra.Server.Domain.Confluence;
 using Astra.Server.Infrastructure;
+using Astra.Server.Infrastructure.Rates;
 using Astra.Server.Infrastructure.ScoreCore;
 
 // 이슈 #169: 측정 서브커맨드. 서버를 띄우지 않고 저장 봉만 재생해 가중치를 산출하고 종료한다.
@@ -121,6 +123,15 @@ builder.Services.AddSingleton<IScoreEvidenceSource, NewsScoreEvidenceSource>(); 
 builder.Services.AddSingleton<AsOfEvidenceAssembler>(); builder.Services.AddSingleton(x => new ScoreCoreSnapshotService(x.GetRequiredService<AsOfEvidenceAssembler>(), x.GetRequiredService<IScoreCoreSnapshotStore>()));
 builder.Services.AddSingleton<ScoreCoreShadowCaptureOrchestrator>(); builder.Services.AddSingleton<ScoreCoreTargetSelector>(); builder.Services.AddSingleton<ScoreCoreRuntimeState>(); builder.Services.AddSingleton<ScoreCoreQueryService>();
 builder.Services.AddHostedService<ScoreCoreShadowCaptureService>();
+// 이슈 #316: 실시간 미국채 금리(표시·기록용). Rates:Enabled 기본 false이며 매매 판정·진입 게이트에는 쓰지 않는다.
+builder.Services.AddSingleton(_ => { var rates = new RatesOptions(); builder.Configuration.GetSection("Rates").Bind(rates); return rates; });
+builder.Services.AddSingleton<RatesRuntimeState>();
+var ratesHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+builder.Services.AddSingleton<IIntradayRateSource>(x => new YahooChartRateSource(ratesHttp, x.GetRequiredService<RatesOptions>()));
+builder.Services.AddSingleton<IDailyRateSource>(x => new FredCsvRateSource(ratesHttp, x.GetRequiredService<RatesOptions>(), x.GetRequiredService<TimeProvider>()));
+builder.Services.AddSingleton<IRateObservationStore>(x => new JsonlRateObservationStore(Path.Combine(x.GetRequiredService<IWebHostEnvironment>().ContentRootPath, "App_Data", "rates")));
+builder.Services.AddSingleton<RatesCollector>();
+builder.Services.AddHostedService<RatesCollectorService>();
 var app = builder.Build();
 app.Services.GetRequiredService<TradingCostPolicyCheckService>();
 var clientRoot = Environment.GetEnvironmentVariable("ASTRA_CLIENT_ROOT") ?? Path.Combine(app.Environment.ContentRootPath, "..", "client"); var clientDist = Path.GetFullPath(Path.Combine(clientRoot, "dist"));

@@ -72,6 +72,8 @@ import { gaugeTone, scoreText2 } from "./confluenceFormat";
 import HistoricalReplayPanel from "./HistoricalReplayPanel";
 import MarketMoodPopover from "./MarketMoodPopover";
 import { normalizeMarketMood, type MarketMoodResponse } from "./marketMoodTypes";
+import TreasuryRatesStrip from "./TreasuryRatesStrip";
+import { normalizeRates, type RatesResponse } from "./ratesTypes";
 import { WatchList } from "./WatchRowContent";
 import type { WatchListItem } from "./WatchRowContent";
 import { WATCH_ORDER_URL, watchOrderRequest } from "./watchReorder";
@@ -474,6 +476,7 @@ export default function App() {
     [newsHealthEnabled, setNewsHealthEnabled] = useState<boolean | null>(null),
     [newsSentiment, setNewsSentiment] = useState<NewsSentimentResponse | null>(null),
     [marketMood, setMarketMood] = useState<MarketMoodResponse | null>(null),
+    [rates, setRates] = useState<RatesResponse | null>(null),
     // 이슈 #168/#181: 선택 종목은 ConfluencePanel의 기존 폴링 결과를, 나머지 행은
     // structureSummary 캐시 요약을 그대로 쓴다(추가 호출 없음, §4).
     [confluenceScore, setConfluenceScore] = useState<{ symbol: string; score: number | null } | null>(null),
@@ -545,6 +548,11 @@ export default function App() {
       /* 이전 값 유지 */
     }
   };
+  // 이슈 #316: 국채 금리는 서버가 60초 주기로 수집하므로 화면도 30초마다만 조회한다.
+  useVisiblePolling(async () => {
+    const next = normalizeRates(await api("/api/rates"));
+    if (next) setRates(next);
+  }, 30000);
   useEffect(() => {
     let active = true;
     let id: ReturnType<typeof setTimeout>;
@@ -970,6 +978,7 @@ export default function App() {
             </div>
           </div>
           <div className="header-actions">
+            {rates && <TreasuryRatesStrip rates={rates} />}
             {marketMood && <MarketMoodPopover mood={marketMood} />}
             <FeeWarningBadge warnings={state?.warnings} />
             <div className={`market ${state?.market.isOpen ? "open" : ""}`}>
