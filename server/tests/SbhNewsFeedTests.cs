@@ -158,4 +158,47 @@ public sealed class SbhNewsFeedTests
             return Task.FromResult(response);
         }
     }
+
+
+    [Fact]
+    public async Task 관심종목_context_source의_엔티티로_판정하고_합성버전을_보고한다()
+    {
+        var handler = new FixtureHandler(HttpStatusCode.OK, """
+            <rss><channel><item><guid>dell</guid><title>Dell signs supply contract with hyperscaler</title></item></channel></rss>
+            """);
+        var context = NewsRelevanceContext.Create([new NewsWatchSymbol("DELL", "Dell")]);
+        var feed = new SbhNewsFeed(new NewsOptions(), new HttpClient(handler), context: new StaticContextSource(context));
+
+        var batch = await feed.FetchAsync(1, CancellationToken.None);
+
+        var relevance = Assert.Single(batch.Items).Relevance!;
+        Assert.Equal(NewsRelevanceDecisions.Include, relevance.Decision);
+        Assert.Equal("DELL", Assert.Single(relevance.Targets).Id);
+        Assert.Equal("sbh-relevance-v2+" + context.Version, relevance.PolicyVersion);
+        Assert.Equal(relevance.PolicyVersion, Assert.Single(batch.Providers).FilterPolicyVersion);
+    }
+
+    [Fact]
+    public async Task context_source_실패는_빈_사전으로_판정을_계속한다()
+    {
+        var handler = new FixtureHandler(HttpStatusCode.OK, """
+            <rss><channel><item><guid>dell</guid><title>Dell signs supply contract with hyperscaler</title></item></channel></rss>
+            """);
+        var feed = new SbhNewsFeed(new NewsOptions(), new HttpClient(handler), context: new ThrowingContextSource());
+
+        var batch = await feed.FetchAsync(1, CancellationToken.None);
+
+        Assert.Equal("ok", batch.Status);
+        Assert.Equal(NewsRelevanceDecisions.Review, Assert.Single(batch.Items).Relevance!.Decision);
+    }
+
+    sealed class StaticContextSource(NewsRelevanceContext context) : INewsRelevanceContextSource
+    {
+        public Task<NewsRelevanceContext> GetAsync(CancellationToken ct) => Task.FromResult(context);
+    }
+
+    sealed class ThrowingContextSource : INewsRelevanceContextSource
+    {
+        public Task<NewsRelevanceContext> GetAsync(CancellationToken ct) => throw new IOException("watchlist");
+    }
 }
