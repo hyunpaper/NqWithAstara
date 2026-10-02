@@ -210,7 +210,7 @@ public static class StructuralPlanner
         if (stop is { } stopValue && stopValue > 0 && (longSide ? stopValue < entry : stopValue > entry))
         {
             riskPercent = (double)(Math.Abs(entry - stopValue) / entry) * 100;
-            if (riskPercent > policy.MaxRiskPercent) reasons.Add(RiskTooWide);
+            if (riskPercent > MaxRiskPercentFor(request.Kind, policy)) reasons.Add(RiskTooWide);
 
             // ── #43 최소 손절 거리 하한. §9.1 MaxRiskPercent 상한과 대칭인 하한이다 ──
             // netR(§9.3)은 비율만 보므로 손절폭이 0에 가까우면 netRisk가 비용에 수렴해 오히려 커진다.
@@ -257,7 +257,7 @@ public static class StructuralPlanner
             else
             {
                 netR = netReward.Value / netRisk.Value;
-                if (netReward > 0 && netR < (decimal)policy.MinimumNetR) reasons.Add(InsufficientRewardToRisk);
+                if (netReward > 0 && netR < (decimal)MinimumNetRFor(request.Kind, policy)) reasons.Add(InsufficientRewardToRisk);
                 if (netReward > 0 && netR > (decimal)policy.MaxNetR) reasons.Add(ExcessiveRewardToRisk);
             }
         }
@@ -283,6 +283,16 @@ public static class StructuralPlanner
             netReward, netRisk, netR, riskPercent, request.InvalidationZone, targetZone, spread, missingLiquidity,
             request.Atr1mAtPlan, warnings.ToImmutableArray());
     }
+
+    /// <summary>REBOUND 전용 상한이 있으면 그 값, 없으면 공통 <see cref="StructurePolicy.MaxRiskPercent"/>(§9.1, #245).</summary>
+    static double MaxRiskPercentFor(string kind, StructurePolicy policy) =>
+        kind == ReboundKind && policy.ReboundMaxRiskPercent is { } rebound ? rebound : policy.MaxRiskPercent;
+
+    /// <summary>REBOUND 전용 최소 netR이 있으면 그 값, 없으면 공통 <see cref="StructurePolicy.MinimumNetR"/>(§9.3, #245).</summary>
+    static double MinimumNetRFor(string kind, StructurePolicy policy) =>
+        kind == ReboundKind && policy.ReboundMinimumNetR is { } rebound ? rebound : policy.MinimumNetR;
+
+    const string ReboundKind = "REBOUND";
 
     /// <summary>
     /// §9.2: 진입가 위에 있고 평가 시점 이전에 확인된 자격 있는 저항 중 가장 가까운 것.
