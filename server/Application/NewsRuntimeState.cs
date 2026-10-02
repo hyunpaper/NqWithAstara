@@ -28,6 +28,8 @@ public sealed class NewsOptions
     public int SbhRelevanceAdjudicationMaxAttempts { get; set; } = 3;
     public int SbhRelevanceReviewTtlMinutes { get; set; } = 30;
     public int SbhRelevanceRetryBackoffSeconds { get; set; } = 60;
+    /// <summary>공급자 베이스라인(첫 fetch)에서도 이 창 안의 include 기사는 분류한다.</summary>
+    public int BaselineRecentHours { get; set; } = 2;
     public int MaxClassificationsPerMinute { get; set; } = 12;
     public double HalfLifeMinutes { get; set; } = NewsSentimentDecay.DefaultHalfLifeMinutes;
     public string KeepAlive { get; set; } = "30m";

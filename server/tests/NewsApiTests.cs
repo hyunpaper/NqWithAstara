@@ -139,7 +139,7 @@ public sealed class NewsQueryServiceTests
 
         var json = Serialize(query.Health());
 
-        Assert.Equal("v2c", json.GetProperty("promptVersion").GetString());
+        Assert.Equal("v2d", json.GetProperty("promptVersion").GetString());
     }
 
     [Fact]
@@ -282,6 +282,49 @@ public sealed class NewsQueryServiceTests
 
         Assert.Equal(NewsFeedProviders.SbhNews, Serialize(query.Health()).GetProperty("feed").GetString());
     }
+
+    static NewsRelevanceAssessment Decided(string decision, string reason = "test")
+        => new(NewsRelevancePolicy.CurrentVersion, decision, "test", "", "", [], "", reason);
+
+    static NewsRecord Legacy(string id, string title, string url, string sentiment, int strength)
+        => new(id, title, "Fox News", Now, [], [], ["MARKET"], sentiment, strength, "이유", "qwen", 12, Now, Url: url);
+
+    [Fact]
+    public void 관련성_exclude_기사는_목록과_감성점수에서_빠진다()
+    {
+        var (query, state, options) = Build();
+        state.Add(Record("in", NewsSentiments.Negative, 3, Now, "MARKET") with { Relevance = Decided(NewsRelevanceDecisions.Include) }, options.RecentCapacity);
+        state.Add(Record("out", NewsSentiments.Positive, 5, Now, "MARKET") with { Relevance = Decided(NewsRelevanceDecisions.Exclude, "non_market_section") }, options.RecentCapacity);
+        state.Add(Record("llm", NewsSentiments.Neutral, 0, Now, "MARKET") with { Relevance = Decided(NewsRelevanceDecisions.Exclude, "llm_irrelevant") }, options.RecentCapacity);
+
+        var articles = Serialize(query.Articles(null, null)).GetProperty("articles").EnumerateArray().Select(x => x.GetProperty("id").GetString()).ToArray();
+        var market = Serialize(query.Sentiment()).GetProperty("market");
+
+        Assert.Equal(["in"], articles);
+        Assert.Equal(1, market.GetProperty("count").GetInt32());
+        Assert.Equal(-3, market.GetProperty("score").GetDouble(), 3);
+    }
+
+    [Fact]
+    public void 판정이_없는_저장기사는_조회시점에_정책으로_걸러낸다()
+    {
+        var options = new NewsOptions { Enabled = true, HalfLifeMinutes = 30 };
+        var state = new NewsRuntimeState();
+        var query = new NewsQueryService(options, state, new NewsClock(Now), null, new NewsRelevancePolicy());
+        state.Add(Legacy("sweeney", "Jealous media attack Sydney Sweeney's sports ad while her $2B valuation proves she's the ultimate boss",
+            "https://www.foxnews.com/outkick-sports/jealous-columnists-attack-sydney-sweeney-sports-ad", NewsSentiments.Positive, 3), options.RecentCapacity);
+        state.Add(Legacy("fed", "Fed raises interest rates by a quarter point as inflation stays high",
+            "https://www.foxnews.com/politics/fed-raises-rates", NewsSentiments.Negative, 3), options.RecentCapacity);
+
+        var articles = Serialize(query.Articles(null, null)).GetProperty("articles").EnumerateArray().Select(x => x.GetProperty("id").GetString()).ToArray();
+        var market = Serialize(query.Sentiment()).GetProperty("market");
+
+        Assert.Equal(["fed"], articles);
+        Assert.Equal(1, market.GetProperty("count").GetInt32());
+        Assert.Equal(-3, market.GetProperty("score").GetDouble(), 3);
+        Assert.NotNull(query.Detail("sweeney"));
+    }
+
 }
 
 public sealed class NewsHostContractTests(AstraHostFixture host) : IClassFixture<AstraHostFixture>
@@ -320,7 +363,7 @@ public sealed class NewsHostContractTests(AstraHostFixture host) : IClassFixture
         Assert.Equal(0, news.GetProperty("queue").GetInt32());
         Assert.Equal("ok", news.GetProperty("ollama").GetString());
         Assert.Equal(JsonValueKind.Null, news.GetProperty("lastPollAt").ValueKind);
-        Assert.Equal("v2c", news.GetProperty("promptVersion").GetString());
+        Assert.Equal("v2d", news.GetProperty("promptVersion").GetString());
     }
 
     [Fact]

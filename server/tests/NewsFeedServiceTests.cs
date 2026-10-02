@@ -37,12 +37,18 @@ public sealed class NewsFeedServiceTests
         }
 
         public Harness(INewsTranslator? translator, INewsRelevanceAdjudicator? adjudicator, params WatchItem[] watchlist)
+            : this(translator, adjudicator, null, watchlist) { }
+
+        public Harness(INewsRelevancePolicy policy) : this(null, null, policy) { }
+
+        public Harness(INewsTranslator? translator, INewsRelevanceAdjudicator? adjudicator, INewsRelevancePolicy? policy,
+            params WatchItem[] watchlist)
         {
             Local = new NewsLocalStore(watchlist);
             TranslationQueue = translator is null ? null
                 : new NewsTranslationQueue(Options, translator, Store, State, Diagnostics, Clock);
             Service = new NewsFeedService(Options, Feed, Classifier, Store, Local, State, Diagnostics, Clock,
-                TranslationQueue, adjudicator);
+                TranslationQueue, adjudicator, policy);
         }
 
         public Task PollAsync() => Service.PollAsync(CancellationToken.None);
@@ -976,6 +982,7 @@ public sealed class NewsFeedServiceTests
     static NewsFeedItem Relevant(string id, string title, string decision)
         => Item(id, title) with
         {
+            CreatedAt = Start.AddHours(-3),
             Provider = NewsFeedProviders.SbhNews,
             Relevance = new NewsRelevanceAssessment(NewsRelevancePolicy.CurrentVersion, decision, "test", "actor",
                 "action", [new("MARKET", "market", "direct", "evidence")], "evidence", "test")
@@ -1327,5 +1334,122 @@ public sealed class NewsFeedServiceTests
             Interlocked.Increment(ref _calls);
             return Task.FromResult<NewsRelevanceAssessment?>(null);
         }
+    }
+
+    static NewsFeedItem Fox(string id, string title, string url, DateTimeOffset? at = null)
+        => new(id, title, "", "Fox News", at ?? Start, [], Url: url, Provider: NewsFeedProviders.FoxNewsRss);
+
+    static NewsClassificationResult Irrelevant()
+        => new(new NewsClassification(["MARKET"], NewsSentiments.Neutral, 0, "연예 기사", "제목", "출처",
+            new Dictionary<string, int> { ["MARKET"] = 0 }, Irrelevant: true), "fake", 10, true, "v2d");
+
+    [Fact]
+    public async Task 관련성_판정이_없는_피드는_공통_정책으로_게이트한다()
+    {
+        var harness = new Harness(new NewsRelevancePolicy());
+        harness.Feed.Name = NewsFeedProviders.FoxNewsRss;
+        harness.Page(1, Fox("base", "Base article", "https://www.foxnews.com/us/base"));
+        await harness.PollAsync();
+        harness.Page(1,
+            Fox("sweeney", "Jealous media attack Sydney Sweeney's sports ad while her $2B valuation proves she's the ultimate boss",
+                "https://www.foxnews.com/outkick-sports/sweeney"),
+            Fox("fed", "Fed raises interest rates by a quarter point as inflation stays high", "https://www.foxnews.com/politics/fed"),
+            Fox("base", "Base article", "https://www.foxnews.com/us/base"));
+
+        await harness.PollAsync();
+
+        Assert.Equal("Fed raises interest rates by a quarter point as inflation stays high", Assert.Single(harness.Classifier.Requests).Title);
+        var saved = Assert.Single(harness.Saved());
+        Assert.Equal("fed", saved.Id);
+        Assert.Equal(NewsRelevanceDecisions.Include, saved.Relevance!.Decision);
+        var state = JsonSerializer.Deserialize<NewsFeedState>(harness.Store.Texts[NewsFeedService.StateFile],
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        var sweeney = state.Inbox!.Single(x => x.Item.Id == "sweeney");
+        Assert.True(sweeney.Processed);
+        Assert.Equal("non_market_section", sweeney.Item.Relevance!.Reason);
+        var provider = Assert.Single(harness.State.Providers);
+        Assert.Equal(1, provider.IncludedCount);
+        Assert.Equal(1, provider.ExcludedCount);
+        Assert.StartsWith(NewsRelevancePolicy.CurrentVersion, provider.FilterPolicyVersion);
+        Assert.Equal(2, harness.State.RelevanceFilter.Excluded);
+        Assert.Equal(1, harness.State.RelevanceFilter.Included);
+    }
+
+    [Fact]
+    public async Task LLM이_무관으로_판정하면_중립_강도0으로_저장하고_관련성을_exclude로_남긴다()
+    {
+        var harness = new Harness();
+        harness.Classifier.Respond = _ => Irrelevant();
+        harness.Page(1, Item("base", "기준"));
+        await harness.PollAsync();
+        harness.Page(1, Item("gossip", "연예 가십"), Item("base", "기준"));
+
+        await harness.PollAsync();
+
+        var saved = Assert.Single(harness.Saved());
+        Assert.Equal(NewsSentiments.Neutral, saved.Sentiment);
+        Assert.Equal(0, saved.Strength);
+        Assert.Equal(0, saved.ImpactScores!["MARKET"]);
+        Assert.Equal(NewsRelevanceDecisions.Exclude, saved.Relevance!.Decision);
+        Assert.Equal("llm_irrelevant", saved.Relevance.Reason);
+        Assert.Equal("llm", saved.Relevance.Classifier);
+        Assert.Equal("v2d", saved.Relevance.PolicyVersion);
+    }
+
+    [Fact]
+    public async Task 결정적_정책이_포함한_기사는_LLM_무관_판정에도_include를_유지한다()
+    {
+        var harness = new Harness();
+        harness.Feed.Name = NewsFeedProviders.SbhNews;
+        harness.Classifier.Respond = _ => Irrelevant();
+        harness.Page(1, Relevant("base", "Fed raises interest rates", NewsRelevanceDecisions.Include));
+        await harness.PollAsync();
+        harness.Page(1, Relevant("fed-2", "Fed cuts interest rates", NewsRelevanceDecisions.Include),
+            Relevant("base", "Fed raises interest rates", NewsRelevanceDecisions.Include));
+
+        await harness.PollAsync();
+
+        var saved = Assert.Single(harness.Saved());
+        Assert.Equal(NewsRelevanceDecisions.Include, saved.Relevance!.Decision);
+        Assert.Equal(NewsSentiments.Neutral, saved.Sentiment);
+        Assert.Equal(0, saved.Strength);
+    }
+
+    [Fact]
+    public async Task 베이스라인도_최근_창_안의_include_기사는_분류한다()
+    {
+        var harness = new Harness();
+        harness.Feed.Name = NewsFeedProviders.SbhNews;
+        harness.Page(1,
+            Relevant("recent", "Fed raises interest rates", NewsRelevanceDecisions.Include) with { CreatedAt = Start.AddMinutes(-30) },
+            Relevant("old", "Fed holds interest rates", NewsRelevanceDecisions.Include) with { CreatedAt = Start.AddHours(-5) },
+            Relevant("sports", "United striker scores a goal", NewsRelevanceDecisions.Exclude) with { CreatedAt = Start.AddMinutes(-10) },
+            Relevant("unclear", "Market reaction remains unclear", NewsRelevanceDecisions.Review) with { CreatedAt = Start.AddMinutes(-10) });
+
+        await harness.PollAsync();
+
+        Assert.Equal("Fed raises interest rates", Assert.Single(harness.Classifier.Requests).Title);
+        Assert.Equal("recent", Assert.Single(harness.Saved()).Id);
+        Assert.Equal("baseline", harness.State.FeedStatus);
+        var state = JsonSerializer.Deserialize<NewsFeedState>(harness.Store.Texts[NewsFeedService.StateFile],
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.True(state.Inbox!.Single(x => x.Item.Id == "recent").Processed);
+        Assert.True(state.Inbox!.Single(x => x.Item.Id == "old").Processed);
+        Assert.True(state.Inbox!.Single(x => x.Item.Id == "sports").Processed);
+        Assert.Contains(NewsFeedProviders.SbhNews, state.BaselinedProviders!);
+    }
+
+    [Fact]
+    public async Task 베이스라인_최근창을_0으로_두면_기존대로_분류하지_않는다()
+    {
+        var harness = new Harness();
+        harness.Options.BaselineRecentHours = 0;
+        harness.Feed.Name = NewsFeedProviders.SbhNews;
+        harness.Page(1, Relevant("recent", "Fed raises interest rates", NewsRelevanceDecisions.Include) with { CreatedAt = Start.AddMinutes(-30) });
+
+        await harness.PollAsync();
+
+        Assert.Empty(harness.Classifier.Requests);
+        Assert.Empty(harness.Saved());
     }
 }

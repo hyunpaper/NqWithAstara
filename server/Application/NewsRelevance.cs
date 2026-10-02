@@ -116,7 +116,7 @@ public sealed class WatchlistNewsRelevanceContextSource(ILocalStore store) : INe
 
 public sealed class NewsRelevancePolicy : INewsRelevancePolicy
 {
-    public const string CurrentVersion = "sbh-relevance-v3";
+    public const string CurrentVersion = "news-relevance-v4";
     const int MaxEventDistance = 80;
 
     public string Version => CurrentVersion;
@@ -129,6 +129,8 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
         var version = ComposeVersion(Version, context);
         var text = Normalize(string.Join(' ', item.Title, item.Summary, item.Content));
         if (text.Length == 0) return Result(version, NewsRelevanceDecisions.Exclude, "unknown", "", "", [], "", "empty_text");
+        if (IsNonMarketSection(item.Url))
+            return Result(version, NewsRelevanceDecisions.Exclude, "non_market", "", "", [], Evidence(text), "non_market_section");
 
         var macroEvent = MacroEvent(text);
         var macroTarget = macroEvent?.Target ?? FirstMacroTarget(text);
@@ -173,6 +175,9 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
 
     static string Decision(string reason)
         => reason.EndsWith("_confirmed", StringComparison.Ordinal) ? NewsRelevanceDecisions.Include : NewsRelevanceDecisions.Review;
+
+    public static bool IsNonMarketSection(string? url)
+        => Uri.TryCreate(url, UriKind.Absolute, out var uri) && NonMarketSection.IsMatch(uri.AbsolutePath);
 
     /// <summary>제목에 대상·동작·엔티티 단서가 하나도 없으면 본문 부수 절만으로 확정하지 않는다(#320).</summary>
     static bool TitleHasEventCue(NewsFeedItem item, NewsRelevanceContext context)
