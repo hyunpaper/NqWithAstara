@@ -37,6 +37,12 @@ public sealed record StructurePolicy
     public double ZoneEligibilityStrength { get; init; } = .35;
     public double MaxRiskPercent { get; init; } = 2.0;
     public double MinimumNetR { get; init; } = 1.2;
+    /// <summary>REBOUND 계획 전용 손절폭 상한. null이면 <see cref="MaxRiskPercent"/>를 쓰고 hash에 넣지 않는다(§9.1, #245).</summary>
+    [OmitFromPolicyHashWhenEmpty]
+    public double? ReboundMaxRiskPercent { get; init; }
+    /// <summary>REBOUND 계획 전용 최소 netR. null이면 <see cref="MinimumNetR"/>를 쓰고 hash에 넣지 않는다(§9.3, #245).</summary>
+    [OmitFromPolicyHashWhenEmpty]
+    public double? ReboundMinimumNetR { get; init; }
 
     /// <summary>
     /// §9.3 비용 반영 손익비 상한(#209). netR이 이 값을 넘으면 계획을 거절한다. 목표·손절을 조작하지 않는다(§19-5).
@@ -262,7 +268,7 @@ public sealed record StructurePolicy
         property.IsDefined(typeof(OmitFromPolicyHashWhenEmptyAttribute)) &&
         value is null or ImmutableArray<string> { IsDefaultOrEmpty: true };
 
-    /// <summary>뒤늦게 추가한 집합 정책이 비어 있으면 canonical JSON에서 빼 기존 hash를 보존한다(#245).</summary>
+    /// <summary>뒤늦게 추가한 정책이 null이거나 빈 집합이면 canonical JSON에서 빼 기존 hash를 보존한다(#245).</summary>
     [AttributeUsage(AttributeTargets.Property)]
     sealed class OmitFromPolicyHashWhenEmptyAttribute : Attribute;
 

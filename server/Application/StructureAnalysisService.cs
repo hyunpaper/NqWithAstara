@@ -124,7 +124,8 @@ public sealed class StructureAnalysisService(
     ConfluenceService? confluence = null,
     RejectedPlanResearchService? research = null,
     StructuralPendingEntryService? pendingEntries = null,
-    IBenchmarkBarSource? benchmark = null)
+    IBenchmarkBarSource? benchmark = null,
+    Astra.Server.Application.ScoreCore.IEntryScoreCoreAttachment? scoreCore = null)
 {
     public enum LivePendingDecision { Wait, Confirm, Missed }
     public sealed record LivePendingResolution(LivePendingDecision Decision, Candle? ConfirmationBar, string Reason);
@@ -156,6 +157,8 @@ public sealed class StructureAnalysisService(
     public const string NoteEntryBenchmarkAvailable = "V5_ENTRY_BENCHMARK_AVAILABLE";
     public const string NoteEntryBenchmarkUnavailable = "V5_ENTRY_BENCHMARK_UNAVAILABLE";
     public const string NoteExitPolicyPrefix = "V5_EXIT_POLICY:";
+    /// <summary>#314: 진입 거래에 붙은 Score Core 참조 상태(동작 아님, 관측).</summary>
+    public const string NoteEntryScoreCorePrefix = "V5_ENTRY_SCORE_CORE:";
 
     /// <summary>
     /// #106: 이번 poll에 같은 심볼의 청산이 있었다. 청산을 만든 그 틱이 곧바로 신규 진입가가 되지 않도록
@@ -666,6 +669,9 @@ public sealed class StructureAnalysisService(
         var context = Domain.StructuralSimulation.Freeze(chosen.Plan, chosen.EventId,
             (trend?.State ?? TrendState.Unknown).ToString().ToUpperInvariant(), trend?.SignedTrend,
             chosen.EntryQuality, snapshot.AnalysisAsOf, snapshot.QuoteAt, _policy);
+        // #314: 후보 생성 시점 asOf의 Score Core 참조를 관측용으로만 붙인다. 진입 판정에는 쓰지 않는다.
+        if (scoreCore is not null)
+            context = context with { ScoreCore = await scoreCore.ResolveAsync(snapshot.Symbol, snapshot.AnalysisAsOf, ct) };
         if (pendingEntries is not null)
         {
             var pending = PendingEntryPolicy.Create(chosen.EventId, snapshot.Symbol, chosen.TriggerBarStart,
@@ -737,6 +743,7 @@ public sealed class StructureAnalysisService(
             yield return string.Equals(benchmark.Status, Domain.StructuralSimulation.BenchmarkAvailable, StringComparison.Ordinal)
                 ? NoteEntryBenchmarkAvailable : NoteEntryBenchmarkUnavailable;
         yield return NoteExitPolicyPrefix + structure.StructuralExitPolicyVersion;
+        if (structure.ScoreCore is { } scoreCore) yield return NoteEntryScoreCorePrefix + scoreCore.Status;
     }
 
     /// <summary>
