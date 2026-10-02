@@ -88,6 +88,7 @@ public static class SetupDetector
 {
     public const string BlockerStaleLatestBar = "STALE_LATEST_BAR";
     public const string BlockerAfterEntryCutoff = "AFTER_ENTRY_CUTOFF";
+    public const string CodeHighVolatilityRangeBlocked = "HIGH_VOLATILITY_RANGE_BLOCKED";
     public const string BlockerMissingQuote = "MISSING_QUOTE";
     public const string BlockerStaleQuote = "STALE_QUOTE";
     public const string BlockerQuoteInFuture = "QUOTE_IN_FUTURE";
@@ -122,6 +123,11 @@ public static class SetupDetector
     public const string CodeTrendDeeplyOpposesRebound = "TREND_DEEPLY_OPPOSES_REBOUND";
     public const string CodeTrendDeeplyOpposesShortRebound = "TREND_DEEPLY_OPPOSES_SHORT_REBOUND";
     public const string CodeReboundLongAboveVwap = "REBOUND_LONG_ABOVE_VWAP";
+    public const string CodePullbackTooFarFromVwap = "PULLBACK_TOO_FAR_FROM_VWAP";
+    public const string CodeBreakoutTooFarFromVwap = "BREAKOUT_TOO_FAR_FROM_VWAP";
+    public const string CodeReboundEntryQualityTooLow = "REBOUND_ENTRY_QUALITY_TOO_LOW";
+    public const string CodeBreakoutBelowVwap = "BREAKOUT_BELOW_VWAP";
+    public const string CodeReboundNetRTooHigh = "REBOUND_NET_R_TOO_HIGH";
     public const string CodeTransitionPullbackBlocked = "TRANSITION_PULLBACK_BLOCKED";
     public const string CodeTransitionBreakoutBlocked = "TRANSITION_BREAKOUT_BLOCKED";
 
@@ -510,6 +516,8 @@ public static class SetupDetector
             rejections.Add(code);
         }
         foreach (var reason in quality.Reasons) rejections.Add(reason);
+        if (RejectsLowQualityRebound(hypothesis.Kind, quality.Score, policy))
+            rejections.Add(CodeReboundEntryQualityTooLow);
 
         var vwapDistance = request.Trend.Vwap is { } vwap && request.Trend.Atr1m is > 0 &&
                            double.IsFinite(vwap) && double.IsFinite(request.Trend.Atr1m.Value)
@@ -517,15 +525,31 @@ public static class SetupDetector
               / request.Trend.Atr1m.Value : (double?)null;
         if (RejectsReboundLongAboveVwap(hypothesis.Kind, side, vwapDistance))
             rejections.Add(CodeReboundLongAboveVwap);
+        if (RejectsPullbackTooFarFromVwap(hypothesis.Kind, side, vwapDistance, policy))
+            rejections.Add(CodePullbackTooFarFromVwap);
+        if (RejectsBreakoutTooFarFromVwap(hypothesis.Kind, side, vwapDistance, policy))
+            rejections.Add(CodeBreakoutTooFarFromVwap);
+        if (RejectsBreakoutBelowVwap(hypothesis.Kind, side, vwapDistance, policy))
+            rejections.Add(CodeBreakoutBelowVwap);
+        if (RejectsHighVolatilityRange(regime, policy))
+            rejections.Add(CodeHighVolatilityRangeBlocked);
 
         if (request.Trend.State == TrendState.Transition && hypothesis.Kind == SetupKind.Pullback &&
-            !policy.AllowTransitionPullback)
+            !policy.AllowTransitionPullback &&
+            !AllowsQualifiedTransitionPullback(relativeVolume,
+                planning.NetR is { } transitionNetR ? (double)transitionNetR : null, policy) &&
+            !AllowsTrendAlignedTransitionPullback(request.Trend.SignedTrend, side,
+                planning.NetR is { } alignedTransitionNetR ? (double)alignedTransitionNetR : null, policy))
             rejections.Add(CodeTransitionPullbackBlocked);
         if (request.Trend.State == TrendState.Transition && hypothesis.Kind == SetupKind.Breakout &&
-            !policy.AllowTransitionBreakout)
+            !policy.AllowTransitionBreakout &&
+            !AllowsQualifiedTransitionBreakout(relativeVolume,
+                planning.NetR is { } transitionBreakoutNetR ? (double)transitionBreakoutNetR : null, policy))
             rejections.Add(CodeTransitionBreakoutBlocked);
 
         var expectedNetR = planning.NetR is { } netR ? (double)netR : (double?)null;
+        if (RejectsReboundNetR(hypothesis.Kind, expectedNetR, policy))
+            rejections.Add(CodeReboundNetRTooHigh);
         if (expectedNetR is { } expected && expected <= policy.MinimumExpectedNetR)
             rejections.Add("EXPECTED_NET_R_NON_POSITIVE");
         if (expectedNetR is { } feature && !WalkForwardExpectedValue.Allows(policy, feature))
@@ -643,12 +667,56 @@ public static class SetupDetector
             hypothesis.RetestConfirmed, hypothesis.EpisodeStartAt, side, regime, evidence);
     }
 
+    public static bool AllowsQualifiedTransitionPullback(double? relativeVolume, double? expectedNetR,
+        StructurePolicy policy) => policy.AllowQualifiedTransitionPullback &&
+        relativeVolume is { } volume && double.IsFinite(volume) &&
+        volume >= policy.TransitionPullbackMinimumRelativeVolume &&
+        expectedNetR is { } netR && double.IsFinite(netR) && netR <= policy.TransitionPullbackMaximumNetR;
+
+    public static bool AllowsQualifiedTransitionBreakout(double? relativeVolume, double? expectedNetR,
+        StructurePolicy policy) => policy.AllowQualifiedTransitionBreakout &&
+        relativeVolume is { } volume && double.IsFinite(volume) &&
+        volume >= policy.TransitionBreakoutMinimumRelativeVolume &&
+        expectedNetR is { } netR && double.IsFinite(netR) && netR <= policy.TransitionBreakoutMaximumNetR;
+
+    public static bool AllowsTrendAlignedTransitionPullback(double? signedTrend, TradeSide side,
+        double? expectedNetR, StructurePolicy policy) => policy.AllowTrendAlignedTransitionPullback &&
+        signedTrend is { } trend && double.IsFinite(trend) &&
+        (side == TradeSide.Long ? trend >= policy.TrendStateThreshold : trend <= -policy.TrendStateThreshold) &&
+        expectedNetR is { } netR && double.IsFinite(netR) && netR <= policy.TransitionPullbackMaximumNetR;
+
     /// <summary>추세 정렬을 전제로 하는 종류. REBOUND는 제외다(§8/§9.4).</summary>
     static bool RequiresTrendAlignment(SetupKind kind) => kind is SetupKind.Pullback or SetupKind.Breakout;
 
     public static bool RejectsReboundLongAboveVwap(SetupKind kind, TradeSide side, double? vwapDistance) =>
         kind == SetupKind.Rebound && side == TradeSide.Long &&
         vwapDistance is > 0 and var distance && double.IsFinite(distance);
+
+    public static bool RejectsHighVolatilityRange(StrategyRegime regime, StructurePolicy policy) =>
+        policy.RejectHighVolatilityRangeEntries && regime.Direction == StrategyDirection.Range &&
+        regime.Volatility == VolatilityBand.High;
+
+    public static bool RejectsPullbackTooFarFromVwap(SetupKind kind, TradeSide side, double? vwapDistance,
+        StructurePolicy policy) => policy.RequirePullbackNearVwap && kind == SetupKind.Pullback &&
+        side == TradeSide.Long && vwapDistance is { } distance && double.IsFinite(distance) &&
+        distance > policy.PullbackMaximumVwapDistanceAtr;
+
+    public static bool RejectsBreakoutTooFarFromVwap(SetupKind kind, TradeSide side, double? vwapDistance,
+        StructurePolicy policy) => policy.RequireBreakoutNearVwap && kind == SetupKind.Breakout &&
+        side == TradeSide.Long && vwapDistance is { } distance && double.IsFinite(distance) &&
+        distance > policy.BreakoutMaximumVwapDistanceAtr;
+
+    public static bool RejectsLowQualityRebound(SetupKind kind, double? entryQuality, StructurePolicy policy) =>
+        policy.RequireMinimumReboundEntryQuality && kind == SetupKind.Rebound &&
+        entryQuality is { } quality && double.IsFinite(quality) && quality < policy.MinimumReboundEntryQuality;
+
+    public static bool RejectsBreakoutBelowVwap(SetupKind kind, TradeSide side, double? vwapDistance,
+        StructurePolicy policy) => policy.RequireBreakoutAboveVwap && kind == SetupKind.Breakout &&
+        side == TradeSide.Long && vwapDistance is { } distance && double.IsFinite(distance) && distance < 0;
+
+    public static bool RejectsReboundNetR(SetupKind kind, double? expectedNetR, StructurePolicy policy) =>
+        policy.RequireMaximumReboundNetR && kind == SetupKind.Rebound &&
+        expectedNetR is { } netR && double.IsFinite(netR) && netR > policy.MaximumReboundNetR;
 
     /// <summary>§8 stable EventId=(symbol,sessionStart,kind,zoneId,triggerBarStart).</summary>
     public static string EventId(string symbol, DateTimeOffset sessionStart, string kindName, string zoneId,

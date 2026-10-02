@@ -83,6 +83,25 @@ public sealed class BenchmarkEntryGateTests
         Assert.Equal(1, result.ReturnPercent!.Value, 10);
     }
 
+    [Fact]
+    public void SessionReturnIsPitAndIndependentOfEntryGateEnablement()
+    {
+        var bars = Bars(100, 102).Append(new Candle(ConfirmationEnd, 50, 50, 50, 50, 1)).ToArray();
+
+        var result = BenchmarkEntryGate.SessionReturnPercent(bars, ConfirmationEnd);
+
+        Assert.Equal(2, result!.Value, 10);
+        Assert.False(StructurePolicy.Default.RequirePositiveBenchmarkForRebound);
+    }
+
+    [Fact]
+    public void DefaultImmutableSessionBarsAreUnavailable()
+    {
+        System.Collections.Immutable.ImmutableArray<Candle> bars = default;
+
+        Assert.Null(BenchmarkEntryGate.SessionReturnPercent(bars, ConfirmationEnd));
+    }
+
     [Theory]
     [InlineData(false, "REBOUND", TradeSide.Long)]
     [InlineData(true, "PULLBACK", TradeSide.Long)]

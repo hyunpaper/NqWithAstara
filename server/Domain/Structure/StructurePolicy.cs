@@ -137,8 +137,35 @@ public sealed record StructurePolicy
     /// 후보와 근거는 관측을 위해 생성하되, 명시적으로 허용한 정책에서만 최종 자격 차단을 해제한다.
     /// </summary>
     public bool AllowTransitionPullback { get; init; }
+    public bool AllowQualifiedTransitionPullback { get; init; }
+    public bool AllowTrendAlignedTransitionPullback { get; init; }
+    public double TransitionPullbackMinimumRelativeVolume { get; init; } = .75;
+    public double TransitionPullbackMaximumNetR { get; init; } = 1.4;
     public bool AllowTransitionBreakout { get; init; }
+    public bool AllowQualifiedTransitionBreakout { get; init; }
+    public double TransitionBreakoutMinimumRelativeVolume { get; init; } = .9;
+    public double TransitionBreakoutMaximumNetR { get; init; } = 1.65;
     public bool RequirePositiveBenchmarkForRebound { get; init; }
+    public bool RequirePullbackNearVwap { get; init; }
+    public double PullbackMaximumVwapDistanceAtr { get; init; } = 2.1;
+    public bool RequireBreakoutNearVwap { get; init; }
+    public double BreakoutMaximumVwapDistanceAtr { get; init; } = 5.0;
+    public bool RequireMinimumReboundEntryQuality { get; init; }
+    public double MinimumReboundEntryQuality { get; init; } = 50.0;
+    public bool RequireBreakoutAboveVwap { get; init; }
+    public bool RequireMaximumReboundNetR { get; init; }
+    public double MaximumReboundNetR { get; init; } = 1.9;
+    /// <summary>
+    /// 실험용 v5 청산 정책. 완료 봉 종가가 최초 구조 위험의 2배 이상 유리해진 뒤 다음 봉부터
+    /// 왕복 비용을 회수하는 가격으로 손절을 올린다. 기본값 false이며 replay 후보에서만 명시적으로 켠다.
+    /// </summary>
+    public bool EnableTwoRFeeBreakEvenStop { get; init; }
+    /// <summary>기존 regime classifier가 RANGE_HIGH로 확정한 후보만 차단하는 실험 정책. 기본 비활성.</summary>
+    public bool RejectHighVolatilityRangeEntries { get; init; }
+    /// <summary>최초 구조 위험의 2R보다 먼 목표만 2R로 제한하는 replay 실험 정책. 기본 비활성.</summary>
+    public bool CapStructuralTargetAtTwoR { get; init; }
+    public bool EnableHalfRFeeBreakEvenStopForPositiveBenchmark { get; init; }
+    public bool EnableHalfRFeeBreakEvenStopForQualifiedTransition { get; init; }
 
     /// <summary>§7 UP/DOWN 진입·이탈에 요구하는 연속 완료 봉 수. TRANSITION은 여기서 제외된다(§7, #148).</summary>
     public int TrendStateHoldBars { get; init; } = 2;
@@ -245,3 +272,7 @@ public sealed record StructurePolicy
         _ => throw new NotSupportedException($"Unsupported policy value type {value.GetType().Name}.")
     };
 }
+
+
+
+

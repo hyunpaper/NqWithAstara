@@ -121,11 +121,34 @@ public sealed class ConfluencePolicyTests
         Assert.Null(p.CorrelationGroupOf("UNKNOWN"));
     }
 
-    /// <summary>컨플루언스 정책은 v5 §16A 정책과 완전히 분리된다 — StructurePolicy 해시는 변하지 않는다.</summary>
+    /// <summary>컨플루언스와 분리된 StructurePolicy 직렬화 계보에는 기본 비활성 실험 필드도 포함된다.</summary>
     [Fact]
     public void StructurePolicyHashIsUntouchedByTheConfluenceLayer()
     {
-        Assert.Equal("6e45eb00a16b064cddc6487356b2bc509e28db52bf3f329921d59962a0208b23",
+        Assert.False(StructurePolicy.Default.RequirePullbackNearVwap);
+        Assert.False(StructurePolicy.Default.RequireBreakoutNearVwap);
+        Assert.False(StructurePolicy.Default.RequireMinimumReboundEntryQuality);
+        Assert.False(StructurePolicy.Default.RequireBreakoutAboveVwap);
+        Assert.False(StructurePolicy.Default.RequireMaximumReboundNetR);
+        Assert.False(StructurePolicy.Default.EnableTwoRFeeBreakEvenStop);
+        Assert.False(StructurePolicy.Default.RejectHighVolatilityRangeEntries);
+        Assert.False(StructurePolicy.Default.CapStructuralTargetAtTwoR);
+        Assert.False(StructurePolicy.Default.EnableHalfRFeeBreakEvenStopForPositiveBenchmark);
+        Assert.Contains("\"RequirePullbackNearVwap\":false", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"PullbackMaximumVwapDistanceAtr\":2.1", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"RequireBreakoutNearVwap\":false", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"BreakoutMaximumVwapDistanceAtr\":5", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"RequireMinimumReboundEntryQuality\":false", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"MinimumReboundEntryQuality\":50", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"RequireBreakoutAboveVwap\":false", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"RequireMaximumReboundNetR\":false", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"MaximumReboundNetR\":1.9", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"EnableTwoRFeeBreakEvenStop\":false", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"RejectHighVolatilityRangeEntries\":false", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"CapStructuralTargetAtTwoR\":false", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"EnableHalfRFeeBreakEvenStopForPositiveBenchmark\":false", StructurePolicy.Default.CanonicalJson);
+        // 기본 비활성이어도 실험 정책 필드는 직렬화된 정책 정체성의 일부이므로 hash가 바뀐다.
+        Assert.Equal("185416067284c183f22ecc8baa0abb582209c73a6e4d88de619d7197e0d072d9",
             StructurePolicy.Default.PolicyHash);
         Assert.NotEqual(StructurePolicy.Default.PolicyHash, ConfluencePolicy.Default.PolicyHash);
     }
@@ -160,3 +183,5 @@ public sealed class ConfluencePolicyTests
         return null!;
     }
 }
+
+

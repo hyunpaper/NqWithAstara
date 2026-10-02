@@ -191,6 +191,86 @@ public sealed class StructureD6StructuralSimulationTests
         Assert.Equal("EOD", Assert.Single(eod).Status);
     }
 
+    [Fact]
+    public void TwoRFeeBreakEvenStopArmsOnlyAfterTheCompletedBarAndOnlyWhenEnabled()
+    {
+        var basePlan = PlanA();
+        var risk = basePlan.EntryReference - basePlan.Stop;
+        var plan = basePlan with { Target = basePlan.EntryReference + risk * 4 };
+        var enabled = StructurePolicy.Default with { EnableTwoRFeeBreakEvenStop = true };
+        var context = StructuralSimulation.Freeze(plan, "TEST|two-r", "UP", 40, 60,
+            Fx.At(40), Fx.At(40), enabled);
+        var open = StructuralSimulation.Enter([], RequestA(context), enabled).Trade!;
+        var twoR = open.EntryPrice + 2 * (open.EntryPrice - open.Stop);
+
+        var armed = Assert.Single(SimulationEngine.ReplayBars([open], Fx.Symbol,
+            [Fx.Candle(41, open.EntryPrice, twoR + .01, open.Stop + .01, twoR)]));
+
+        var expectedStop = open.EntryPrice + (double)(plan.Costs.FeePerShare + plan.Costs.ExtraCostPerShare);
+        Assert.Equal("OPEN", armed.Status);
+        Assert.Equal(expectedStop, armed.Stop, 10);
+        Assert.Equal(StructuralSimulation.TwoRFeeBreakEvenExitPolicyVersion,
+            armed.Structure!.StructuralExitPolicyVersion);
+        var closed = Assert.Single(SimulationEngine.ReplayBars([armed], Fx.Symbol,
+            [Fx.Candle(42, twoR, twoR, expectedStop - .01, expectedStop)]));
+        Assert.Equal("STOP", closed.Status);
+        Assert.Equal(expectedStop, closed.ExitPrice);
+
+        var unchanged = StructuralSimulation.Enter([], RequestA(ContextA(plan))).Trade!;
+        var after = Assert.Single(SimulationEngine.ReplayBars([unchanged], Fx.Symbol,
+            [Fx.Candle(41, unchanged.EntryPrice, twoR + .01, unchanged.Stop + .01, twoR)]));
+        Assert.Equal((double)plan.Stop, after.Stop, 10);
+        Assert.Equal(StructuralSimulation.ExitPolicyVersion, after.Structure!.StructuralExitPolicyVersion);
+    }
+
+    [Fact]
+    public void TwoRTargetCapUsesConfirmedFillAndFrozenStopOnlyWhenEnabled()
+    {
+        var plan = PlanA() with { Target = PlanA().EntryReference + 20m };
+        var policy = StructurePolicy.Default with
+        {
+            EnableTwoRFeeBreakEvenStop = true,
+            CapStructuralTargetAtTwoR = true
+        };
+        var context = StructuralSimulation.Freeze(plan, "TEST|two-r-target", "UP", 40, 60,
+            Fx.At(40), Fx.At(40), policy);
+        var trade = StructuralSimulation.Enter([], RequestA(context), policy).Trade!;
+        var expected = trade.EntryPrice + 2 * (trade.EntryPrice - trade.Stop);
+
+        Assert.Equal(expected, trade.Target, 10);
+        Assert.Equal(StructuralSimulation.TwoRTargetAndFeeBreakEvenExitPolicyVersion,
+            trade.Structure!.StructuralExitPolicyVersion);
+        Assert.False(StructurePolicy.Default.CapStructuralTargetAtTwoR);
+    }
+
+    [Fact]
+    public void PositiveBenchmarkHalfRStopIsConditionalAndArmsAfterCompletedClose()
+    {
+        var plan = PlanA() with { Target = PlanA().EntryReference + 20m };
+        var policy = StructurePolicy.Default with
+        {
+            EnableTwoRFeeBreakEvenStop = true,
+            CapStructuralTargetAtTwoR = true,
+            EnableHalfRFeeBreakEvenStopForPositiveBenchmark = true
+        };
+        var context = StructuralSimulation.Freeze(plan, "TEST|half-r-positive", "UP", 40, 60,
+            Fx.At(40), Fx.At(40), policy);
+        var positive = StructuralSimulation.Enter([], RequestA(context) with { BenchmarkReturnPercent = .01 }, policy).Trade!;
+        var negative = StructuralSimulation.Enter([], RequestA(context with { EntryEventId = "TEST|half-r-negative" }) with
+            { BenchmarkReturnPercent = -.01 }, policy).Trade!;
+        var halfR = positive.EntryPrice + .5 * (positive.EntryPrice - positive.Stop);
+
+        var armed = Assert.Single(SimulationEngine.ReplayBars([positive], Fx.Symbol,
+            [Fx.Candle(41, positive.EntryPrice, halfR + .01, positive.Stop + .01, halfR)]));
+
+        Assert.Equal(StructuralSimulation.HalfRPositiveBenchmarkFeeBreakEvenExitPolicyVersion,
+            armed.Structure!.StructuralExitPolicyVersion);
+        Assert.True(armed.Stop > positive.Stop);
+        Assert.Equal(StructuralSimulation.TwoRTargetAndFeeBreakEvenExitPolicyVersion,
+            negative.Structure!.StructuralExitPolicyVersion);
+        Assert.False(StructurePolicy.Default.EnableHalfRFeeBreakEvenStopForPositiveBenchmark);
+    }
+
     /// <summary>§18: v5 OPEN이 남아 있는 동안 v4 재진입도 같은 종목에서 막힌다(기존 엔진의 OPEN 제한 재사용).</summary>
     [Fact]
     public void AV5OpenTradeBlocksV4ReEntryThroughTheSharedEngine()

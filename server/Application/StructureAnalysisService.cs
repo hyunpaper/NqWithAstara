@@ -569,7 +569,9 @@ public sealed class StructureAnalysisService(
                 var pendingResult = await tradeEntries.TryEnterAsync(new Domain.StructuralEntryRequest(snapshot.Symbol,
                     claimed.Pending.SignalBarStart, now, snapshot.SessionEnd, pendingContext,
                     completedBarStarts, snapshot.SessionStart, null, confirmation,
-                    RequireCompleteLiquidityCost: _policy.RequireCompleteLiquidityCost), ct);
+                    RequireCompleteLiquidityCost: _policy.RequireCompleteLiquidityCost,
+                    BenchmarkReturnPercent: BenchmarkEntryGate.SessionReturnPercent(benchmark?.Bars,
+                        stored.Pending.ConfirmationBarStart.AddMinutes(1))), ct);
                 if (pendingResult.Outcome is Domain.StructuralEntryOutcome.Entered or Domain.StructuralEntryOutcome.AlreadyEntered)
                 {
                     await pendingEntries.RemoveAsync(snapshot.Symbol);
@@ -639,7 +641,9 @@ public sealed class StructureAnalysisService(
                 var confirmed = await tradeEntries.TryEnterAsync(new Domain.StructuralEntryRequest(snapshot.Symbol,
                     claimed.Pending.SignalBarStart, now, snapshot.SessionEnd, claimed.Context,
                     completedBarStarts, snapshot.SessionStart, null,
-                    confirmation, RequireCompleteLiquidityCost: _policy.RequireCompleteLiquidityCost), ct);
+                    confirmation, RequireCompleteLiquidityCost: _policy.RequireCompleteLiquidityCost,
+                    BenchmarkReturnPercent: BenchmarkEntryGate.SessionReturnPercent(benchmark?.Bars,
+                        stored.Pending.ConfirmationBarStart.AddMinutes(1))), ct);
                 if (confirmed.Outcome is Domain.StructuralEntryOutcome.Entered or Domain.StructuralEntryOutcome.AlreadyEntered)
                     await pendingEntries.RemoveAsync(snapshot.Symbol);
                 return confirmed.Outcome is Domain.StructuralEntryOutcome.Entered or Domain.StructuralEntryOutcome.AlreadyEntered
@@ -655,7 +659,7 @@ public sealed class StructureAnalysisService(
         // §10: 체결 시 FrozenPlan을 저장한다. 진입 이후 이 스냅샷은 다시 만들지 않는다.
         var context = Domain.StructuralSimulation.Freeze(chosen.Plan, chosen.EventId,
             (trend?.State ?? TrendState.Unknown).ToString().ToUpperInvariant(), trend?.SignedTrend,
-            chosen.EntryQuality, snapshot.AnalysisAsOf, snapshot.QuoteAt);
+            chosen.EntryQuality, snapshot.AnalysisAsOf, snapshot.QuoteAt, _policy);
         if (pendingEntries is not null)
         {
             var pending = PendingEntryPolicy.Create(chosen.EventId, snapshot.Symbol, chosen.TriggerBarStart,
@@ -1192,3 +1196,5 @@ public static class StructureViewMapper
             quality.BlockersForCandidate.ToArray(), quality.BlockersForReady.ToArray());
     }
 }
+
+

@@ -101,7 +101,8 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
         var days = (await store.ListDaysAsync(ct)).Where(x => DateOnly.TryParseExact(x, "yyyy-MM-dd", out var day)
             && day >= from && day <= to).Order().ToArray();
         var benchmarkByDay = new Dictionary<string, ImmutableArray<Candle>>(StringComparer.Ordinal);
-        if (replayPolicy.RequirePositiveBenchmarkForRebound)
+        if (replayPolicy.RequirePositiveBenchmarkForRebound ||
+            replayPolicy.EnableHalfRFeeBreakEvenStopForPositiveBenchmark)
             foreach (var day in days)
                 benchmarkByDay[day] = ConfluenceReplay.Parse(await store.ReadLinesAsync(day, benchmarkSymbol, ct))
                     .Select(x => new Candle(x.Start, (double)x.Open, (double)x.High, (double)x.Low,
@@ -205,7 +206,9 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                                     queued.Candidate.TriggerBarStart, now, sessionEnd, queued.Context,
                                     completedStarts, sessionStart, queued.Candidate.Plan?.TargetZoneSnapshot.Aliases,
                                     confirmation, RequireCompleteLiquidityCost:
-                                    sessionPolicy.RequireCompleteLiquidityCost), sessionPolicy);
+                                    sessionPolicy.RequireCompleteLiquidityCost,
+                                    BenchmarkReturnPercent: BenchmarkEntryGate.SessionReturnPercent(
+                                        benchmarkByDay.GetValueOrDefault(day), now)), sessionPolicy);
                                 result = entered.Trades;
                                 UpdateDiagnostic(candidateDiagnostics, queued.Pending.EntryEventId, row => row with
                                 {
@@ -305,7 +308,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                     {
                         var context = StructuralSimulation.Freeze(preferred.Plan, preferred.EventId,
                             trend.State.ToString(), trend.SignedTrend, preferred.EntryQuality,
-                            snapshot.AnalysisAsOf, snapshot.QuoteAt);
+                            snapshot.AnalysisAsOf, snapshot.QuoteAt, sessionPolicy);
                         var pendingEntry = PendingEntryPolicy.Create(preferred.EventId, symbol,
                             preferred.TriggerBarStart, preferred.TriggerBarStart.Add(barSpan), preferred.ExpiresAt,
                             preferred.Plan, replayPolicy.BreakoutConfirmationGateVersion);
@@ -509,3 +512,5 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
     static Candle Daily(ImmutableArray<Candle> bars) => new(bars[0].Timestamp, bars[0].Open,
         bars.Max(x => x.High), bars.Min(x => x.Low), bars[^1].Close, bars.Sum(x => x.Volume));
 }
+
+

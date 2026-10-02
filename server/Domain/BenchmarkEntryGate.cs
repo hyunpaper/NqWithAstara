@@ -12,6 +12,20 @@ public static class BenchmarkEntryGate
     public const string Negative = "REBOUND_BENCHMARK_NEGATIVE";
     public const string Unavailable = "REBOUND_BENCHMARK_UNAVAILABLE";
 
+    public static double? SessionReturnPercent(IReadOnlyList<Candle>? benchmarkBars, DateTimeOffset confirmationEnd)
+    {
+        if (benchmarkBars is null ||
+            benchmarkBars is System.Collections.Immutable.ImmutableArray<Candle> { IsDefault: true } ||
+            benchmarkBars.Count == 0) return null;
+        var currentStart = confirmationEnd - TimeSpan.FromMinutes(1);
+        var available = benchmarkBars.Where(x => x.Timestamp <= currentStart).OrderBy(x => x.Timestamp).ToArray();
+        if (available.Length == 0) return null;
+        var first = available[0].Open;
+        var current = available[^1].Close;
+        if (!double.IsFinite(first) || first <= 0 || !double.IsFinite(current) || current <= 0) return null;
+        return (current / first - 1d) * 100d;
+    }
+
     public static BenchmarkEntryGateResult Evaluate(StructurePolicy policy, string? setupKind, TradeSide side,
         IReadOnlyList<Candle>? benchmarkBars, DateTimeOffset confirmationEnd)
     {
