@@ -144,6 +144,18 @@ public sealed class HttpContractTests(AstraHostFixture host) : IClassFixture<Ast
     }
 
     [Fact]
+    public async Task HealthExposesAutoStartOffAndNoStartMarkersByDefault()
+    {
+        using var client = host.Factory.CreateClient();
+        using var json = await ReadJson(await client.GetAsync("/api/health"));
+
+        Assert.False(json.RootElement.GetProperty("autoStart").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("startedAt").ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("startedBy").ValueKind);
+        Assert.Contains(host.Factory.Services.GetServices<IHostedService>(), s => s is MonitorAutoStartLifetime);
+    }
+
+    [Fact]
     public async Task HealthCarriesTheAdditiveBarsSection()
     {
         using var client = host.Factory.CreateClient();
