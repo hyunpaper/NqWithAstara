@@ -2,9 +2,11 @@ using Astra.Server;
 using Astra.Server.Api;
 using Astra.Server.Application;
 using Astra.Server.Application.Backtest;
+using Astra.Server.Application.ScoreCore;
 using Astra.Server.Backtest;
 using Astra.Server.Domain.Confluence;
 using Astra.Server.Infrastructure;
+using Astra.Server.Infrastructure.ScoreCore;
 
 // 이슈 #169: 측정 서브커맨드. 서버를 띄우지 않고 저장 봉만 재생해 가중치를 산출하고 종료한다.
 if (args is [ConfluenceMeasureCommand.Name, ..])
@@ -111,6 +113,14 @@ builder.Services.AddHostedService(x => x.GetRequiredService<MonitorService>());
 builder.Services.AddHostedService<NewsService>();
 builder.Services.AddHostedService<NewsTranslationService>();
 builder.Services.AddHostedService<NewsRelevanceAdjudicationService>();
+// 이슈 #309: Score Core shadow 수집. ScoreCore:Enabled 기본 false이며 진입 판정에는 쓰지 않는다.
+builder.Services.AddSingleton(_ => { var scoreCore = new ScoreCoreOptions(); builder.Configuration.GetSection("ScoreCore").Bind(scoreCore); return scoreCore; });
+builder.Services.AddSingleton<IScoreCoreSnapshotStore>(x => new JsonlScoreCoreSnapshotStore(Path.Combine(x.GetRequiredService<IWebHostEnvironment>().ContentRootPath, "App_Data", "score-core"), x.GetRequiredService<IMonitorDiagnostics>()));
+builder.Services.AddSingleton<NewsScoreRecordReader>();
+builder.Services.AddSingleton<IScoreEvidenceSource, NewsScoreEvidenceSource>(); builder.Services.AddSingleton<IScoreEvidenceSource, MacroCalendarEvidenceSource>();
+builder.Services.AddSingleton<AsOfEvidenceAssembler>(); builder.Services.AddSingleton(x => new ScoreCoreSnapshotService(x.GetRequiredService<AsOfEvidenceAssembler>(), x.GetRequiredService<IScoreCoreSnapshotStore>()));
+builder.Services.AddSingleton<ScoreCoreShadowCaptureOrchestrator>(); builder.Services.AddSingleton<ScoreCoreTargetSelector>(); builder.Services.AddSingleton<ScoreCoreRuntimeState>(); builder.Services.AddSingleton<ScoreCoreQueryService>();
+builder.Services.AddHostedService<ScoreCoreShadowCaptureService>();
 var app = builder.Build();
 app.Services.GetRequiredService<TradingCostPolicyCheckService>();
 var clientRoot = Environment.GetEnvironmentVariable("ASTRA_CLIENT_ROOT") ?? Path.Combine(app.Environment.ContentRootPath, "..", "client"); var clientDist = Path.GetFullPath(Path.Combine(clientRoot, "dist"));

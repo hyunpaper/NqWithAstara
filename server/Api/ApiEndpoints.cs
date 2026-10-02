@@ -1,5 +1,6 @@
 ﻿using Astra.Server.Application;
 using Astra.Server.Application.Backtest;
+using Astra.Server.Application.ScoreCore;
 using System.Net;
 
 namespace Astra.Server.Api;
@@ -9,13 +10,14 @@ public static class ApiEndpoints
     public static IEndpointRouteBuilder MapAstraApi(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/health", async (MonitorRuntimeState r, FeeRateCheckService? feeCheck, NewsQueryService? news,
-            BarStoreService? bars, ConfluenceOptions? confluence, TimeProvider clock) =>
+            BarStoreService? bars, ConfluenceOptions? confluence, ScoreCoreRuntimeState? scoreCore, TimeProvider clock) =>
         {
             var s = r.Snapshot();
             var barsHealth = bars is null ? null : await bars.HealthAsync(MarketRules.TradingDate(clock.GetUtcNow()),
                 confluence?.BenchmarkSymbol ?? "QQQ", CancellationToken.None);
-            return Results.Ok(new { app = "Astra", status = "ready", connection = s.ConnectionStatus, credentialsRequired = s.ConnectionStatus is "idle" or "error", guideUrl = s.ConnectionMessage.Contains("허용 IP") ? "https://developers.tossinvest.com/docs" : null, warnings = feeCheck?.Warnings ?? Array.Empty<string>(), news = news?.Health(), bars = barsHealth });
+            return Results.Ok(new { app = "Astra", status = "ready", connection = s.ConnectionStatus, credentialsRequired = s.ConnectionStatus is "idle" or "error", guideUrl = s.ConnectionMessage.Contains("허용 IP") ? "https://developers.tossinvest.com/docs" : null, warnings = feeCheck?.Warnings ?? Array.Empty<string>(), news = news?.Health(), bars = barsHealth, scoreCore = scoreCore?.Health() });
         });
+        app.MapScoreCoreApi();
         app.MapGet("/api/news", (string? symbol, int? limit, NewsQueryService q) => Results.Ok(q.Articles(symbol, limit)));
         app.MapGet("/api/news/{id}", (string id, NewsQueryService q) => q.Detail(id) is { } value ? Results.Ok(value) : Results.NotFound());
         app.MapGet("/api/news/detail", (string? id, string? symbol, NewsQueryService q) => q.DetailByQuery(id, symbol) is { } value ? Results.Ok(value) : Results.NotFound());
