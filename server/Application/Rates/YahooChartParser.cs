@@ -2,10 +2,24 @@ using System.Text.Json;
 
 namespace Astra.Server.Application.Rates;
 
-/// <summary>Yahoo Finance 차트 응답(비공식 API) 파서. meta.regularMarketPrice를 우선하고 없으면 마지막 유효 close를 쓴다(#316).</summary>
+public sealed record YahooChartQuote(double Value, double? PreviousClose, DateTimeOffset AsOf);
+
+/// <summary>Yahoo Finance 차트 응답(비공식 API) 파서. meta.regularMarketPrice를 우선하고 없으면 마지막 유효 close를 쓴다(#316, #325).</summary>
 public static class YahooChartParser
 {
     public static IntradayRateQuote Parse(string json, TreasuryTenor tenor, string symbol, string source)
+    {
+        var quote = ParseQuote(json);
+        return new IntradayRateQuote(tenor, symbol, quote.Value, quote.PreviousClose, quote.AsOf, source);
+    }
+
+    public static EtfProxyQuote ParseEtf(string json, EtfProxyDefinition proxy, string source)
+    {
+        var quote = ParseQuote(json);
+        return new EtfProxyQuote(proxy.Tenor, proxy.Symbol, quote.Value, quote.PreviousClose, quote.AsOf, source);
+    }
+
+    public static YahooChartQuote ParseQuote(string json)
     {
         ArgumentNullException.ThrowIfNull(json);
         using var document = JsonDocument.Parse(json);
@@ -32,11 +46,11 @@ public static class YahooChartParser
             asOf ??= last?.AsOf;
         }
         if (value is null || !double.IsFinite(value.Value) || value <= 0)
-            throw new FormatException("유효한 금리 값이 없습니다.");
+            throw new FormatException("유효한 값이 없습니다.");
         var previous = Number(meta, "chartPreviousClose") ?? Number(meta, "previousClose");
         if (previous is not null && (!double.IsFinite(previous.Value) || previous <= 0)) previous = null;
-        return new IntradayRateQuote(tenor, symbol, Math.Round(value.Value, 4), previous,
-            asOf ?? throw new FormatException("시각 정보가 없습니다."), source);
+        return new YahooChartQuote(Math.Round(value.Value, 4), previous,
+            asOf ?? throw new FormatException("시각 정보가 없습니다."));
     }
 
     static (double Value, DateTimeOffset AsOf)? LastClose(JsonElement result)

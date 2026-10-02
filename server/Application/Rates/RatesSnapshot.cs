@@ -15,12 +15,12 @@ public sealed record RateDirectionCheckDto(string Tenor, string IntradayDirectio
 
 public sealed record RatesSnapshotDto(bool Enabled, string Status, DateTimeOffset AsOf, string IntradaySource,
     string DailySource, int RefreshSeconds, IReadOnlyList<RateTenorDto> Tenors, IReadOnlyList<RateSpreadDto> Spreads,
-    IReadOnlyList<RateDirectionCheckDto> DirectionChecks, IReadOnlyList<string> Warnings,
-    IReadOnlyList<string> Limitations);
+    IReadOnlyList<RateDirectionCheckDto> DirectionChecks, IReadOnlyList<RateEtfProxyDto> EtfProxies,
+    IReadOnlyList<string> Warnings, IReadOnlyList<string> Limitations);
 
 public sealed record RatesHealth(bool Enabled, string Status, DateTimeOffset? LastRunAt, DateTimeOffset? LastSuccessAt,
     string? LastError, DateTimeOffset? LastDailyRefreshAt, int AppendedToday, IReadOnlyList<string> FailedSources,
-    DateTimeOffset? LastPrunedAt, int PrunedFiles);
+    DateTimeOffset? LastPrunedAt, int PrunedFiles, IReadOnlyList<string> EtfDivergences);
 
 public sealed record IntradayTenorState(bool Supported, IntradayRateQuote? Quote, DateTimeOffset? FetchedAt,
     string? Error, int Failures, DateTimeOffset? RetryAt);
@@ -42,7 +42,7 @@ public static class RateDirections
     public const string Unknown = "unknown";
 }
 
-/// <summary>수집 상태를 `/api/rates` DTO로 조립한다. 매매 판정 입력이 아니라 표시·기록용 참고값이다(#316).</summary>
+/// <summary>수집 상태를 `/api/rates` DTO로 조립한다. 매매 판정 입력이 아니라 표시·기록용 참고값이다(#316, #325).</summary>
 public static class RatesSnapshotBuilder
 {
     public const string IntradaySourceLabel = "Yahoo Finance 차트 API (비공식 · ^TNX·^TYX)";
@@ -52,6 +52,12 @@ public static class RatesSnapshotBuilder
     public static RatesSnapshotDto Build(RatesOptions options, DateTimeOffset now, string status,
         IReadOnlyDictionary<TreasuryTenor, IntradayTenorState> intraday,
         IReadOnlyDictionary<TreasuryTenor, DailyRateSeries> daily)
+        => Build(options, now, status, intraday, daily, [], new Dictionary<string, int>(StringComparer.Ordinal));
+
+    public static RatesSnapshotDto Build(RatesOptions options, DateTimeOffset now, string status,
+        IReadOnlyDictionary<TreasuryTenor, IntradayTenorState> intraday,
+        IReadOnlyDictionary<TreasuryTenor, DailyRateSeries> daily,
+        IReadOnlyList<EtfProxyState> etf, IReadOnlyDictionary<string, int> etfDivergeRuns)
     {
         var tenors = TreasuryTenors.All.Select(x => Tenor(options, now, x,
             intraday.TryGetValue(x, out var i) ? i : new IntradayTenorState(false, null, null, null, 0, null),
@@ -76,15 +82,26 @@ public static class RatesSnapshotBuilder
         }
         foreach (var tenor in tenors.Where(x => x.DelayStatus == "stale" && x.FetchedAt is not null))
             warnings.Add($"{tenor.Tenor} 실시간 값이 {(int)(now - tenor.FetchedAt!.Value).TotalMinutes}분째 갱신되지 않았습니다.");
+        var proxies = etf
+            .OrderBy(x => Array.IndexOf(TreasuryTenors.All, x.Proxy.Tenor)).ThenBy(x => x.Proxy.Symbol, StringComparer.Ordinal)
+            .Select(x => EtfProxyDivergence.Evaluate(options, x,
+                intraday.TryGetValue(x.Proxy.Tenor, out var rate) ? rate : null,
+                etfDivergeRuns.TryGetValue(x.Proxy.Symbol, out var runs) ? runs : 0))
+            .ToArray();
+        foreach (var proxy in proxies.Where(x => x.Agreement == EtfProxyDivergence.Diverge))
+        {
+            warnings.Add(EtfProxyDivergence.DivergeWarning(proxy));
+            if (proxy.DivergeRuns >= options.EtfDivergenceRuns) warnings.Add(EtfProxyDivergence.PersistentWarning(proxy));
+        }
         var limitations = new List<string>
         {
             "실시간 값은 비공식 Yahoo Finance 차트 API에서 가져오며 지연·결측이 있을 수 있습니다.",
             "2Y는 실시간 지수가 없어 FRED 전일 공식값만 표시합니다.",
             "상승=빨강·하락=초록은 주식 관점 표기이며, 금리는 매매 판정·진입 게이트에 쓰지 않습니다.",
-            "ETF 대리변수(UTWO·UTEN·UTHY 등)와의 괴리 비교는 후속 작업입니다.",
+            $"ETF 대리변수({string.Join("·", etf.Select(x => x.Proxy.Symbol).DefaultIfEmpty("없음"))}) 비교는 근사 듀레이션으로 bp를 환산한 참고 지표이며 매매 판정에 쓰지 않습니다.",
         };
         return new RatesSnapshotDto(options.Enabled, status, now, IntradaySourceLabel, DailySourceLabel,
-            (int)options.Interval.TotalSeconds, tenors, spreads, checks, warnings, limitations);
+            (int)options.Interval.TotalSeconds, tenors, spreads, checks, proxies, warnings, limitations);
     }
 
     static RateTenorDto Tenor(RatesOptions options, DateTimeOffset now, TreasuryTenor tenor, IntradayTenorState state,
