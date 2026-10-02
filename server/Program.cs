@@ -43,6 +43,7 @@ builder.Services.AddSingleton(_ => StructureEngineOptions.Parse(builder.Configur
 builder.Services.AddSingleton<IStructureObservationStore, StructureObservationStore>();
 // D6(§18): active에서 v5 계획을 실제 시뮬 거래로 커밋하는 유일한 저장 접점. off/shadow에서는 호출되지 않는다.
 builder.Services.AddSingleton<IStructuralTradeEntries, StructuralTradeEntryService>();
+builder.Services.AddSingleton<StructuralEntryHealthService>();
 // 이슈 #26: v5 알림 이벤트 발행자 — active gate 안 commit 지점에서만 발행되고 /api/state가 소비한다.
 builder.Services.AddSingleton<StructureAlertPublisher>();
 // 이슈 #132: 종목 메타(`/stocks`) 세션 캐시 — 구조 게이트와 회전율 지표가 공유한다.

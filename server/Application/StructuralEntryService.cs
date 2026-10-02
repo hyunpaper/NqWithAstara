@@ -39,3 +39,16 @@ public sealed class StructuralTradeEntryService(ILocalStore store, StructurePoli
         });
     }
 }
+
+/// <summary>#326 health: 당일 v5 진입 중 벤치마크 수익률이 결측(UNAVAILABLE)이었던 건수. 미수집(null) 행은 세지 않는다.</summary>
+public sealed class StructuralEntryHealthService(ILocalStore store)
+{
+    public async Task<object> HealthAsync(DateOnly tradingDate)
+    {
+        var trades = await store.Read("simtrades.json", new List<SimTrade>());
+        var today = trades.Where(t => t.Structure is not null && MarketRules.TradingDate(t.EnteredAt) == tradingDate).ToArray();
+        var missing = today.Count(t => string.Equals(t.Structure!.Benchmark?.Status,
+            StructuralSimulation.BenchmarkUnavailable, StringComparison.Ordinal));
+        return new { tradingDate = tradingDate.ToString("yyyy-MM-dd"), entries = today.Length, benchmarkMissingEntries = missing };
+    }
+}

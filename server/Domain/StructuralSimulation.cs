@@ -58,6 +58,10 @@ public static class StructuralSimulation
     public const string HalfRPositiveBenchmarkFeeBreakEvenExitPolicyVersion = "v5-exit.positive-benchmark-half-r-fee-break-even.1";
     public const string HalfRQualifiedTransitionFeeBreakEvenExitPolicyVersion = "v5-exit.qualified-transition-half-r-fee-break-even.1";
 
+    /// <summary>#326 진입 시 벤치마크 수익률 출처 상태.</summary>
+    public const string BenchmarkAvailable = "AVAILABLE";
+    public const string BenchmarkUnavailable = "UNAVAILABLE";
+
     /// <summary>v5 거래의 손절/목표 근거 표기(표시용). 숫자의 원천은 FrozenPlan이다.</summary>
     public const string StopBasis = "구조 무효화 anchor 아래";
     public const string TargetBasis = "다음 저항 하단 앞";
@@ -147,7 +151,14 @@ public static class StructuralSimulation
               !(selectedPolicy.ExemptBreakoutFromPositiveBenchmarkHalfRStop && string.Equals(plan.Kind, "BREAKOUT", StringComparison.Ordinal))
                 ? HalfRPositiveBenchmarkFeeBreakEvenExitPolicyVersion
                 : request.Context.StructuralExitPolicyVersion;
-        var context = request.Context with { PlanSnapshot = plan, Reentry = Reentry(trades, request), StructuralExitPolicyVersion = exitPolicyVersion };
+        var benchmark = new EntryBenchmarkTags(
+            request.BenchmarkReturnPercent is { } observed && double.IsFinite(observed) ? BenchmarkAvailable : BenchmarkUnavailable,
+            request.BenchmarkReturnPercent is { } value && double.IsFinite(value) ? value : null);
+        var context = request.Context with
+        {
+            PlanSnapshot = plan, Reentry = Reentry(trades, request), StructuralExitPolicyVersion = exitPolicyVersion,
+            Benchmark = benchmark
+        };
         var trade = new SimTrade(id, request.Symbol, plan.Kind, request.EnteredAt, entry, target, stop,
             TargetBasis, StopBasis, "OPEN", null, null, null, entry,
             Score: null, ExtSigma: null, RelVolume: null, BuyShare: null, Rsi: null,

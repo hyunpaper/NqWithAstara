@@ -47,7 +47,12 @@ public sealed record FrozenStructureContext(string EntryEventId, FrozenPlanSnaps
     // #111 additive: 재진입 코호트 태그. 기존 필드 순서·의미를 바꾸지 않으려고 마지막에 선택 필드로 붙인다.
     // 이 계약 이전에 저장된 행은 null로 복원되며, 결측을 "첫 진입"으로 바꾸지 않는다(§16A).
     ReentryTags? Reentry = null, StrategyRegime? Regime = null,
-    EntryEvidence? EntryEvidence = null);
+    EntryEvidence? EntryEvidence = null,
+    // #326 additive: 진입 시 벤치마크 수익률 출처 상태. 이 계약 이전 행은 null(미수집)로 복원된다.
+    EntryBenchmarkTags? Benchmark = null);
+
+/// <summary>#326 진입 시점 벤치마크(QQQ) 관측. Status는 AVAILABLE|UNAVAILABLE이며 진입·청산 판정에 쓰이지 않는다.</summary>
+public sealed record EntryBenchmarkTags(string Status, double? ReturnPercent);
 
 /// <summary>
 /// #111 재진입 코호트 태그. 진입 시점에 직전 거래를 아는 계층이 채우는 관측값이며 진입·청산 판정에 쓰이지 않는다.

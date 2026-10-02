@@ -11,12 +11,15 @@ public static class ApiEndpoints
     public static IEndpointRouteBuilder MapAstraApi(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/health", async (MonitorRuntimeState r, FeeRateCheckService? feeCheck, NewsQueryService? news,
-            BarStoreService? bars, ConfluenceOptions? confluence, ScoreCoreRuntimeState? scoreCore, RatesRuntimeState? rates, TimeProvider clock) =>
+            BarStoreService? bars, ConfluenceOptions? confluence, ScoreCoreRuntimeState? scoreCore, RatesRuntimeState? rates,
+            StructuralEntryHealthService? structureEntries, TimeProvider clock) =>
         {
             var s = r.Snapshot();
-            var barsHealth = bars is null ? null : await bars.HealthAsync(MarketRules.TradingDate(clock.GetUtcNow()),
+            var tradingDate = MarketRules.TradingDate(clock.GetUtcNow());
+            var barsHealth = bars is null ? null : await bars.HealthAsync(tradingDate,
                 confluence?.BenchmarkSymbol ?? "QQQ", CancellationToken.None);
-            return Results.Ok(new { app = "Astra", status = "ready", connection = s.ConnectionStatus, credentialsRequired = s.ConnectionStatus is "idle" or "error", guideUrl = s.ConnectionMessage.Contains("허용 IP") ? "https://developers.tossinvest.com/docs" : null, warnings = feeCheck?.Warnings ?? Array.Empty<string>(), news = news?.Health(), bars = barsHealth, scoreCore = scoreCore?.Health(), rates = rates?.Health() });
+            var entriesHealth = structureEntries is null ? null : await structureEntries.HealthAsync(tradingDate);
+            return Results.Ok(new { app = "Astra", status = "ready", connection = s.ConnectionStatus, credentialsRequired = s.ConnectionStatus is "idle" or "error", guideUrl = s.ConnectionMessage.Contains("허용 IP") ? "https://developers.tossinvest.com/docs" : null, warnings = feeCheck?.Warnings ?? Array.Empty<string>(), news = news?.Health(), bars = barsHealth, scoreCore = scoreCore?.Health(), rates = rates?.Health(), structureEntries = entriesHealth });
         });
         app.MapScoreCoreApi();
         app.MapRatesApi();
