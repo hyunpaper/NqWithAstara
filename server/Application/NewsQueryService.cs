@@ -71,12 +71,24 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         translationQueue = translations?.QueueDepth ?? 0,
         relevanceAdjudication = new { status = state.RelevanceAdjudicationStatus,
             reason = state.RelevanceAdjudicationReason, queue = state.RelevanceAdjudicationQueue },
+        relevanceFilter = RelevanceFilter(state.RelevanceFilter),
         dropped = state.Dropped,
         seen = state.Seen,
         classified = state.Classified,
         storageLimited = state.StorageLimited,
         ollama = state.OllamaOk ? "ok" : "down",
         promptVersion = NewsPromptVersions.V2c,
+    };
+
+    static object RelevanceFilter(NewsRelevanceFilterStats stats) => new
+    {
+        policyVersion = stats.PolicyVersion ?? NewsRelevancePolicy.CurrentVersion,
+        lexiconVersion = NewsRelevanceLexicon.Version,
+        included = stats.Included,
+        excluded = stats.Excluded,
+        review = stats.Review,
+        reviewUnadjudicated = stats.ReviewUnadjudicated,
+        recentExcluded = stats.RecentExcluded.Select(x => new { title = x.Title, reason = x.Reason, at = x.At }).ToArray(),
     };
 
     public object? Detail(string id, string? symbol = null)

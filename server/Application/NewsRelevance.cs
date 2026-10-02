@@ -110,18 +110,17 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
         if (text.Length == 0) return Result(version, NewsRelevanceDecisions.Exclude, "unknown", "", "", [], "", "empty_text");
 
         var macroEvent = MacroEvent(text);
-        var macroTarget = macroEvent?.Target ?? FirstMatch(text, MacroTarget, MacroAcronym);
-        var macroAction = macroEvent?.Action ?? MacroAction.Match(text);
+        var macroTarget = macroEvent?.Target ?? Hit.From(FirstMatch(text, MacroTarget, MacroAcronym));
+        var macroAction = macroEvent?.Action ?? Hit.From(MacroAction.Match(text));
         var companyActions = CompanyAction.Matches(text).Cast<Match>().ToArray();
         var explicitTargets = Targets(item, text, context);
 
         if (macroEvent is not null)
         {
-            var kind = MacroKind(macroTarget.Value, text);
-            var targets = MacroTargets(macroTarget.Value);
-            return Result(version, NewsRelevanceDecisions.Include, kind, ActorInSpan(text, macroEvent.Value.ClauseStart,
-                    macroEvent.Value.ClauseLength, macroTarget.Value, macroAction.Index), macroAction.Value,
-                targets, Span(text, macroTarget.Index, macroAction.Index), "macro_event_confirmed");
+            var (target, action, clauseStart, clauseLength) = macroEvent.Value;
+            return Result(version, NewsRelevanceDecisions.Include, MacroKind(target.Value, text),
+                ActorInSpan(text, clauseStart, clauseLength, target.Value, action.Index), action.Value,
+                MacroTargets(target.Value), Span(text, target.Index, action.Index), "macro_event_confirmed");
         }
 
         foreach (var action in companyActions)
@@ -135,9 +134,9 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
         if (NonMarket.IsMatch(text))
             return Result(version, NewsRelevanceDecisions.Exclude, "non_market", "", "", [], Evidence(text), "non_market_context");
 
-        if (macroTarget.Success || companyActions.Length > 0 || explicitTargets.Count > 0 || AmbiguousWord.IsMatch(text))
-            return Result(version, NewsRelevanceDecisions.Review, "unknown", Actor(text, macroTarget.Value),
-                companyActions.Length > 0 ? companyActions[0].Value : macroAction.Value, explicitTargets,
+        if (macroTarget is not null || companyActions.Length > 0 || explicitTargets.Count > 0 || AmbiguousWord.IsMatch(text))
+            return Result(version, NewsRelevanceDecisions.Review, "unknown", Actor(text, macroTarget?.Value ?? ""),
+                companyActions.Length > 0 ? companyActions[0].Value : macroAction?.Value ?? "", explicitTargets,
                 Evidence(text), "insufficient_actor_action_target_context");
 
         return Result(version, NewsRelevanceDecisions.Exclude, "unknown", "", "", [], Evidence(text), "no_market_event");
@@ -211,7 +210,14 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
         });
     }
 
-    static (Match Target, Match Action, int ClauseStart, int ClauseLength)? MacroEvent(string text)
+    /// <summary>본문 기준 위치로 옮긴 정규식 일치 구간.</summary>
+    readonly record struct Hit(int Index, string Value)
+    {
+        public static Hit? From(Match match) => match.Success ? new Hit(match.Index, match.Value) : null;
+        public static Hit At(Match match, int offset) => new(offset + match.Index, match.Value);
+    }
+
+    static (Hit Target, Hit Action, int ClauseStart, int ClauseLength)? MacroEvent(string text)
     {
         foreach (Match clause in Clause.Matches(text))
         {
@@ -224,7 +230,7 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
                     && Compatible(x.Target.Value, x.Action.Value))
                 .OrderBy(x => Math.Abs(x.Action.Index - x.Target.Index)).FirstOrDefault();
             if (pair.Target is not null && pair.Action is not null)
-                return (Offset(pair.Target, clause.Index), Offset(pair.Action, clause.Index), clause.Index, clause.Length);
+                return (Hit.At(pair.Target, clause.Index), Hit.At(pair.Action, clause.Index), clause.Index, clause.Length);
         }
         return null;
     }
@@ -246,7 +252,6 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
     static int Gap(int firstIndex, int firstLength, int secondIndex, int secondLength)
         => firstIndex <= secondIndex ? secondIndex - (firstIndex + firstLength) : firstIndex - (secondIndex + secondLength);
 
-    static Match Offset(Match match, int offset) => Regex.Match(new string(' ', offset + match.Index) + match.Value, Regex.Escape(match.Value), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     static bool SameClause(string text, int first, int second)
         => !text[Math.Min(first, second)..Math.Max(first, second)].Any(x => x is '.' or ';' or '!' or '?' or '。' or '！' or '？');
 
