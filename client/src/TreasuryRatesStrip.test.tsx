@@ -37,6 +37,10 @@ const base: RatesResponse = {
     { key: "10s30s", label: "30Y − 10Y", valueBp: 36.6, changeBp: 8, mode: "intraday", reason: null },
   ],
   directionChecks: [],
+  etfProxies: [
+    { tenor: "2Y", symbol: "SHY", duration: 1.9, price: 81.1, previousClose: 80.959, returnPct: 0.174, impliedChangeBp: -9.2, rateChangeBp: null, etfDirection: "down", rateDirection: "unknown", agreement: "unknown", divergeRuns: 0, asOf: "2026-10-02T13:59:30Z", fetchedAt: "2026-10-02T13:59:40Z", source: "yahoo:SHY", reason: "실시간 금리가 없어 방향을 비교할 수 없습니다." },
+    { tenor: "10Y", symbol: "IEF", duration: 7.5, price: 89.3, previousClose: 89.0031, returnPct: 0.334, impliedChangeBp: -4.5, rateChangeBp: -5.6, etfDirection: "down", rateDirection: "down", agreement: "agree", divergeRuns: 0, asOf: "2026-10-02T13:59:30Z", fetchedAt: "2026-10-02T13:59:40Z", source: "yahoo:IEF", reason: null },
+  ],
   warnings: [],
   limitations: ["2Y는 실시간 지수가 없어 FRED 전일 공식값만 표시합니다."],
 };
@@ -55,7 +59,28 @@ describe("TreasuryRatesStrip", () => {
     expect(strip.querySelector('[data-mode="intraday"] .rates-change.down')?.textContent).toBe("-5.6bp");
     expect(strip.querySelector('.rates-change.up')?.textContent).toBe("+2.4bp");
     expect(screen.getByTitle(/FRED 2026-10-01 4.88%/).getAttribute("title")).toContain("FRED 전일");
+    expect(screen.getByTitle(/ETF IEF/).getAttribute("title")).toContain("ETF IEF +0.33% · ≈ 금리 -4.5bp · 방향 일치");
+    expect(screen.getByTitle(/ETF SHY/).getAttribute("title")).toContain("ETF SHY +0.17% · ≈ 금리 -9.2bp · 비교 불가 · 실시간 금리가 없어");
+    expect(strip.textContent).not.toContain("ETF 괴리");
     expect(screen.queryByRole("note")).toBeNull();
+  });
+
+  it("ETF 대리변수와 방향이 어긋나면 해당 만기에 괴리 태그를 붙이고 툴팁에 연속 횟수를 적는다", () => {
+    render(<TreasuryRatesStrip rates={{
+      ...base,
+      etfProxies: [
+        { ...base.etfProxies[1], price: 88.5, returnPct: -0.565, impliedChangeBp: 7.5, etfDirection: "up", agreement: "diverge", divergeRuns: 3 },
+        { tenor: "30Y", symbol: "TLT", duration: 16.5, price: null, previousClose: null, returnPct: null, impliedChangeBp: null, rateChangeBp: null, etfDirection: "unknown", rateDirection: "unknown", agreement: "unknown", divergeRuns: 0, asOf: null, fetchedAt: null, source: null, reason: "ETF 가격 수집 실패: HTTP 429" },
+      ],
+      warnings: ["10Y ETF IEF 당일 수익률(-0.57% ≈ 금리 +7.5bp)이 실시간 금리 변화(-5.6bp)와 방향이 어긋납니다.", "10Y ETF IEF 괴리가 3회 연속 이어집니다."],
+    }} />);
+    const strip = screen.getByRole("group", { name: "미국채 금리" });
+    expect(strip.textContent).toContain("10Y5.237%-5.6bpETF 괴리");
+    expect(strip.textContent).not.toContain("30Y5.603%+2.4bpETF 괴리");
+    expect(strip.querySelector('[data-etf="IEF"]')).not.toBeNull();
+    expect(screen.getByTitle(/^미국채 10Y/).getAttribute("title")).toContain("ETF IEF -0.56% · ≈ 금리 +7.5bp · 방향 불일치 · 3회 연속");
+    expect(screen.getByTitle(/ETF TLT 없음/).getAttribute("title")).toContain("HTTP 429");
+    expect(screen.getByRole("note", { name: "금리 경고" }).getAttribute("title")).toContain("3회 연속");
   });
 
   it("지연·결측 만기를 표시하고 경고 개수를 알린다", () => {
