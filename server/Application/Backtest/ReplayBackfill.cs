@@ -10,10 +10,13 @@ public interface IHistoricalBarSource
     bool Adjusted { get; }
     Task<HistoricalBarReadResult> ReadAsync(string symbol, DateTimeOffset from, DateTimeOffset to,
         CancellationToken ct);
+    /// <summary>원천이 내는 봉의 시각 라벨 규약(#332). null은 규약 표시가 없는 v0 데이터셋과 같다.</summary>
+    string? BarTimeConvention => null;
 }
 
 public sealed record HistoricalBarPage(string RequestCursor, string? NextCursor, IReadOnlyList<Candle> Bars,
-    int RawBarCount, bool ReachedRequestedStart, DateTimeOffset? OldestBar, string? StopReason);
+    int RawBarCount, bool ReachedRequestedStart, DateTimeOffset? OldestBar, string? StopReason,
+    string? BarTimeConvention = null);
 
 public interface IHistoricalBarPageSource : IHistoricalBarSource
 {
@@ -33,7 +36,8 @@ public sealed record ReplayImportRow(string Day, string Symbol, int ExpectedBars
 public sealed record ReplayImportReport(string Source, DateTimeOffset FetchedAt, DateTimeOffset AsOf, DateOnly From, DateOnly To,
     bool Adjusted, string TimeZone, string Benchmark, ImmutableArray<string> Watchlist,
     bool HistoricalWatchlistUnavailable, string DataStatus, string? DataReason,
-    ImmutableArray<ReplayImportSourceRow> Sources, ImmutableArray<ReplayImportRow> Rows);
+    ImmutableArray<ReplayImportSourceRow> Sources, ImmutableArray<ReplayImportRow> Rows,
+    string? BarTimeConvention = null);
 
 public sealed record ReplayImportSourceRow(string Symbol, int RawBars, int ActualTradingDays,
     bool ReachedRequestedStart, DateTimeOffset? OldestBar, string DataStatus, string? Reason,
@@ -103,14 +107,15 @@ public sealed class ReplayBackfill(IHistoricalBarSource source, TimeProvider clo
             {
                 var data = normalized[symbol].GetValueOrDefault(day) ?? new Normalized([], 0, 0);
                 var dayText = day.ToString("yyyy-MM-dd");
-                await WriteBarsAsync(root, dayText, symbol, data.Bars, ct);
+                await WriteBarsAsync(root, dayText, symbol, data.Bars, source.BarTimeConvention, ct);
                 rows.Add(new ReplayImportRow(dayText, symbol, 390, data.Bars.Length, data.Gaps, data.Duplicates,
                     data.Bars.FirstOrDefault()?.Timestamp, data.Bars.LastOrDefault()?.Timestamp,
                     !normalized[benchmark].ContainsKey(day)));
             }
 
         var report = new ReplayImportReport(source.Name, fetchedAt, end, from, to, source.Adjusted, "UTC",
-            benchmark.ToUpperInvariant(), [..symbols], true, dataStatus, dataReason, sourceRows, rows.ToImmutable());
+            benchmark.ToUpperInvariant(), [..symbols], true, dataStatus, dataReason, sourceRows, rows.ToImmutable(),
+            source.BarTimeConvention);
         Directory.CreateDirectory(root);
         await File.WriteAllTextAsync(Path.Combine(root, "import-report.json"),
             JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }), ct);
@@ -159,14 +164,11 @@ public sealed class ReplayBackfill(IHistoricalBarSource source, TimeProvider clo
         x.Low <= Math.Min(x.Open, x.Close) && x.Low > 0 && x.Volume >= 0;
 
     static async Task WriteBarsAsync(string root, string day, string symbol, IReadOnlyList<Candle> bars,
-        CancellationToken ct)
+        string? convention, CancellationToken ct)
     {
         var directory = Path.Combine(root, "bars", day);
         Directory.CreateDirectory(directory);
-        var lines = bars.Select(x => JsonSerializer.Serialize(new
-        {
-            t = x.Timestamp.UtcDateTime, o = x.Open, h = x.High, l = x.Low, c = x.Close, v = x.Volume
-        }));
+        var lines = bars.Select(x => StoredBarLine.Serialize(x, convention));
         await File.WriteAllLinesAsync(Path.Combine(directory, symbol + ".jsonl"), lines, ct);
     }
 

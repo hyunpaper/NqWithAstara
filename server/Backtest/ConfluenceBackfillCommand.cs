@@ -58,6 +58,7 @@ public sealed class TossHistoricalBarSource(TossClient client) : IHistoricalBarP
 {
     public string Name => "Toss";
     public bool Adjusted => true;
+    public string? BarTimeConvention => Domain.BarTimeConvention.Current;
     public Task<HistoricalBarReadResult> ReadAsync(string symbol, DateTimeOffset from, DateTimeOffset to,
         CancellationToken ct) => client.HistoricalCandles(symbol, from, to, ct);
     public IAsyncEnumerable<HistoricalBarPage> ReadPagesAsync(string symbol, DateTimeOffset from,

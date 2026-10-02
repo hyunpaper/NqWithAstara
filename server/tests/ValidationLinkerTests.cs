@@ -72,7 +72,7 @@ public sealed class ValidationLinkerTests
         var rows = new[]
         {
             Vx.Row("obs-1", [Vx.Candidate("E1", "READY")], minute: 41),
-            Vx.Row("obs-2", [Vx.Candidate("E1", "ENTERED")], minute: 42, engine: "v5-structure.2")
+            Vx.Row("obs-2", [Vx.Candidate("E1", "ENTERED")], minute: 42, engine: "v5-structure.3")
         };
 
         var result = Vx.Link(rows, []);
@@ -102,7 +102,7 @@ public sealed class ValidationLinkerTests
     public void TradeWhosePlanVersionDiffersFromTheObservationIsNotLinked()
     {
         var row = Vx.Row("obs-1", [Vx.Candidate("E1", "ENTERED")]);
-        var trade = Vx.Trade("t-1", "E1", 2.0, engine: "v5-structure.2");
+        var trade = Vx.Trade("t-1", "E1", 2.0, engine: "v5-structure.3");
 
         var result = Vx.Link([row], [trade]);
 

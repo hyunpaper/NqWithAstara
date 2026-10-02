@@ -168,8 +168,7 @@ public sealed class StructureD3ObservationTests
                      "status", "candidateSummary", "candidates", "warnings", "notes"
                  })
             Assert.True(root.TryGetProperty(field, out _), field);
-        // §11/§16B: shadow 관측 레코드 버전은 v5-structure.1-shadow이며 SimTrade.Logic에 쓰지 않는다.
-        Assert.Equal("v5-structure.1-shadow", root.GetProperty("recordVersion").GetString());
+        Assert.Equal("v5-structure.2-shadow", root.GetProperty("recordVersion").GetString());
     }
 
     static TrendAssessment WithComponents(ImmutableArray<TrendComponent> components, double? structureDirection,

@@ -112,31 +112,8 @@ public sealed class ConfluenceReplay(IBarStore store, ConfluencePolicy? policy =
     public async Task<ImmutableArray<IndicatorBar>> LoadAsync(string day, string symbol, CancellationToken ct) =>
         Parse(await store.ReadLinesAsync(day, symbol, ct));
 
-    /// <summary>K0 저장 스키마 `{t,o,h,l,c,v}` 한 줄 → 완료 1분봉. 깨진 줄은 건너뛴다.</summary>
-    public static ImmutableArray<IndicatorBar> Parse(IEnumerable<string> lines)
-    {
-        ArgumentNullException.ThrowIfNull(lines);
-        var result = ImmutableArray.CreateBuilder<IndicatorBar>();
-        foreach (var line in lines)
-        {
-            if (string.IsNullOrWhiteSpace(line)) continue;
-            try
-            {
-                var root = JsonDocument.Parse(line).RootElement;
-                var start = root.GetProperty("t").GetDateTimeOffset();
-                result.Add(new IndicatorBar(start, start.AddMinutes(1), Decimal(root, "o"), Decimal(root, "h"),
-                    Decimal(root, "l"), Decimal(root, "c"), Decimal(root, "v")));
-            }
-            catch (Exception exception) when (exception is JsonException or KeyNotFoundException or FormatException
-                                                  or InvalidOperationException or OverflowException)
-            {
-            }
-        }
-        result.Sort((a, b) => a.End.CompareTo(b.End));
-        return result.ToImmutable();
-    }
-
-    static decimal Decimal(JsonElement root, string name) => (decimal)root.GetProperty(name).GetDouble();
+    /// <summary>K0 저장 스키마 `{t,o,h,l,c,v[,tc]}` 한 줄 → 완료 1분봉. 깨진 줄은 건너뛰고 규약 혼재 세션은 비운다(#332).</summary>
+    public static ImmutableArray<IndicatorBar> Parse(IEnumerable<string> lines) => StoredBarLine.ParseSession(lines).Bars;
 }
 
 public sealed class ReplaySymbolHistory
