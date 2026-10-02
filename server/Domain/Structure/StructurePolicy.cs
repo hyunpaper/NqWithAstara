@@ -24,6 +24,8 @@ public sealed record StructurePolicy
     public int PivotLeft { get; init; } = 2;
     public int PivotRight { get; init; } = 2;
     public int Minimum1mBars { get; init; } = 30;
+    /// <summary>BAR_GAP 블로커가 보는 최근 완료 봉 창. 공백 뒤 완료 봉이 이 수 미만이면 차단하고, 그 밖의 과거 공백은 품질 경고만 남긴다(§16B, #315).</summary>
+    public int BarGapBlockWindowBars { get; init; } = 30;
 
     // ── 신선도 (§16A 표) ──
     public int NewEntryQuoteMaxAgeSeconds { get; init; } = 15;

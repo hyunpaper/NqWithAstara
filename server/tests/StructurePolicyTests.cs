@@ -48,7 +48,8 @@ public sealed class StructurePolicyTests
             StructurePolicy.Default with { RequireBreakoutAboveVwap = false },
             StructurePolicy.Default with { RequireMaximumReboundNetR = false },
             StructurePolicy.Default with { MaximumReboundNetR = 1.8 },
-            StructurePolicy.Default with { ExemptBreakoutFromPositiveBenchmarkHalfRStop = false }
+            StructurePolicy.Default with { ExemptBreakoutFromPositiveBenchmarkHalfRStop = false },
+            StructurePolicy.Default with { BarGapBlockWindowBars = 31 }
         };
         var hashes = variants.Select(x => x.PolicyHash).ToArray();
         Assert.DoesNotContain(baseline, hashes);
@@ -141,6 +142,7 @@ public sealed class StructurePolicyTests
         Assert.Equal(2, p.PivotLeft);
         Assert.Equal(2, p.PivotRight);
         Assert.Equal(30, p.Minimum1mBars);
+        Assert.Equal(30, p.BarGapBlockWindowBars);
         Assert.Equal(15, p.NewEntryQuoteMaxAgeSeconds);
         Assert.Equal(5, p.QuoteFutureToleranceSeconds);
         Assert.Equal(.35, p.ZoneEligibilityStrength);
