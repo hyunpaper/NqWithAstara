@@ -57,6 +57,22 @@ public sealed class HistoricalReplayDiagnosticsTests
     }
 
     [Fact]
+    public void 손실없는_코호트의_ProfitFactor는_null과_상태로_직렬화된다()
+    {
+        var diagnostics = HistoricalReplayDiagnosticsBuilder.Build([
+            Row("PULLBACK", "TARGET", 1.2, 1.4, .2, Context("UP", 61, 2.4m))
+        ]);
+
+        Assert.Null(diagnostics.Summary.ProfitFactor);
+        Assert.Equal("no-losses", diagnostics.Summary.ProfitFactorStatus);
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(diagnostics,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        var summary = json.RootElement.GetProperty("summary");
+        Assert.Equal(JsonValueKind.Null, summary.GetProperty("profitFactor").ValueKind);
+        Assert.Equal("no-losses", summary.GetProperty("profitFactorStatus").GetString());
+    }
+
+    [Fact]
     public void ItReportsCostEquationMismatchesWithoutChangingTheCostInputs()
     {
         var diagnostics = HistoricalReplayDiagnosticsBuilder.Build([

@@ -127,8 +127,35 @@ public static class SimulationEngine
         // When both levels occur within one minute and order is unknowable, stop-first is conservative.
         if (IsTargetHit(trade.Side, bar.High, trade.Target) || IsTargetHit(trade.Side, bar.Low, trade.Target))
             return Close(trade, "TARGET", trade.Target, bar.Timestamp, bar.Close, false, "COMPLETED_BAR_REPLAY", "BAR_TARGET_AFTER_STOP_CHECK", bar) with { LastEvaluatedBarAt = bar.Timestamp };
-        return trade with { LastPrice = bar.Close, LastPriceAt = BarCloseAt(bar), LastEvaluatedBarAt = bar.Timestamp,
+        var observed = trade with { LastPrice = bar.Close, LastPriceAt = BarCloseAt(bar), LastEvaluatedBarAt = bar.Timestamp,
             Execution = WithBarEvidence(trade.Execution, bar) };
+        return ArmTwoRFeeBreakEvenStop(observed, bar.Close);
+    }
+
+    static SimTrade ArmTwoRFeeBreakEvenStop(SimTrade trade, double completedClose)
+    {
+        var context = trade.Structure;
+        if (context?.StructuralExitPolicyVersion is not (StructuralSimulation.TwoRFeeBreakEvenExitPolicyVersion or
+            StructuralSimulation.TwoRTargetAndFeeBreakEvenExitPolicyVersion or
+            StructuralSimulation.HalfRPositiveBenchmarkFeeBreakEvenExitPolicyVersion or
+            StructuralSimulation.HalfRQualifiedTransitionFeeBreakEvenExitPolicyVersion))
+            return trade;
+        var plan = context.PlanSnapshot;
+        var originalStop = (double)plan.Stop;
+        var risk = Math.Abs(trade.EntryPrice - originalStop);
+        if (!(risk > 0) || !double.IsFinite(risk)) return trade;
+        var triggerR = context.StructuralExitPolicyVersion is StructuralSimulation.HalfRPositiveBenchmarkFeeBreakEvenExitPolicyVersion or
+            StructuralSimulation.HalfRQualifiedTransitionFeeBreakEvenExitPolicyVersion ? .5 : 2;
+        var reachedTrigger = trade.Side == TradeSide.Long
+            ? completedClose >= trade.EntryPrice + triggerR * risk
+            : completedClose <= trade.EntryPrice - triggerR * risk;
+        if (!reachedTrigger) return trade;
+        var costs = (double)(plan.FeePerShare + plan.ExtraCostPerShare + (plan.BorrowCostPerShare ?? 0));
+        var feeBreakEven = trade.Side == TradeSide.Long
+            ? trade.EntryPrice + costs : trade.EntryPrice - costs;
+        if (trade.Side == TradeSide.Long && feeBreakEven <= trade.Stop ||
+            trade.Side == TradeSide.Short && feeBreakEven >= trade.Stop) return trade;
+        return trade with { Stop = feeBreakEven, StopBasis = $"{triggerR:0.##}R 완료봉 이후 비용 회수 손절" };
     }
 
     static SimTrade ObserveQuote(SimTrade trade, double quotePrice, DateTimeOffset quoteAt)

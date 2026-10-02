@@ -62,6 +62,22 @@ public sealed class HistoricalStructureTradeReplayTests
     }
 
     [Fact]
+    public void ReplayConfirmationUsesTheSharedBreakoutBoundaryContract()
+    {
+        var pending = new PendingEntry("replay-breakout", "TSLA", TradeSide.Long,
+            Start, Start.AddMinutes(1), Start.AddMinutes(3), 95, 110, 101, "plan", "policy",
+            "BREAKOUT", 100, "hold-breakout-boundary.1");
+        var confirmationBar = new Candle(Start.AddMinutes(1), 101, 102, 99, 100, 10);
+
+        var resolution = HistoricalStructureTradeReplay.ResolvePending(pending, confirmationBar,
+            Start.AddMinutes(2));
+
+        Assert.True(resolution.Clear);
+        Assert.Equal(PendingEntryDecision.RejectedThesisInvalidated, resolution.Confirmation!.Decision);
+        Assert.Equal(PendingEntryDecision.RejectedThesisInvalidated.ToString(), resolution.Reason);
+    }
+
+    [Fact]
     public void ReplayEntryRequestCarriesCompletedBarsForCooldownEvaluation()
     {
         var stopped = new SimTrade("stopped", "TSLA", "PULLBACK", Start,
@@ -88,6 +104,50 @@ public sealed class HistoricalStructureTradeReplayTests
         var second = await replay.RunAsync(new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 8), ["TSLA"], default);
 
         Assert.Equal(JsonSerializer.Serialize(first["TSLA"]), JsonSerializer.Serialize(second["TSLA"]));
+    }
+
+    [Fact]
+    public async Task 종목병렬도_1과_2는_입력순서와_누적결과가_같다()
+    {
+        var bars = new MemoryBars();
+        bars.Seed("2026-09-08", "TSLA", 78, 5);
+        string[] symbols = ["SOXL", "TSLA", "KORU"];
+
+        var sequential = await new HistoricalStructureTradeReplay(bars, StructurePolicy.Default,
+                maxDegreeOfParallelism: 1)
+            .RunDetailedAsync(new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 8), symbols, default);
+        var parallel = await new HistoricalStructureTradeReplay(bars, StructurePolicy.Default,
+                maxDegreeOfParallelism: 2)
+            .RunDetailedAsync(new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 8), symbols, default);
+
+        Assert.Equal(JsonSerializer.Serialize(sequential), JsonSerializer.Serialize(parallel));
+        Assert.Equal(symbols.Order(StringComparer.Ordinal), parallel.Coverage.Select(x => x.Symbol));
+    }
+
+    [Fact]
+    public async Task 종목Replay는_동시에_두개까지만_읽는다()
+    {
+        var bars = new ConcurrencyTrackingBars();
+
+        var run = await new HistoricalStructureTradeReplay(bars, StructurePolicy.Default,
+                maxDegreeOfParallelism: 2)
+            .RunDetailedAsync(new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 8),
+                ["SOXL", "TSLA", "KORU", "NVDA"], default);
+
+        Assert.Equal(2, bars.MaximumConcurrency);
+        Assert.Equal(4, run.Trades.Count);
+    }
+
+    [Fact]
+    public async Task 종목Replay는_저장소읽기_취소를_호출자에게_전파한다()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.CancelAfter(TimeSpan.FromMilliseconds(50));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            new HistoricalStructureTradeReplay(new CancellationBars(), StructurePolicy.Default)
+                .RunDetailedAsync(new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 8),
+                    ["SOXL", "TSLA", "KORU"], cancellation.Token));
     }
 
     [Fact]
@@ -124,6 +184,47 @@ public sealed class HistoricalStructureTradeReplayTests
         Assert.True(source.IsModeled);
         Assert.Equal("historical.ohlcv-spread-borrow-model.v2", source.SourceName);
         Assert.Equal(.10m, (liquidity!.BestAsk!.Value - liquidity.BestBid!.Value));
+    }
+
+    [Fact]
+    public void FeeOnly프로필은_잠금호가와_0spread_0borrow를_명시한다()
+    {
+        var model = HistoricalReplayCostModel.FeeOnlyLongOnly;
+        var source = new ModeledHistoricalLiquiditySource(model);
+        var liquidity = source.Get("TSLA", Start, 100m);
+
+        Assert.Equal("historical.fee-only-long-only.v1", source.SourceName);
+        Assert.Equal(0, model.SpreadPercent);
+        Assert.Null(model.ShortBorrowPercent);
+        Assert.Equal(100m, liquidity!.BestBid);
+        Assert.Equal(100m, liquidity.BestAsk);
+    }
+
+    [Fact]
+    public void FeeOnly_long거래는_gross에서_왕복수수료_0점2퍼센트만_차감한다()
+    {
+        var trade = new SimTrade("long", "TSLA", "PULLBACK", Start, 100, 110, 95,
+            null, null, "OPEN", null, null, null, 100, SessionEnd: Start.AddHours(1));
+        var result = HistoricalStructureTradeReplay.ReplayPendingBars([trade], "TSLA",
+            [new Candle(Start.AddMinutes(1), 100, 110, 99, 110, 1000)], 0);
+
+        Assert.Equal(9.8, Assert.Single(result).PnlPercent);
+    }
+
+    [Fact]
+    public void Replay_longOnly가드는_borrow설정과_무관하게_short를_선택전에_거절한다()
+    {
+        var longCandidate = Candidate("long", TradeSide.Long);
+        var shortCandidate = Candidate("short", TradeSide.Short) with { KindName = "A_BREAKOUT" };
+        var policy = StructurePolicy.Default with { ShortBorrowCostPercent = .02 };
+
+        var filtered = HistoricalStructureTradeReplay.ApplyReplayPositionPolicy([shortCandidate, longCandidate]);
+
+        Assert.NotNull(policy.ShortBorrowCostPercent);
+        var rejected = Assert.Single(filtered.Where(x => x.Side == TradeSide.Short));
+        Assert.Equal(CandidateDisposition.Rejected, rejected.Disposition);
+        Assert.Contains(HistoricalStructureTradeReplay.ReplayLongOnlyShortRejected, rejected.RejectionCodes);
+        Assert.Equal(longCandidate.EventId, CandidateSelection.SelectPreferred(filtered)!.EventId);
     }
 
     [Fact]
@@ -189,7 +290,7 @@ public sealed class HistoricalStructureTradeReplayTests
 
         Assert.Equal(3, summary.Generated);
         Assert.Equal(1, summary.StructuralReady);
-        Assert.Equal(2, summary.Rejected);
+        Assert.Equal(2, summary.GateRejected);
         Assert.True(summary.CountsOverlap);
         Assert.Equal(2, summary.Gates.Sum(x => x.ExclusiveFirstFailures));
         Assert.Equal(1, summary.Gates.Single(x => x.Reason == TrendEvaluator.BlockerMissing5mStructure)
@@ -212,12 +313,102 @@ public sealed class HistoricalStructureTradeReplayTests
         var summary = HistoricalStructureTradeReplay.SummarizeGates(rows);
 
         Assert.Equal(3, summary.StructuralReady);
-        Assert.Equal(1, summary.FinalApproved);
-        Assert.Equal(2, summary.Rejected);
+        Assert.Equal(1, summary.GateApproved);
+        Assert.Equal(2, summary.GateRejected);
         Assert.Equal(1, summary.Gates.Single(x => x.Reason == StructuralPlanner.MissingLiquidityCost)
             .ExclusiveFirstFailures);
         Assert.Equal(1, summary.Gates.Single(x => x.Reason == "EXPECTED_NET_R_NON_POSITIVE")
             .ExclusiveFirstFailures);
+    }
+
+    [Fact]
+    public void ReboundVwap거절은_진단과_실행퍼널에_동일한_사유로_남는다()
+    {
+        var row = Diagnostic("rebound-above-vwap", CandidateDisposition.Rejected,
+            [SetupDetector.CodeReboundLongAboveVwap]);
+
+        var summary = HistoricalStructureTradeReplay.SummarizeGates([row]);
+
+        Assert.Equal(1, summary.GateRejected);
+        Assert.Equal(0, summary.ExecutionFunnel!.Preferred);
+        Assert.True(summary.ExecutionFunnel.Reconciled);
+        Assert.Equal(1, summary.Gates.Single(x => x.Reason == SetupDetector.CodeReboundLongAboveVwap).Candidates);
+    }
+
+    [Fact]
+    public void 실행퍼널은_EventId별_후보부터_체결까지_서로다른_분모를_보존한다()
+    {
+        var rows = new[]
+        {
+            Diagnostic("candidate-only", CandidateDisposition.Rejected),
+            Diagnostic("preferred", CandidateDisposition.Ready) with { Preferred = true },
+            Diagnostic("pending", CandidateDisposition.Ready) with { Preferred = true, PendingQueued = true },
+            Diagnostic("confirmed", CandidateDisposition.Ready) with
+                { Preferred = true, PendingQueued = true, Confirmed = true },
+            Diagnostic("filled", CandidateDisposition.Ready) with
+                { Preferred = true, PendingQueued = true, Confirmed = true, Filled = true }
+        };
+
+        var funnel = HistoricalStructureTradeReplay.SummarizeGates(rows).ExecutionFunnel!;
+
+        Assert.Equal(5, funnel.Candidates);
+        Assert.Equal(4, funnel.Preferred);
+        Assert.Equal(3, funnel.PendingQueued);
+        Assert.Equal(2, funnel.Confirmed);
+        Assert.Equal(1, funnel.Filled);
+        Assert.True(funnel.Reconciled);
+        Assert.Equal("distinct-entry-event-id", funnel.Unit);
+    }
+
+    [Fact]
+    public void 실행퍼널은_선행단계없는_체결을_불일치로_표시한다()
+    {
+        var row = Diagnostic("broken", CandidateDisposition.Ready) with { Filled = true };
+
+        Assert.False(HistoricalStructureTradeReplay.SummarizeGates([row]).ExecutionFunnel!.Reconciled);
+    }
+
+    [Fact]
+    public void Preferred이후_재평가된_nonReady상태는_승인과_체결단계를_되돌리지않는다()
+    {
+        var attempted = Diagnostic("attempt", CandidateDisposition.Ready) with
+        {
+            Preferred = true,
+            PendingQueued = true,
+            Confirmed = true,
+            Filled = true
+        };
+        var later = Diagnostic("attempt", CandidateDisposition.Expired,
+            ["DISPOSITION_EXPIRED"], costComplete: false, expectedNetR: null);
+
+        var reconciled = HistoricalStructureTradeReplay.ReconcileDiagnostic(attempted, later);
+        var summary = HistoricalStructureTradeReplay.SummarizeGates([reconciled]);
+
+        Assert.True(reconciled.StructuralReady);
+        Assert.True(reconciled.FinalApproved);
+        Assert.True(reconciled.GateApproved);
+        Assert.True(reconciled.Filled);
+        Assert.Equal(1, summary.FinalApproved);
+        Assert.Equal(1, summary.GateApproved);
+        Assert.Equal(0, summary.Rejected);
+        Assert.Equal(0, summary.GateRejected);
+    }
+
+    [Fact]
+    public void 기존후보Json은_FinalApproved를_보존하고_새GateApproved를_기본값으로읽는다()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var json = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(
+            Diagnostic("legacy", CandidateDisposition.Ready), options))!.AsObject();
+        json.Remove("gateApproved");
+
+        var restored = JsonSerializer.Deserialize<HistoricalStructureTradeReplay.ReplayCandidateDiagnostic>(
+            json.ToJsonString(), options);
+
+        Assert.NotNull(restored);
+        Assert.True(restored.FinalApproved);
+        Assert.True(restored.GateApproved);
+        Assert.Equal(1, HistoricalStructureTradeReplay.SummarizeGates([restored]).GateApproved);
     }
 
     [Fact]
@@ -253,6 +444,16 @@ public sealed class HistoricalStructureTradeReplayTests
         disposition == CandidateDisposition.Ready && costComplete && expectedNetR is > 0,
         costComplete, false, "test", expectedNetR,
         (reasons ?? []).ToImmutableArray(), ImmutableArray<string>.Empty);
+
+    static EntryCandidate Candidate(string id, TradeSide side)
+    {
+        var quality = new EntryQualityResult(60, [], [], [], [], []);
+        var planning = new PlanEvaluation(null, [], null, null, null, null, null, null,
+            null, 2, null, null, null, null, false, null, []);
+        return new EntryCandidate(id, id, SetupKind.Pullback, "PULLBACK", "zone", Start, Start, Start, Start,
+            Start.AddMinutes(5), CandidateDisposition.Ready, 100, 99, 60, quality, null, planning,
+            [], [], false, false, null, side);
+    }
 
     sealed class MemoryBars : IBarStore
     {
@@ -298,6 +499,69 @@ public sealed class HistoricalStructureTradeReplayTests
         {
             Calls++;
             return new StructureLiquidity(99.99m, 100.01m, observedAt, 100, 100);
+        }
+    }
+
+    sealed class ConcurrencyTrackingBars : IBarStore
+    {
+        int _active;
+        int _maximum;
+        public int MaximumConcurrency => _maximum;
+
+        public Task<string?> LastLineAsync(string day, string symbol, CancellationToken ct) =>
+            Task.FromResult<string?>(null);
+        public Task AppendAsync(string day, string symbol, string line, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<string>> ListDaysAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(["2026-09-08"]);
+        public Task<IReadOnlyList<string>> ListSymbolsAsync(string day, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>([]);
+        public Task<int> CountLinesAsync(string day, string symbol, CancellationToken ct) => Task.FromResult(0);
+        public async Task<IReadOnlyList<string>> ReadLinesAsync(string day, string symbol, CancellationToken ct)
+        {
+            var active = Interlocked.Increment(ref _active);
+            InterlockedExtensions.Max(ref _maximum, active);
+            try
+            {
+                await Task.Delay(50, ct);
+                return [];
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _active);
+            }
+        }
+        public Task DeleteDayAsync(string day, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    sealed class CancellationBars : IBarStore
+    {
+        public Task<string?> LastLineAsync(string day, string symbol, CancellationToken ct) =>
+            Task.FromResult<string?>(null);
+        public Task AppendAsync(string day, string symbol, string line, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<string>> ListDaysAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(["2026-09-08"]);
+        public Task<IReadOnlyList<string>> ListSymbolsAsync(string day, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>([]);
+        public Task<int> CountLinesAsync(string day, string symbol, CancellationToken ct) => Task.FromResult(0);
+        public async Task<IReadOnlyList<string>> ReadLinesAsync(string day, string symbol, CancellationToken ct)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return [];
+        }
+        public Task DeleteDayAsync(string day, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    static class InterlockedExtensions
+    {
+        public static void Max(ref int location, int value)
+        {
+            var current = Volatile.Read(ref location);
+            while (current < value)
+            {
+                var observed = Interlocked.CompareExchange(ref location, value, current);
+                if (observed == current) return;
+                current = observed;
+            }
         }
     }
 }

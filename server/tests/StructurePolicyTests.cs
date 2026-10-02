@@ -4,6 +4,9 @@ using Xunit;
 /// <summary>설계 §16A 정책·수치 계약. 정책 수치가 바뀌면 hash가 바뀌고, 실행 컨텍스트는 hash에 들어가지 않는다.</summary>
 public sealed class StructurePolicyTests
 {
+    const string PolicyHashBeforeReboundLongVwapGate =
+        "65281f3f5c25b48e469bd9d5c8674f8926bdb9328dd672d10d5a00d4583e39b5";
+
     [Fact]
     public void PolicyHashIsDeterministicForTheSamePolicy()
     {
@@ -31,7 +34,21 @@ public sealed class StructurePolicyTests
             StructurePolicy.Default with { MinimumNetR = 1.3 },
             StructurePolicy.Default with { RecencyTradingMinutes = 391 },
             StructurePolicy.Default with { Version = "v5-structure.2" },
-            StructurePolicy.Default with { ObservationDailyByteLimit = 1 }
+            StructurePolicy.Default with { ReboundLongVwapGateVersion = "reject-positive-distance.2" },
+            StructurePolicy.Default with { BreakoutConfirmationGateVersion = "hold-breakout-boundary.2" },
+            StructurePolicy.Default with { AllowTransitionPullback = true },
+            StructurePolicy.Default with { ObservationDailyByteLimit = 1 },
+            StructurePolicy.Default with { RequirePositiveBenchmarkForRebound = true },
+            StructurePolicy.Default with { RequirePullbackNearVwap = true },
+            StructurePolicy.Default with { PullbackMaximumVwapDistanceAtr = 2.0 },
+            StructurePolicy.Default with { RequireBreakoutNearVwap = true },
+            StructurePolicy.Default with { BreakoutMaximumVwapDistanceAtr = 4.9 },
+            StructurePolicy.Default with { RequireMinimumReboundEntryQuality = true },
+            StructurePolicy.Default with { MinimumReboundEntryQuality = 49.9 },
+            StructurePolicy.Default with { RequireBreakoutAboveVwap = true },
+            StructurePolicy.Default with { RequireMaximumReboundNetR = true },
+            StructurePolicy.Default with { MaximumReboundNetR = 1.8 },
+            StructurePolicy.Default with { ExemptBreakoutFromPositiveBenchmarkHalfRStop = true }
         };
         var hashes = variants.Select(x => x.PolicyHash).ToArray();
         Assert.DoesNotContain(baseline, hashes);
@@ -50,7 +67,71 @@ public sealed class StructurePolicyTests
         Assert.Contains("\"ZoneEligibilityStrength\":0.35", json);
         Assert.Contains("\"PriceTick\":0.01", json);
         Assert.Contains("\"PivotLeft\":2", json);
+        Assert.Contains("\"AllowTransitionPullback\":false", json);
+        Assert.Contains("\"RequirePullbackNearVwap\":false", json);
+        Assert.Contains("\"PullbackMaximumVwapDistanceAtr\":2.1", json);
+        Assert.Contains("\"RequireBreakoutNearVwap\":false", json);
+        Assert.Contains("\"BreakoutMaximumVwapDistanceAtr\":5", json);
+        Assert.Contains("\"RequireMinimumReboundEntryQuality\":false", json);
+        Assert.Contains("\"MinimumReboundEntryQuality\":50", json);
+        Assert.Contains("\"RequireBreakoutAboveVwap\":false", json);
+        Assert.Contains("\"RequireMaximumReboundNetR\":false", json);
+        Assert.Contains("\"MaximumReboundNetR\":1.9", json);
         Assert.DoesNotContain("2026", json);           // 실행 시각/경로가 들어가면 hash가 재현되지 않는다
+    }
+
+    [Fact]
+    public void TransitionPullbackIsBlockedByDefaultAndExplicitEnablementStartsANewPolicyLineage()
+    {
+        var policy = StructurePolicy.Default;
+
+        Assert.False(policy.AllowTransitionPullback);
+        var enabled = policy with { AllowTransitionPullback = true };
+        Assert.NotEqual(policy.PolicyHash, enabled.PolicyHash);
+
+        var current = StructuralLatch.Empty(Fx.Symbol, Fx.SessionStart, policy.PolicyHash);
+        Assert.True(current.Matches(Fx.SessionStart, policy.PolicyHash));
+        Assert.False(current.Matches(Fx.SessionStart, enabled.PolicyHash));
+    }
+
+    [Fact]
+    public void BreakoutConfirmationGateHasItsOwnPolicyLineage()
+    {
+        var policy = StructurePolicy.Default;
+
+        Assert.Equal("hold-breakout-boundary.1", policy.BreakoutConfirmationGateVersion);
+        Assert.Contains("\"BreakoutConfirmationGateVersion\":\"hold-breakout-boundary.1\"",
+            policy.CanonicalJson, StringComparison.Ordinal);
+        Assert.NotEqual(policy.PolicyHash,
+            (policy with { BreakoutConfirmationGateVersion = "hold-breakout-boundary.2" }).PolicyHash);
+    }
+
+    [Fact]
+    public void ReboundLongVwapGateHasItsOwnPolicyLineageWithoutChangingTheEngineVersion()
+    {
+        var policy = StructurePolicy.Default;
+
+        Assert.Equal("reject-positive-distance.1", policy.ReboundLongVwapGateVersion);
+        Assert.Contains("\"ReboundLongVwapGateVersion\":\"reject-positive-distance.1\"", policy.CanonicalJson,
+            StringComparison.Ordinal);
+        Assert.NotEqual(PolicyHashBeforeReboundLongVwapGate, policy.PolicyHash);
+        Assert.NotEqual(policy.PolicyHash,
+            (policy with { ReboundLongVwapGateVersion = "reject-positive-distance.2" }).PolicyHash);
+        Assert.Equal("v5-structure.1", policy.Version);
+    }
+
+    [Fact]
+    public void ReboundLongVwapPolicyHashChangeStartsANewLatchLineage()
+    {
+        var policy = StructurePolicy.Default;
+        var previous = StructuralLatch.Empty(Fx.Symbol, Fx.SessionStart, PolicyHashBeforeReboundLongVwapGate)
+            with { Seeded = true, WatermarkBarStart = Fx.At(30) };
+
+        Assert.False(previous.Matches(Fx.SessionStart, policy.PolicyHash));
+        var fresh = StructuralLatch.Empty(Fx.Symbol, Fx.SessionStart, policy.PolicyHash);
+        Assert.False(fresh.Seeded);
+        Assert.Null(fresh.WatermarkBarStart);
+        Assert.True(fresh.Matches(Fx.SessionStart, policy.PolicyHash));
     }
 
     [Fact]
@@ -75,6 +156,7 @@ public sealed class StructurePolicyTests
         Assert.Equal(.15, p.ZoneHalfWidthAtrFactor);
         Assert.Equal(.5, p.ReactionAtrScale);
         Assert.Equal(390, p.RecencyTradingMinutes);
+        Assert.False(p.RequirePositiveBenchmarkForRebound);
     }
 
     [Fact]
