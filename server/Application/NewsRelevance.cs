@@ -15,7 +15,7 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
     const RegexOptions Options = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled;
     const RegexOptions CaseSensitive = RegexOptions.CultureInvariant | RegexOptions.Compiled;
 
-    static readonly Regex NonMarket = new(@"\b(football|soccer|premier league|champions league|world cup|goal|match|actor|actress|celebrity|movie|film|music|concert)\b|축구|프리미어리그|챔피언스리그|월드컵|골을?\s*(?:넣|기록)|배우|연예|영화|가수|콘서트", Options);
+    static readonly Regex NonMarket = new(@"\b(football|soccer|premier league|champions league|world cup|scor(?:e|es|ed|ing)\s+(?:a\s+|the\s+|his\s+|her\s+|their\s+)?(?:winning\s+|late\s+)?goals?|(?:football|soccer)\s+match(?:es)?|match\s+against|actor|actress|celebrity|movie|film|music|concert)\b|축구|프리미어리그|챔피언스리그|월드컵|골을?\s*(?:넣|기록)|배우|연예|영화|가수|콘서트", Options);
     static readonly Regex FinancialQualifier = new(@"\b(stocks?|equity|investors?|tariffs?|sanctions?|inflation|Federal Reserve|Treasur(?:y|ies)|bond yields?|interest rates?|payrolls?)\b|주가|증시|투자자|관세|제재|물가|연준|국채|채권금리|금리|소비자물가|생산자물가|고용|국내총생산", Options);
     static readonly Regex MacroTarget = new(@"\b(Trump|China|Chinese|Iran|Iranian|Strait of Hormuz|Hormuz|oil|crude|Treasur(?:y|ies)|bond|yield|interest rates?|Federal Reserve|Saudi(?: Arabia)?|Houthi(?:s)?|Yemen|payrolls?|jobless claims?|durable goods)\b|트럼프|중국|이란|호르무즈|유가|원유|국채|채권금리|채권|금리|연준|사우디(?:아라비아)?|후티|예멘|미사일|공습|소비자물가|생산자물가|고용|실업수당|내구재|구매관리자지수|국내총생산", Options);
     static readonly Regex MacroAction = new(@"\b(announce[ds]?|impose[ds]?|raise[ds]?|cut[s]?|hold[s]?|increase[ds]?|decrease[ds]?|rise[sn]?|fall[s]?|surge[ds]?|drop(?:ped|s)?|attack(?:ed|s)?|strike[sd]?|airstrike[sd]?|launch(?:ed|es)?|block(?:ed|s)?|close[sd]?|disrupt(?:ed|s)?|resume[ds]?|release[sd]?|report(?:ed|s)?|beat[s]?|miss(?:ed|es)?|expand(?:ed|s)?|restrict(?:ed|s)?)\b|발표|부과|인상|인하|동결|상승|하락|급등|급락|공격|타격|공습|발사|봉쇄|폐쇄|차질|재개|확대|축소|제한|상회|하회", Options);
@@ -40,9 +40,6 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
         var explicitTargets = Targets(item, text);
         var nonMarket = NonMarket.IsMatch(text);
 
-        if (nonMarket && macroEvent is null)
-            return Result(NewsRelevanceDecisions.Exclude, "non_market", "", "", [], Evidence(text), "non_market_context");
-
         if (macroEvent is not null)
         {
             var kind = MacroKind(macroTarget.Value, text);
@@ -57,6 +54,9 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
             return Result(NewsRelevanceDecisions.Include, CompanyKind(companyAction.Value), companyTargets[0].Id,
                 companyAction.Value, companyTargets, Span(text, companyAction.Index, companyAction.Index),
                 "company_event_confirmed");
+
+        if (nonMarket)
+            return Result(NewsRelevanceDecisions.Exclude, "non_market", "", "", [], Evidence(text), "non_market_context");
 
         if (macroTarget.Success || companyAction.Success || explicitTargets.Count > 0 || AmbiguousWord.IsMatch(text))
             return Result(NewsRelevanceDecisions.Review, "unknown", Actor(text, macroTarget.Value),
