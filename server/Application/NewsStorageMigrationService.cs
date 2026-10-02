@@ -4,8 +4,11 @@ namespace Astra.Server.Application;
 
 /// <summary>검증된 SBHNews 전환 뒤 뉴스 전용 저장소만 정리한다(#304).</summary>
 public sealed class NewsStorageMigrationService(NewsOptions options, NewsRuntimeState state, INewsStore store,
-    NewsTranslationQueue? translations = null, NewsFeedService? feedService = null)
+    NewsFeedService? feedService = null)
 {
+    /// <summary>제거된 번역 파이프라인이 남긴 캐시 파일(#339). 정리 때 함께 지운다.</summary>
+    public const string LegacyTranslationCacheFile = "translation-cache.json";
+
     public async Task<NewsStorageMigrationPlan> PlanAsync(CancellationToken ct)
     {
         var healthy = IsHealthy();
@@ -27,8 +30,6 @@ public sealed class NewsStorageMigrationService(NewsOptions options, NewsRuntime
     {
         if (!plan.CanExecute || !IsHealthy()) return new NewsStorageMigrationResult(false,
             plan.Reason ?? "SBHNews 수집 성공 상태가 유지되지 않아 정리할 수 없습니다.", [], 0);
-        if (translations is not null)
-            return await translations.RunExclusiveMaintenanceAsync(token => ExecuteCoreAsync(plan, token), ct);
         return await ExecuteCoreAsync(plan, ct);
     }
 
@@ -42,7 +43,7 @@ public sealed class NewsStorageMigrationService(NewsOptions options, NewsRuntime
         if (feedService is not null) await feedService.RefreshDailyStorageAccountingAsync(ct);
         if (feedService is not null) await feedService.PreserveSbhStateAsync(ct);
         else await PreserveSbhStateAsync(ct);
-        if (translations is null) await store.DeleteAsync(NewsTranslationQueue.CacheFile, ct);
+        await store.DeleteAsync(LegacyTranslationCacheFile, ct);
         state.ClearLegacyRecords();
         return new NewsStorageMigrationResult(true, null, rewritten, removed);
     }

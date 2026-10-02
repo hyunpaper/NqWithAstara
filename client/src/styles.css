@@ -1057,10 +1057,6 @@ h2 {
 .news-detail-actions button[aria-pressed="true"] { border-color:var(--accent); color:var(--accent); }
 .news-detail-body { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.65; font-size:13px; max-height:260px; overflow:auto; }
 .news-detail-body p { margin:0 0 10px; }
-.news-translation-state, .news-original-label { color:var(--muted); font-size:11px; }
-.news-original-label { margin-top:12px !important; font-weight:600; }
-.news-translation-retry { margin:0 0 10px; border:1px solid var(--line); border-radius:6px; padding:5px 8px; color:inherit; background:var(--panel); font-size:11px; cursor:pointer; }
-.news-translation-retry:disabled { cursor:wait; opacity:.65; }
 .news-detail-meta { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:14px 0 0; font-size:11px; }
 .news-detail-meta div { border-top:1px solid var(--line); padding-top:6px; }
 .news-detail-meta dt { color:var(--muted); }

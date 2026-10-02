@@ -33,7 +33,7 @@ public sealed class NewsStorageMigrationServiceTests
         var legacy = new NewsRecord("old", "기존", "Fox News", DateTimeOffset.UtcNow, [], [], ["MARKET"], "neutral", 0, "", "", 0, DateTimeOffset.UtcNow);
         store.Files["2026-09-26.jsonl"] = [System.Text.Json.JsonSerializer.Serialize(sbh), System.Text.Json.JsonSerializer.Serialize(legacy)];
         store.Texts[NewsFeedService.StateFile] = System.Text.Json.JsonSerializer.Serialize(new NewsFeedState(0, null, Inbox: [new NewsInboxEntry([], new NewsFeedItem("sbh", "", "", "", DateTimeOffset.UtcNow, [], Provider: NewsFeedProviders.SbhNews), DateTimeOffset.UtcNow, true)]));
-        store.Texts[NewsTranslationQueue.CacheFile] = "{}";
+        store.Texts[NewsStorageMigrationService.LegacyTranslationCacheFile] = "{}";
         store.Texts["other.json"] = "보존";
         var service = new NewsStorageMigrationService(options, state, store);
 
@@ -45,7 +45,7 @@ public sealed class NewsStorageMigrationServiceTests
         Assert.Single(store.Files["2026-09-26.jsonl"]);
         Assert.Contains("sbh", store.Files["2026-09-26.jsonl"][0]);
         Assert.Contains(NewsFeedProviders.SbhNews, store.Texts[NewsFeedService.StateFile]);
-        Assert.False(store.Texts.ContainsKey(NewsTranslationQueue.CacheFile));
+        Assert.False(store.Texts.ContainsKey(NewsStorageMigrationService.LegacyTranslationCacheFile));
         Assert.Equal("보존", store.Texts["other.json"]);
     }
 

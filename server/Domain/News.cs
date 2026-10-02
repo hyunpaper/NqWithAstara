@@ -64,7 +64,7 @@ public sealed record NewsArticle(
 /// <summary>분류 입력으로 무엇을 썼는지(#151). 판정 근거를 사후에 되짚기 위해 레코드에 남긴다.</summary>
 public static class NewsInputKinds
 {
-    /// <summary>상세의 AI 요약(`translations.translated.ko_KR.summary`).</summary>
+    /// <summary>상세의 AI 요약.</summary>
     public const string Summary = "summary";
 
     /// <summary>상세 본문 블록 또는 목록 요약.</summary>
@@ -203,12 +203,11 @@ public static class NewsSentimentDecay
 
 /// <summary>로컬 LLM 분류 결과(#151 §3). 심볼은 관심종목에 한정하지 않는다.</summary>
 public sealed record NewsClassification(IReadOnlyList<string> Symbols, string Sentiment, int Strength, string Reason,
-    string? KoreanTitle = null, string? KoreanSource = null,
     IReadOnlyDictionary<string, int>? ImpactScores = null, bool Irrelevant = false);
 
 /// <summary>
 /// 분류 JSON 파서(#151 §3). 코드펜스·앞뒤 잡문을 제거하고 첫 JSON 객체만 읽는다.
-/// 형식이 어긋나면 null을 돌려 호출자가 unclassified로 남기게 한다.
+/// 형식이 어긋나면 null을 돌려 호출자가 unclassified로 남기게 한다. title_ko·source_ko는 무시한다(#339).
 /// </summary>
 public static class NewsClassificationParser
 {
@@ -233,11 +232,9 @@ public static class NewsClassificationParser
 
             if (irrelevant)
                 return new NewsClassification(symbols, NewsSentiments.Neutral, 0, Reason(root),
-                    Text(root, "title_ko"), Text(root, "source_ko"),
                     symbols.ToDictionary(x => x, _ => 0, StringComparer.OrdinalIgnoreCase), Irrelevant: true);
 
-            return new NewsClassification(symbols, sentiment!, Strength(root), Reason(root),
-                Text(root, "title_ko"), Text(root, "source_ko"), ImpactScores(root));
+            return new NewsClassification(symbols, sentiment!, Strength(root), Reason(root), ImpactScores(root));
         }
         catch (JsonException) { return null; }
     }
