@@ -148,8 +148,8 @@ public sealed class ConfluencePolicyTests
         Assert.Contains("\"CapStructuralTargetAtTwoR\":true", StructurePolicy.Default.CanonicalJson);
         Assert.Contains("\"EnableHalfRFeeBreakEvenStopForPositiveBenchmark\":true", StructurePolicy.Default.CanonicalJson);
         Assert.Contains("\"ExemptBreakoutFromPositiveBenchmarkHalfRStop\":true", StructurePolicy.Default.CanonicalJson);
-        // #332 봉 시작 시각 규약으로 Version을 v5-structure.2로 올린 뒤의 정책 해시.
-        Assert.Equal("d7683e146a40f5ac329b5d9bc25fe081ff6755b58c78018ac05fbb8bf6049b9b",
+        // #245 Cycle77 PULLBACK 롱 비활성을 기본값으로 올린 뒤의 정책 해시(v5-structure.2).
+        Assert.Equal("5fcfe23c70195acd5082ee2a9373e7d831c045529288600f6298f6ce9a1d5788",
             StructurePolicy.Default.PolicyHash);
         Assert.NotEqual(StructurePolicy.Default.PolicyHash, ConfluencePolicy.Default.PolicyHash);
     }

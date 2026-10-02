@@ -10,6 +10,8 @@ static class D2
 {
     public static readonly StructurePolicy P = StructurePolicy.Default;
 
+    public static readonly StructurePolicy AllLongKinds = StructurePolicy.Default with { DisabledLongKinds = [] };
+
     /// <summary>지정한 값을 그대로 갖는 강도. D1 계산은 별도 D1 테스트가 검증한다.</summary>
     public static ZoneStrength Strength(double value, int success = 1, int failed = 0, int families = 2) =>
         new(1 - Math.Exp(-1.0 / 2), .5, 1, 1 - Math.Exp(-families / 2.0), Math.Exp(-failed), value,
@@ -43,7 +45,8 @@ static class D2
         EnableHalfRFeeBreakEvenStopForPositiveBenchmark = false,
         AllowQualifiedTransitionPullback = false,
         AllowQualifiedTransitionBreakout = false,
-        ExemptBreakoutFromPositiveBenchmarkHalfRStop = false
+        ExemptBreakoutFromPositiveBenchmarkHalfRStop = false,
+        DisabledLongKinds = []
     };
 
     /// <summary>#209 netR 상한 밖의 주제를 다루는 fixture용 정책. 상한 자체는 <c>StructureMaxNetRTests</c>가 고정한다.</summary>
