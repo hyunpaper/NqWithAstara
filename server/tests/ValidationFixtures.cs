@@ -9,7 +9,7 @@ using Astra.Server.Domain.Validation;
 static class Vx
 {
     public const string Symbol = "TEST";
-    public const string Engine = "v5-structure.1";
+    public const string Engine = "v5-structure.2";
     public const string Policy = "hash-A";
 
     public static readonly DateTimeOffset Session = new(2026, 9, 9, 9, 30, 0, TimeSpan.FromHours(-4));

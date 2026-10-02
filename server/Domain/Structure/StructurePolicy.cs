@@ -14,7 +14,7 @@ namespace Astra.Server.Domain.Structure;
 public sealed record StructurePolicy
 {
     // ── 버전 ──
-    public string Version { get; init; } = "v5-structure.1";
+    public string Version { get; init; } = "v5-structure.2";
     public string EligibilityCostModelVersion { get; init; } = "eligibility.fee-plus-spread.1";
     public string RealizedFillCostModelVersion { get; init; } = "realized.v4-fill.1";
     public string ReboundLongVwapGateVersion { get; init; } = "reject-positive-distance.1";
