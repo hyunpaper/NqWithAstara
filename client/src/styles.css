@@ -1829,3 +1829,18 @@ footer {
 @keyframes news-ticker-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 @media (prefers-reduced-motion: reduce) { .news-ticker-track { animation: none; } }
 @media (max-width:520px) { .news-ticker-state { max-width:112px; padding-inline:8px; } }
+/* 이슈 #316: 헤더 국채 금리 스트립. 상승=빨강·하락=초록은 주식 관점 표기다. */
+.rates-strip { display:flex; align-items:center; gap:10px; height:34px; padding:0 10px; border:1px solid var(--line); border-radius:5px; font-size:11px; color:var(--text); white-space:nowrap; }
+.rates-strip-title, .rates-strip-status { color:var(--muted); }
+.rates-strip.unavailable, .rates-strip.idle { color:var(--muted); }
+.rates-item { display:inline-flex; align-items:baseline; gap:4px; }
+.rates-item b { color:var(--muted); font-weight:600; }
+.rates-item.stale .rates-value, .rates-item.unavailable .rates-value { color:var(--muted); }
+.rates-value { font-variant-numeric:tabular-nums; }
+.rates-change { font-variant-numeric:tabular-nums; color:var(--muted); }
+.rates-change.up { color:var(--red); }
+.rates-change.down { color:var(--accent); }
+.rates-tag { padding:0 4px; border:1px solid var(--line); border-radius:3px; font-size:9px; color:var(--muted); }
+.rates-tag.warn { border-color:var(--red); color:var(--red); }
+.rates-warning { color:var(--red); cursor:help; }
+@media (max-width: 1100px) { .rates-strip { display:none; } }
