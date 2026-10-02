@@ -31,6 +31,9 @@ public interface IMarketDataGateway
     Task<IReadOnlyList<TossHolding>> Holdings(int accountSeq, CancellationToken ct);
 }
 
+/// <summary>Toss 자격 증명 파일 존재·형식만 확인한다. 토큰 발급은 하지 않는다 (#324).</summary>
+public interface IMarketCredentialProbe { Task<bool> HasCredentialsAsync(CancellationToken ct); }
+
 public interface IOrderBookGateway { Task<OrderBookSnapshot> OrderBook(string symbol, CancellationToken ct); }
 
 /// <summary>
