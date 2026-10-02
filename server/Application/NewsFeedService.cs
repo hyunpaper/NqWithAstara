@@ -46,7 +46,9 @@ public sealed class NewsFeedService(
     IMonitorDiagnostics diagnostics,
     TimeProvider clock,
     NewsTranslationQueue? translationQueue = null,
-    INewsRelevanceAdjudicator? relevanceAdjudicator = null)
+    INewsRelevanceAdjudicator? relevanceAdjudicator = null,
+    INewsRelevancePolicy? relevancePolicy = null,
+    INewsRelevanceContextSource? relevanceContext = null)
 {
     public const string StateFile = "state.json";
 
@@ -243,6 +245,7 @@ public sealed class NewsFeedService(
         var retryAfterUntil = known?.FeedRetryAfterUntil;
         var seenKeys = new HashSet<string>(inbox.SelectMany(x => x.Keys), StringComparer.Ordinal);
         var providerStatuses = new List<NewsProviderFetchStatus>();
+        NewsRelevanceContext? gateContext = null;
         var status = "empty";
         var fetched = false;
         DateTimeOffset? latestPublishedAt = null;
@@ -292,18 +295,31 @@ public sealed class NewsFeedService(
                     && (latestPublishedAt is null || item.CreatedAt > latestPublishedAt)) latestPublishedAt = item.CreatedAt;
             }
 
-            foreach (var item in items)
+            var baseline = known is null || providerBaseline;
+            var gated = new Dictionary<string, GateCounts>(StringComparer.OrdinalIgnoreCase);
+            foreach (var raw in items)
             {
-                var keys = IdentityKeys(item, feed.Name);
+                var keys = IdentityKeys(raw, feed.Name);
                 var alreadySeen = keys.Any(seenKeys.Contains)
-                    || (known?.Inbox is null && known?.SeenIds?.Contains(item.Id, StringComparer.Ordinal) == true);
+                    || (known?.Inbox is null && known?.SeenIds?.Contains(raw.Id, StringComparer.Ordinal) == true);
                 if (alreadySeen) continue;
                 observedThisPage++;
+                var item = raw;
+                if (relevancePolicy is not null && item.Relevance is null)
+                {
+                    gateContext ??= await GateContextAsync(ct);
+                    item = item with { Relevance = relevancePolicy.Evaluate(item, gateContext) };
+                    var gateProvider = string.IsNullOrWhiteSpace(item.Provider) ? feed.Name : item.Provider;
+                    gated[gateProvider] = gated.GetValueOrDefault(gateProvider).Count(item.Relevance!.Decision);
+                }
                 var eligible = item.Relevance?.Included ?? true;
                 var review = IsSbhReview(item);
                 var adjudicate = review && AdjudicationAvailable;
+                // 베이스라인은 과거 기사를 분류하지 않지만, 최근 창 안의 include 기사까지 버리지는 않는다.
+                var recentInclude = baseline && item.Relevance?.Included == true
+                    && item.CreatedAt != DateTimeOffset.MinValue && requestedAt - item.CreatedAt <= BaselineRecentWindow;
                 var entry = new NewsInboxEntry(keys, item, requestedAt,
-                    known is null || providerBaseline || (!eligible && !adjudicate));
+                    (baseline && !recentInclude) || (!eligible && !adjudicate));
                 if (item.Relevance is not null) state.RelevanceObserved(item.Relevance, item.Title, requestedAt);
                 if (review && !adjudicate)
                 {
@@ -314,16 +330,23 @@ public sealed class NewsFeedService(
                 inbox.Add(entry);
                 if (adjudicate && !entry.Processed) TryQueueReview(item.Id);
                 foreach (var key in keys) seenKeys.Add(key);
-                if (known is not null && eligible)
+                if (eligible && (!baseline || recentInclude))
                 {
                     fresh.Add(entry);
                     var provider = string.IsNullOrWhiteSpace(item.Provider) ? feed.Name : item.Provider;
                     newByProvider[provider] = newByProvider.GetValueOrDefault(provider) + 1;
                 }
             }
-            providerStatuses.AddRange(batch.Providers.Select(x => x with
+            providerStatuses.AddRange(batch.Providers.Select(x =>
             {
-                NewCount = newByProvider.GetValueOrDefault(x.Provider)
+                var next = x with { NewCount = newByProvider.GetValueOrDefault(x.Provider) };
+                if (x.FilterPolicyVersion is not null || relevancePolicy is null || !gated.TryGetValue(x.Provider, out var counts))
+                    return next;
+                return next with
+                {
+                    IncludedCount = counts.Included, ExcludedCount = counts.Excluded, ReviewCount = counts.Review,
+                    FilterPolicyVersion = NewsRelevancePolicy.ComposeVersion(relevancePolicy.Version, gateContext ?? NewsRelevanceContext.Empty)
+                };
             }));
             if (known is null) break;
             if (observedThisPage < items.Count) break;
@@ -346,17 +369,36 @@ public sealed class NewsFeedService(
                 group.Sum(x => x.Count), group.Sum(x => x.NewCount), group.Last().RetryAfter,
                 group.Sum(x => x.IncludedCount), group.Sum(x => x.ExcludedCount), group.Sum(x => x.ReviewCount),
                 group.Select(x => x.FilterPolicyVersion).LastOrDefault(x => x is not null))).ToArray();
-        if (known is null || providerBaseline)
-            return new CollectionResult(budget, fetched && status is "ok" or "empty" ? "baseline" : status,
-                fetched, 0, latestPublishedAt, providerSummary);
+        var wasBaseline = known is null || providerBaseline;
+        var baselineStatus = fetched && status is "ok" or "empty" ? "baseline" : status;
         if (fresh.Count == 0)
-            return new CollectionResult(budget, status, fetched, 0, latestPublishedAt, providerSummary);
+            return new CollectionResult(budget, wasBaseline ? baselineStatus : status, fetched, 0, latestPublishedAt, providerSummary);
 
         state.SeenArticles(fresh.Count);
         QueueInboxArticles(fresh, watchlist);
         state.QueueDepth(QueueDepth);
-        return new CollectionResult(budget, status == "empty" ? "ok" : status, fetched, fresh.Count,
+        return new CollectionResult(budget, wasBaseline ? baselineStatus : status == "empty" ? "ok" : status, fetched, fresh.Count,
             latestPublishedAt, providerSummary);
+    }
+
+    readonly record struct GateCounts(int Included, int Excluded, int Review)
+    {
+        public GateCounts Count(string decision) => decision switch
+        {
+            NewsRelevanceDecisions.Include => this with { Included = Included + 1 },
+            NewsRelevanceDecisions.Review => this with { Review = Review + 1 },
+            _ => this with { Excluded = Excluded + 1 },
+        };
+    }
+
+    TimeSpan BaselineRecentWindow => TimeSpan.FromHours(Math.Max(0, options.BaselineRecentHours));
+
+    async Task<NewsRelevanceContext> GateContextAsync(CancellationToken ct)
+    {
+        if (relevanceContext is null) return NewsRelevanceContext.Empty;
+        try { return await relevanceContext.GetAsync(ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception) { return NewsRelevanceContext.Empty; }
     }
 
     int ReviewQueueCapacity => Math.Clamp(options.SbhRelevanceAdjudicationQueueCapacity, 1, 500);
@@ -724,6 +766,10 @@ public sealed class NewsFeedService(
             ? entry.Article.Tickers.Select(x => x.ToUpperInvariant()).Distinct(StringComparer.Ordinal).ToArray()
             : classification?.Symbols.ToArray() ?? [];
         if (symbols.Length == 0) symbols = [NewsSymbols.Market];
+        var relevance = entry.Article.Relevance ?? entry.Prior?.Relevance;
+        if (classification?.Irrelevant == true && relevance is not { Included: true })
+            relevance = new NewsRelevanceAssessment(result.PromptVersion, NewsRelevanceDecisions.Exclude, "non_market", "", "", [],
+                classificationText[..Math.Min(320, classificationText.Length)], "llm_irrelevant", "llm", result.LatencyMs);
 
         return new NewsRecord(
             entry.Article.Id,
@@ -759,7 +805,7 @@ public sealed class NewsFeedService(
             translationQueue is null ? entry.Prior?.ClassificationTranslationStatus ?? "not_requested" : "pending",
             entry.Prior?.ClassificationTextKo,
             entry.Prior?.TranslationContentHash,
-            entry.Article.Relevance ?? entry.Prior?.Relevance);
+            relevance);
     }
 
     async Task SaveAsync(NewsRecord record, CancellationToken ct)

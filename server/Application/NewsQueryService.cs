@@ -5,17 +5,21 @@ namespace Astra.Server.Application;
 /// <summary>
 /// 뉴스 조회(#151 §6). 읽기 전용이며 조회가 피드·LLM을 호출하지 않는다.
 /// 심볼은 관심종목에 한정하지 않는다 — 필터는 클라이언트가 한다.
+/// 관련성 exclude 기사와, 판정이 없는 저장 기사 중 정책이 제외하는 기사는 목록·점수에서 뺀다.
 /// </summary>
 public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state, TimeProvider clock,
-    NewsTranslationQueue? translations = null)
+    NewsTranslationQueue? translations = null, INewsRelevancePolicy? relevance = null)
 {
     public const int DefaultLimit = 50;
     public const int MaxLimit = 200;
+    const int LegacyVisibilityCacheLimit = 4000;
+
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _legacyVisible = new(StringComparer.Ordinal);
 
     public object Articles(string? symbol, int? limit)
     {
         var take = Math.Clamp(limit ?? DefaultLimit, 1, MaxLimit);
-        var rows = state.Recent().OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id, StringComparer.Ordinal).AsEnumerable();
+        var rows = Visible().OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id, StringComparer.Ordinal).AsEnumerable();
         if (!string.IsNullOrWhiteSpace(symbol))
         {
             var wanted = symbol.Trim().TrimStart('$');
@@ -29,7 +33,7 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
     public object Sentiment()
     {
         var now = clock.GetUtcNow();
-        var recent = state.Recent();
+        var recent = Visible();
         var inputs = recent
             .Where(x => NewsSentiments.IsKnown(x.Sentiment))
             .SelectMany(x => x.Symbols.Select(s => new NewsSentimentInput(s, x.Sentiment, x.Strength, x.CreatedAt)));
@@ -49,6 +53,19 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
                 .Select(g => new { sector = g.Key, count = g.Count(), symbols = g.Select(x => x.Symbol).Where(s => s.Length > 0).Distinct().ToArray() })
                 .OrderByDescending(x => x.count).ToArray(),
         };
+    }
+
+    IReadOnlyList<NewsRecord> Visible() => state.Recent().Where(IsVisible).ToArray();
+
+    bool IsVisible(NewsRecord record)
+    {
+        if (record.Relevance is { } assessed) return assessed.Decision != NewsRelevanceDecisions.Exclude;
+        if (relevance is null) return true;
+        if (_legacyVisible.Count > LegacyVisibilityCacheLimit) _legacyVisible.Clear();
+        return _legacyVisible.GetOrAdd(record.Id, _ => relevance.Evaluate(
+            new NewsFeedItem(record.Id, record.Title, record.Summary, record.Source, record.CreatedAt, record.Tickers,
+                Entities: record.Entities, Content: record.Content, Url: record.Url),
+            NewsRelevanceContext.Empty).Decision != NewsRelevanceDecisions.Exclude);
     }
 
     public object Health() => new
@@ -77,7 +94,7 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         classified = state.Classified,
         storageLimited = state.StorageLimited,
         ollama = state.OllamaOk ? "ok" : "down",
-        promptVersion = NewsPromptVersions.V2c,
+        promptVersion = NewsPromptVersions.V2d,
     };
 
     static object RelevanceFilter(NewsRelevanceFilterStats stats) => new
@@ -97,7 +114,7 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         if (record is null) return null;
         var now = clock.GetUtcNow();
         var selectedSymbol = SelectEvidenceSymbol(record, symbol);
-        var snapshot = selectedSymbol is null ? null : BuildEvidence(selectedSymbol, state.Recent(), now);
+        var snapshot = selectedSymbol is null ? null : BuildEvidence(selectedSymbol, Visible(), now);
         var provenance = !string.IsNullOrWhiteSpace(record.ClassifiedFrom) ? state.Find(record.ClassifiedFrom) ?? record : record;
         return new
         {

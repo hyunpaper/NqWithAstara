@@ -174,7 +174,7 @@ public sealed class SbhNewsFeedTests
         var relevance = Assert.Single(batch.Items).Relevance!;
         Assert.Equal(NewsRelevanceDecisions.Include, relevance.Decision);
         Assert.Equal("DELL", Assert.Single(relevance.Targets).Id);
-        Assert.Equal("sbh-relevance-v3+" + context.Version, relevance.PolicyVersion);
+        Assert.Equal("news-relevance-v4+" + context.Version, relevance.PolicyVersion);
         Assert.Equal(relevance.PolicyVersion, Assert.Single(batch.Providers).FilterPolicyVersion);
     }
 

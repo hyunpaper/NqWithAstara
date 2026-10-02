@@ -333,6 +333,47 @@ public sealed class ConfluenceApplicationTests
         public Task DeleteDayAsync(string day, CancellationToken ct) => Task.CompletedTask;
     }
 
+    [Fact]
+    public void PreviousSessionCloseSkipsTheCurrentDayBarWithMidnightTimestamp()
+    {
+        var midnightEastern = D3.SessionStart.AddHours(-9.5);
+        var daily = D3.Daily(includeCurrentTradingDay: false)
+            .Append(new Candle(midnightEastern, 100, 130, 99, 129, 500_000))
+            .ToArray();
+
+        Assert.Equal(99.5m, ConfluenceService.PreviousSessionClose(daily, D3.SessionStart));
+        var previousDaily = ConfluenceService.PreviousDailyBars(daily, D3.SessionStart);
+        Assert.Equal(5, previousDaily.Length);
+        Assert.Equal(D3.SessionStart.AddDays(-1), previousDaily[^1].Start);
+        Assert.Equal(100.6m, previousDaily[^1].High);
+    }
+
+    [Fact]
+    public void PreviousSessionCloseKeepsAllCompletedBarsWhenNoCurrentDayBarIsPresent()
+    {
+        var daily = D3.Daily(includeCurrentTradingDay: false);
+
+        Assert.Equal(99.5m, ConfluenceService.PreviousSessionClose(daily, D3.SessionStart));
+        Assert.Equal(5, ConfluenceService.PreviousDailyBars(daily, D3.SessionStart).Length);
+        Assert.Null(ConfluenceService.PreviousSessionClose(null, D3.SessionStart));
+    }
+
+    [Fact]
+    public void VolatilityBreakoutUsesThePreviousDayRangeWhenTheCurrentDayBarHasMidnightTimestamp()
+    {
+        var clock = new MovableClock(D3.At(NowMinute));
+        var confluence = Service(Watched(), clock);
+        var bars = D3.Candles(Bars).Take(Bars - 1).Select(Bar).ToImmutableArray();
+        var daily = D3.Daily(includeCurrentTradingDay: false)
+            .Append(new Candle(D3.SessionStart.AddHours(-9.5), 100, 130, 99, 129, 500_000))
+            .ToArray();
+
+        var score = confluence.Evaluate(D3.Symbol, D3.SessionStart, bars, daily);
+
+        var breakout = score!.Contributing.Single(x => x.Name == TechniqueNames.VolatilityBreakout);
+        Assert.Equal(2.1, breakout.Evidence["previousRange"]!.Value, 6);
+    }
+
     static StructureBar Bar(Candle candle) =>
         new(candle.Timestamp, candle.Timestamp.AddMinutes(1), (decimal)candle.Open, (decimal)candle.High,
             (decimal)candle.Low, (decimal)candle.Close, candle.Volume);

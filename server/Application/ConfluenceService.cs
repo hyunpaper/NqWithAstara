@@ -185,25 +185,32 @@ public sealed class ConfluenceService(
     }
 
     /// <summary>VOL_BREAKOUT이 보는 전일까지의 완료 일봉. 당일 일봉은 넣지 않는다(C6).</summary>
-    static ImmutableArray<IndicatorBar> PreviousDailyBars(IReadOnlyList<Candle>? dailyBars,
+    internal static ImmutableArray<IndicatorBar> PreviousDailyBars(IReadOnlyList<Candle>? dailyBars,
         DateTimeOffset sessionStart)
     {
         if (dailyBars is null || dailyBars.Count == 0) return ImmutableArray<IndicatorBar>.Empty;
         var result = ImmutableArray.CreateBuilder<IndicatorBar>(dailyBars.Count);
-        foreach (var bar in dailyBars.Where(x => x.Timestamp < sessionStart).OrderBy(x => x.Timestamp))
+        foreach (var bar in CompletedBefore(dailyBars, sessionStart))
             result.Add(new IndicatorBar(bar.Timestamp, bar.Timestamp.AddDays(1), (decimal)bar.Open,
                 (decimal)bar.High, (decimal)bar.Low, (decimal)bar.Close, (decimal)bar.Volume));
         return result.ToImmutable();
     }
 
-    /// <summary>C2 ATR 세션 첫봉 TR의 기준. 세션 시작 이전의 마지막 일봉 종가이며 없으면 null이다.</summary>
-    static decimal? PreviousSessionClose(IReadOnlyList<Candle>? dailyBars, DateTimeOffset sessionStart)
+    /// <summary>C2 ATR 세션 첫봉 TR의 기준. 세션 거래일 이전 마지막 일봉 종가이며 없으면 null이다(#336).</summary>
+    internal static decimal? PreviousSessionClose(IReadOnlyList<Candle>? dailyBars, DateTimeOffset sessionStart)
     {
         if (dailyBars is null || dailyBars.Count == 0) return null;
-        var previous = dailyBars.Where(x => x.Timestamp < sessionStart).OrderBy(x => x.Timestamp).LastOrDefault();
+        var previous = CompletedBefore(dailyBars, sessionStart).LastOrDefault();
         return previous is null || !double.IsFinite(previous.Close) || previous.Close <= 0
             ? null
             : (decimal)previous.Close;
+    }
+
+    /// <summary>거래일(TradingDate) 기준 전일까지의 일봉. 당일 봉은 timestamp가 자정 계열이라도 제외한다(#336).</summary>
+    static IEnumerable<Candle> CompletedBefore(IReadOnlyList<Candle> dailyBars, DateTimeOffset sessionStart)
+    {
+        var sessionDate = MarketRules.TradingDate(sessionStart);
+        return dailyBars.Where(x => MarketRules.TradingDate(x.Timestamp) < sessionDate).OrderBy(x => x.Timestamp);
     }
 
     sealed record QuoteRing(DateTimeOffset SessionStart, ImmutableArray<OrderBookSnapshot> Snapshots);
