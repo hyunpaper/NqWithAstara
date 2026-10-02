@@ -40,7 +40,9 @@ public sealed record ScoreCoreShadowSnapshot(
     ScoreCoreSnapshot Score,
     ImmutableArray<ScoreEvidenceCoverage> Coverage,
     ImmutableArray<ScoreEvidenceExclusion> AssemblyExclusions,
-    string Status);
+    string Status,
+    int EvidenceCount = 0,
+    int UniqueEventCount = 0);
 
 public enum ScoreSnapshotAppendResult { Appended, AlreadyExists }
 
@@ -54,4 +56,6 @@ public interface IScoreCoreSnapshotStore
 {
     Task<ScoreSnapshotAppendResult> AppendAsync(ScoreCoreShadowSnapshot snapshot, CancellationToken ct);
     Task<ScoreCoreShadowSnapshot?> FindAsync(string captureId, CancellationToken ct);
+    Task<ScoreCoreShadowSnapshot?> FindLatestAsync(ImpactTargetKind kind, string targetId, CancellationToken ct);
+    Task<int> PruneAsync(DateTimeOffset now, int retentionDays, CancellationToken ct);
 }

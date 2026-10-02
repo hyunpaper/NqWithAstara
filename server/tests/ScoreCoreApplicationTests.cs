@@ -164,7 +164,7 @@ public sealed class ScoreCoreApplicationTests
             Task.FromResult(read(request));
     }
 
-    sealed class MemorySnapshotStore : IScoreCoreSnapshotStore
+    internal sealed class MemorySnapshotStore : IScoreCoreSnapshotStore
     {
         public Dictionary<string, ScoreCoreShadowSnapshot> Values { get; } = [];
 
@@ -180,5 +180,14 @@ public sealed class ScoreCoreApplicationTests
 
         public Task<ScoreCoreShadowSnapshot?> FindAsync(string captureId, CancellationToken ct) =>
             Task.FromResult(Values.GetValueOrDefault(captureId));
+
+        public Task<ScoreCoreShadowSnapshot?> FindLatestAsync(ImpactTargetKind kind, string targetId,
+            CancellationToken ct) =>
+            Task.FromResult(Values.Values.Where(x => x.Score.TargetKind == kind &&
+                    string.Equals(x.Score.TargetId, targetId, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(x => x.Score.AsOf).FirstOrDefault());
+
+        public Task<int> PruneAsync(DateTimeOffset now, int retentionDays, CancellationToken ct) =>
+            Task.FromResult(0);
     }
 }
