@@ -131,6 +131,9 @@ public static class SetupDetector
     public const string CodeTransitionPullbackBlocked = "TRANSITION_PULLBACK_BLOCKED";
     public const string CodeTransitionBreakoutBlocked = "TRANSITION_BREAKOUT_BLOCKED";
 
+    /// <summary>정책 <see cref="StructurePolicy.DisabledLongKinds"/>가 이 롱 유형을 비활성으로 둔다(#245 Cycle77).</summary>
+    public const string CodeLongKindDisabled = "LONG_KIND_DISABLED";
+
     public static SetupDetectionResult Detect(SetupDetectionRequest request, StructurePolicy policy)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -533,6 +536,8 @@ public static class SetupDetector
             rejections.Add(CodeBreakoutBelowVwap);
         if (RejectsHighVolatilityRange(regime, policy))
             rejections.Add(CodeHighVolatilityRangeBlocked);
+        if (side == TradeSide.Long && policy.IsLongKindDisabled(kindName))
+            rejections.Add(CodeLongKindDisabled);
 
         if (request.Trend.State == TrendState.Transition && hypothesis.Kind == SetupKind.Pullback &&
             !policy.AllowTransitionPullback &&
