@@ -143,6 +143,98 @@ public sealed class NewsQueryServiceTests
     }
 
     [Fact]
+    public void Detail은_ScoreCore_필드를_노출하지_않고_관련성_판정을_그대로_반환한다()
+    {
+        var (query, state, options) = Build();
+        var relevance = new NewsRelevanceAssessment("sbh-relevance-v2+entities:abcdef12", NewsRelevanceDecisions.Include,
+            "company_contract", "Dell", "signs", [new("DELL", "company", "direct", "entity:Dell")],
+            "Dell signs contract", "company_event_confirmed");
+        state.Add(Record("1", NewsSentiments.Positive, 3, Now, "DELL") with { Relevance = relevance }, options.RecentCapacity);
+
+        var json = Serialize(query.Detail("1")!);
+
+        Assert.False(json.TryGetProperty("scoreCore", out _));
+        var payload = json.GetProperty("relevance");
+        Assert.Equal("sbh-relevance-v2+entities:abcdef12", payload.GetProperty("policyVersion").GetString());
+        Assert.Equal("include", payload.GetProperty("decision").GetString());
+        Assert.Equal("DELL", payload.GetProperty("targets")[0].GetProperty("id").GetString());
+    }
+
+    [Fact]
+    public void Health는_관련성_필터_버전과_누적건수와_최근제외_표본을_노출한다()
+    {
+        var (query, state, _) = Build();
+        var version = "sbh-relevance-v2+entities:abcdef12";
+        NewsRelevanceAssessment Assessment(string decision, string reason)
+            => new(version, decision, "unknown", "", "", [], "", reason);
+        state.RelevanceObserved(Assessment(NewsRelevanceDecisions.Include, "macro_event_confirmed"), "포함", Now);
+        state.RelevanceObserved(Assessment(NewsRelevanceDecisions.Review, "insufficient_actor_action_target_context"), "보류", Now);
+        for (var i = 0; i < 6; i++)
+            state.RelevanceObserved(Assessment(NewsRelevanceDecisions.Exclude, "non_market_context"), "제외 " + i, Now.AddSeconds(i));
+        state.RelevanceUnadjudicated("보류", NewsRelevanceReasons.ReviewUnadjudicatedTimeout, Now.AddMinutes(1));
+
+        var filter = Serialize(query.Health()).GetProperty("relevanceFilter");
+
+        Assert.Equal(version, filter.GetProperty("policyVersion").GetString());
+        Assert.Equal(NewsRelevanceLexicon.Version, filter.GetProperty("lexiconVersion").GetString());
+        Assert.Equal(1, filter.GetProperty("included").GetInt64());
+        Assert.Equal(6, filter.GetProperty("excluded").GetInt64());
+        Assert.Equal(1, filter.GetProperty("review").GetInt64());
+        Assert.Equal(1, filter.GetProperty("reviewUnadjudicated").GetInt64());
+        var recent = filter.GetProperty("recentExcluded");
+        Assert.Equal(5, recent.GetArrayLength());
+        Assert.Equal("보류", recent[0].GetProperty("title").GetString());
+        Assert.Equal(NewsRelevanceReasons.ReviewUnadjudicatedTimeout, recent[0].GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void Health는_관측전에도_기본_정책과_사전_버전을_노출한다()
+    {
+        var (query, _, _) = Build();
+
+        var filter = Serialize(query.Health()).GetProperty("relevanceFilter");
+
+        Assert.Equal(NewsRelevancePolicy.CurrentVersion, filter.GetProperty("policyVersion").GetString());
+        Assert.Equal(0, filter.GetProperty("recentExcluded").GetArrayLength());
+    }
+
+    [Fact]
+    public void HealthExposesSbhRelevanceFilterCountsAndPolicyVersion()
+    {
+        var (query, state, _) = Build();
+        state.CollectionCompleted(Now, "ok", true, 2, Now,
+            [new NewsProviderFetchStatus(NewsFeedProviders.SbhNews, "ok", 7, 2,
+                IncludedCount: 2, ExcludedCount: 4, ReviewCount: 1,
+                FilterPolicyVersion: NewsRelevancePolicy.CurrentVersion)]);
+
+        var provider = Serialize(query.Health()).GetProperty("providers")[0];
+
+        Assert.Equal(2, provider.GetProperty("includedCount").GetInt32());
+        Assert.Equal(4, provider.GetProperty("excludedCount").GetInt32());
+        Assert.Equal(1, provider.GetProperty("reviewCount").GetInt32());
+        Assert.Equal(NewsRelevancePolicy.CurrentVersion, provider.GetProperty("filterPolicyVersion").GetString());
+    }
+
+    [Fact]
+    public void HealthPreservesLastSbhFilterSnapshotAfterNotModified()
+    {
+        var state = new NewsRuntimeState();
+        var now = DateTimeOffset.UtcNow;
+        state.CollectionCompleted(now, "ok", true, 2, now,
+            [new NewsProviderFetchStatus(NewsFeedProviders.SbhNews, "ok", 7, 2,
+                IncludedCount: 2, ExcludedCount: 4, ReviewCount: 1,
+                FilterPolicyVersion: NewsRelevancePolicy.CurrentVersion)]);
+        state.CollectionCompleted(now.AddMinutes(15), "empty", true, 0, null,
+            [new NewsProviderFetchStatus(NewsFeedProviders.SbhNews, "empty", 0)]);
+
+        var provider = Assert.Single(state.Providers);
+        Assert.Equal(2, provider.IncludedCount);
+        Assert.Equal(4, provider.ExcludedCount);
+        Assert.Equal(1, provider.ReviewCount);
+        Assert.Equal(NewsRelevancePolicy.CurrentVersion, provider.FilterPolicyVersion);
+    }
+
+    [Fact]
     public void ArticlesExposeThePromptVersion()
     {
         var (query, state, options) = Build();

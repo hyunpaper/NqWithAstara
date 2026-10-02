@@ -90,14 +90,18 @@ builder.Services.AddSingleton<ConfluenceService>();
 // 이슈 #151: 뉴스 감성(선택 기능). News:Enabled 기본 false이며 false면 피드·Ollama를 호출하지 않는다.
 builder.Services.AddSingleton(_ => { var news = new NewsOptions(); builder.Configuration.GetSection("News").Bind(news); return news; });
 builder.Services.AddSingleton<INewsStore, NewsStore>();
+builder.Services.AddSingleton<INewsRelevancePolicy, NewsRelevancePolicy>();
+builder.Services.AddSingleton<INewsRelevanceContextSource>(x => new WatchlistNewsRelevanceContextSource(x.GetRequiredService<ILocalStore>()));
 builder.Services.AddSingleton<INewsFeed>(x =>
 {
     var options = x.GetRequiredService<NewsOptions>();
-    if (options.UseSbhNews) return new SbhNewsFeed(options);
+    if (options.UseSbhNews) return new SbhNewsFeed(options, relevance: x.GetRequiredService<INewsRelevancePolicy>(),
+        context: x.GetRequiredService<INewsRelevanceContextSource>());
     if (options.UseFoxNewsRss) return new FoxNewsRssFeed(options);
     return options.UseSaveTicker ? new SaveTickerNewsFeed(options) : new MarketauxNewsFeed(options);
 });
 builder.Services.AddSingleton<INewsClassifier>(x => new OllamaNewsClassifier(x.GetRequiredService<NewsOptions>()));
+builder.Services.AddSingleton<INewsRelevanceAdjudicator>(x => new OllamaNewsRelevanceAdjudicator(x.GetRequiredService<NewsOptions>()));
 builder.Services.AddSingleton<INewsTranslator>(x => new PapagoNewsTranslator(x.GetRequiredService<NewsOptions>()));
 builder.Services.AddSingleton<NewsRuntimeState>();
 builder.Services.AddSingleton<NewsTranslationQueue>();
@@ -106,6 +110,7 @@ builder.Services.AddSingleton<NewsFeedService>(); builder.Services.AddSingleton<
 builder.Services.AddHostedService(x => x.GetRequiredService<MonitorService>());
 builder.Services.AddHostedService<NewsService>();
 builder.Services.AddHostedService<NewsTranslationService>();
+builder.Services.AddHostedService<NewsRelevanceAdjudicationService>();
 var app = builder.Build();
 app.Services.GetRequiredService<TradingCostPolicyCheckService>();
 var clientRoot = Environment.GetEnvironmentVariable("ASTRA_CLIENT_ROOT") ?? Path.Combine(app.Environment.ContentRootPath, "..", "client"); var clientDist = Path.GetFullPath(Path.Combine(clientRoot, "dist"));

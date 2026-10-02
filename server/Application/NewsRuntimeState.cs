@@ -20,6 +20,14 @@ public sealed class NewsOptions
     public int PollSeconds { get; set; } = 60;
     public string OllamaUrl { get; set; } = "http://localhost:11434";
     public string Model { get; set; } = "qwen2.5:7b-instruct";
+    public bool SbhRelevanceAdjudicationEnabled { get; set; }
+    public int SbhRelevanceAdjudicationMaxPerPoll { get; set; } = 3;
+    public int SbhRelevanceAdjudicationConcurrency { get; set; } = 1;
+    public int SbhRelevanceAdjudicationTimeoutSeconds { get; set; } = 8;
+    public int SbhRelevanceAdjudicationQueueCapacity { get; set; } = 32;
+    public int SbhRelevanceAdjudicationMaxAttempts { get; set; } = 3;
+    public int SbhRelevanceReviewTtlMinutes { get; set; } = 30;
+    public int SbhRelevanceRetryBackoffSeconds { get; set; } = 60;
     public int MaxClassificationsPerMinute { get; set; } = 12;
     public double HalfLifeMinutes { get; set; } = NewsSentimentDecay.DefaultHalfLifeMinutes;
     public string KeepAlive { get; set; } = "30m";
@@ -97,7 +105,8 @@ public sealed record NewsRecord(
     string ContentTranslationStatus = "not_requested",
     string ClassificationTranslationStatus = "not_requested",
     string? ClassificationTextKo = null,
-    string? TranslationContentHash = null);
+    string? TranslationContentHash = null,
+    NewsRelevanceAssessment? Relevance = null);
 
 public sealed record NewsProviderRuntimeStatus(
     string Provider,
@@ -107,7 +116,17 @@ public sealed record NewsProviderRuntimeStatus(
     DateTimeOffset LastAttemptAt,
     DateTimeOffset? LastSuccessAt,
     DateTimeOffset? LastNewArticleAt,
-    TimeSpan? RetryAfter = null);
+    TimeSpan? RetryAfter = null,
+    int IncludedCount = 0,
+    int ExcludedCount = 0,
+    int ReviewCount = 0,
+    string? FilterPolicyVersion = null);
+
+public sealed record NewsRelevanceExclusionSample(string Title, string Reason, DateTimeOffset At);
+
+/// <summary>SBH 관련성 필터 누적 통계와 최근 제외 표본(§A 개선, #310).</summary>
+public sealed record NewsRelevanceFilterStats(string? PolicyVersion, long Included, long Excluded, long Review,
+    long ReviewUnadjudicated, IReadOnlyList<NewsRelevanceExclusionSample> RecentExcluded);
 
 /// <summary>health·조회가 함께 보는 뉴스 런타임 상태(#151 §6). 스레드 안전하다.</summary>
 public sealed class NewsRuntimeState
@@ -130,7 +149,55 @@ public sealed class NewsRuntimeState
     public bool OllamaOk { get; private set; } = true;
     public bool StorageLimited { get; private set; }
     public string FeedStatus { get; private set; } = "idle";
+    public string RelevanceAdjudicationStatus { get; private set; } = "idle";
+    public string RelevanceAdjudicationReason { get; private set; } = "";
+    public int RelevanceAdjudicationQueue { get; private set; }
     public IReadOnlyList<NewsProviderRuntimeStatus> Providers { get; private set; } = [];
+
+    const int RecentExclusionCapacity = 5;
+    readonly LinkedList<NewsRelevanceExclusionSample> _recentExclusions = new();
+    string? _relevancePolicyVersion;
+    long _relevanceIncluded, _relevanceExcluded, _relevanceReview, _relevanceUnadjudicated;
+
+    public NewsRelevanceFilterStats RelevanceFilter
+    {
+        get
+        {
+            lock (_gate)
+                return new NewsRelevanceFilterStats(_relevancePolicyVersion, _relevanceIncluded, _relevanceExcluded,
+                    _relevanceReview, _relevanceUnadjudicated, _recentExclusions.ToArray());
+        }
+    }
+
+    public void RelevanceObserved(NewsRelevanceAssessment assessment, string title, DateTimeOffset at, bool countDecision = true)
+    {
+        lock (_gate)
+        {
+            _relevancePolicyVersion = assessment.PolicyVersion;
+            if (countDecision)
+            {
+                if (assessment.Decision == NewsRelevanceDecisions.Include) _relevanceIncluded++;
+                else if (assessment.Decision == NewsRelevanceDecisions.Review) _relevanceReview++;
+                else _relevanceExcluded++;
+            }
+            if (assessment.Decision == NewsRelevanceDecisions.Exclude) AddExclusion(title, assessment.Reason, at);
+        }
+    }
+
+    public void RelevanceUnadjudicated(string title, string reason, DateTimeOffset at)
+    {
+        lock (_gate)
+        {
+            _relevanceUnadjudicated++;
+            AddExclusion(title, reason, at);
+        }
+    }
+
+    void AddExclusion(string title, string reason, DateTimeOffset at)
+    {
+        _recentExclusions.AddFirst(new NewsRelevanceExclusionSample(title, reason, at));
+        while (_recentExclusions.Count > RecentExclusionCapacity) _recentExclusions.RemoveLast();
+    }
 
     public void PollStarted(DateTimeOffset at) { lock (_gate) LastAttemptAt = at; }
     public void PollCompleted(DateTimeOffset at) => CollectionCompleted(at, "ok", true, 0, null, []);
@@ -154,9 +221,14 @@ public sealed class NewsRuntimeState
             {
                 previous.TryGetValue(x.Provider, out var prior);
                 var succeeded = x.Status is "ok" or "empty" or "partial";
+                var preserveFilterSnapshot = x.FilterPolicyVersion is null && prior?.FilterPolicyVersion is not null;
                 return new NewsProviderRuntimeStatus(x.Provider, x.Status, x.Count, x.NewCount, at,
                     succeeded ? at : prior?.LastSuccessAt,
-                    x.NewCount > 0 ? at : prior?.LastNewArticleAt, x.RetryAfter);
+                    x.NewCount > 0 ? at : prior?.LastNewArticleAt, x.RetryAfter,
+                    preserveFilterSnapshot ? prior!.IncludedCount : x.IncludedCount,
+                    preserveFilterSnapshot ? prior!.ExcludedCount : x.ExcludedCount,
+                    preserveFilterSnapshot ? prior!.ReviewCount : x.ReviewCount,
+                    preserveFilterSnapshot ? prior!.FilterPolicyVersion : x.FilterPolicyVersion);
             }).ToArray();
         }
     }
@@ -179,6 +251,8 @@ public sealed class NewsRuntimeState
     public void Drop(int count) { lock (_gate) Dropped += count; }
     public void SeenArticles(int count) { lock (_gate) Seen += count; }
     public void Ollama(bool ok) { lock (_gate) OllamaOk = ok; }
+    public void RelevanceAdjudication(string status, string reason, int queue)
+    { lock (_gate) { RelevanceAdjudicationStatus = status; RelevanceAdjudicationReason = reason; RelevanceAdjudicationQueue = queue; } }
     public void Limited(bool limited) { lock (_gate) StorageLimited = limited; }
 
     public void Add(NewsRecord record, int capacity)

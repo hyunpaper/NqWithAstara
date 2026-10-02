@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
 using Astra.Server.Application;
+using Astra.Server.Domain.News;
 
 namespace Astra.Server.Infrastructure;
 
@@ -19,14 +20,19 @@ public sealed class SbhNewsFeed : INewsFeed
     const string ContentEndMarker = "\\\"}";
     readonly NewsOptions _options;
     readonly HttpClient _http;
+    readonly INewsRelevancePolicy _relevance;
+    readonly INewsRelevanceContextSource? _context;
     readonly ConcurrentDictionary<string, string> _articleUrls = new(StringComparer.Ordinal);
     string? _etag;
     DateTimeOffset? _lastModified;
 
-    public SbhNewsFeed(NewsOptions options, HttpClient? http = null)
+    public SbhNewsFeed(NewsOptions options, HttpClient? http = null, INewsRelevancePolicy? relevance = null,
+        INewsRelevanceContextSource? context = null)
     {
         _options = options;
         _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        _relevance = relevance ?? new NewsRelevancePolicy();
+        _context = context;
     }
 
     public string Name => NewsFeedProviders.SbhNews;
@@ -52,12 +58,20 @@ public sealed class SbhNewsFeed : INewsFeed
             _etag = response.Headers.ETag?.Tag;
             _lastModified = response.Content.Headers.LastModified ?? response.Headers.Date;
             var document = XDocument.Parse(await response.Content.ReadAsStringAsync(ct));
-            var rows = document.Descendants("item").Select(Map).Where(x => x is not null).Select(x => x!)
+            var candidates = document.Descendants("item").Select(Map).Where(x => x is not null).Select(x => x!)
                 .GroupBy(x => x.Id, StringComparer.Ordinal).Select(x => x.First())
                 .OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id, StringComparer.Ordinal).Take(100).ToArray();
-            foreach (var row in rows.Where(x => !string.IsNullOrWhiteSpace(x.Url))) _articleUrls[row.Id] = row.Url!;
+            var context = await ContextAsync(ct);
+            var rows = candidates.Select(x => x with { Relevance = _relevance.Evaluate(x, context) }).ToArray();
+            foreach (var row in rows.Where(x => x.Relevance!.Included && !string.IsNullOrWhiteSpace(x.Url)))
+                _articleUrls[row.Id] = row.Url!;
+            var included = rows.Count(x => x.Relevance!.Included);
             var status = rows.Length == 0 ? "empty" : "ok";
-            return new NewsFeedBatch(rows, status, [new NewsProviderFetchStatus(Name, status, rows.Length)]);
+            return new NewsFeedBatch(rows, status, [new NewsProviderFetchStatus(Name, status, rows.Length,
+                IncludedCount: included,
+                ExcludedCount: rows.Count(x => x.Relevance!.Decision == NewsRelevanceDecisions.Exclude),
+                ReviewCount: rows.Count(x => x.Relevance!.Decision == NewsRelevanceDecisions.Review),
+                FilterPolicyVersion: NewsRelevancePolicy.ComposeVersion(_relevance.Version, context))]);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (HttpRequestException) { return Failed("failed"); }
@@ -83,6 +97,14 @@ public sealed class SbhNewsFeed : INewsFeed
         catch (HttpRequestException) { return null; }
         catch (TaskCanceledException) { return null; }
         catch (JsonException) { return null; }
+    }
+
+    async Task<NewsRelevanceContext> ContextAsync(CancellationToken ct)
+    {
+        if (_context is null) return NewsRelevanceContext.Empty;
+        try { return await _context.GetAsync(ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception) { return NewsRelevanceContext.Empty; }
     }
 
     static NewsFeedItem? Map(XElement item)

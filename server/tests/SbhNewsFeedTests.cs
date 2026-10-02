@@ -1,5 +1,6 @@
 using System.Net;
 using Astra.Server.Application;
+using Astra.Server.Domain.News;
 using Astra.Server.Infrastructure;
 using Xunit;
 
@@ -11,16 +12,41 @@ public sealed class SbhNewsFeedTests
     public async Task 공개_RSS의_한국어_기사와_정규_URL을_보존한다()
     {
         var handler = new FixtureHandler(HttpStatusCode.OK, """
-            <rss><channel><item><guid isPermaLink="true">https://www.sbhnews.com/news/a</guid><title>한국어 기사</title><description>시장 요약</description><link>https://www.sbhnews.com/news/a</link><pubDate>Sat, 26 Sep 2026 09:21:01 GMT</pubDate></item></channel></rss>
+            <rss><channel><item><guid isPermaLink="true">https://www.sbhnews.com/news/a</guid><title>연준 금리 인상 발표</title><description>국채 금리가 상승했다</description><link>https://www.sbhnews.com/news/a</link><pubDate>Sat, 26 Sep 2026 09:21:01 GMT</pubDate></item></channel></rss>
             """);
         var feed = new SbhNewsFeed(new NewsOptions { SbhNewsRssUrl = "https://sbh.test/feed.xml" }, new HttpClient(handler));
 
         var row = Assert.Single(await feed.ListAsync(1, CancellationToken.None));
 
-        Assert.Equal("한국어 기사", row.Title);
+        Assert.Equal("연준 금리 인상 발표", row.Title);
         Assert.Equal(SbhNewsFeed.SourceName, row.Source);
         Assert.Equal(NewsFeedProviders.SbhNews, row.Provider);
         Assert.Equal("https://www.sbhnews.com/news/a", row.Url);
+    }
+
+    [Fact]
+    public async Task RSS_전건에_필터를_적용하고_포함_제외_review_통계를_노출한다()
+    {
+        var handler = new FixtureHandler(HttpStatusCode.OK, """
+            <rss><channel>
+              <item><guid>market</guid><title>Iran missile strike disrupts oil supply</title></item>
+              <item><guid>sports</guid><title>United striker scores goal in football match</title></item>
+              <item><guid>review</guid><title>Market reaction remains unclear</title></item>
+            </channel></rss>
+            """);
+
+        var batch = await new SbhNewsFeed(new NewsOptions(), new HttpClient(handler)).FetchAsync(1, CancellationToken.None);
+
+        Assert.Equal(3, batch.Items.Count);
+        Assert.Equal(NewsRelevanceDecisions.Include, batch.Items.Single(x => x.Id == "market").Relevance!.Decision);
+        Assert.Equal(NewsRelevanceDecisions.Exclude, batch.Items.Single(x => x.Id == "sports").Relevance!.Decision);
+        Assert.Equal(NewsRelevanceDecisions.Review, batch.Items.Single(x => x.Id == "review").Relevance!.Decision);
+        var status = Assert.Single(batch.Providers);
+        Assert.Equal(1, status.IncludedCount);
+        Assert.Equal(1, status.ExcludedCount);
+        Assert.Equal(1, status.ReviewCount);
+        Assert.Equal(NewsRelevancePolicy.ComposeVersion(NewsRelevancePolicy.CurrentVersion, NewsRelevanceContext.Empty),
+            status.FilterPolicyVersion);
     }
 
     [Fact]
@@ -117,7 +143,7 @@ public sealed class SbhNewsFeedTests
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var body = request.RequestUri!.AbsolutePath == "/feed.xml"
-                ? "<rss><channel><item><guid>article-1</guid><link>https://www.sbhnews.com/news/a</link></item></channel></rss>"
+                ? "<rss><channel><item><guid>article-1</guid><title>Fed raises interest rates</title><link>https://www.sbhnews.com/news/a</link></item></channel></rss>"
                 : "<meta name=\"description\" content=\"요약 문장\"><script>dangerouslySetInnerHTML\\\":{\\\"__html\\\":\\\"\\u003cp\\u003e첫 문단\\u003c/p\\u003e\\n\\u003cp\\u003e둘째 문단\\u003c/p\\u003e\\\"}</script>";
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) });
         }
@@ -131,5 +157,48 @@ public sealed class SbhNewsFeedTests
             response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromMinutes(7));
             return Task.FromResult(response);
         }
+    }
+
+
+    [Fact]
+    public async Task 관심종목_context_source의_엔티티로_판정하고_합성버전을_보고한다()
+    {
+        var handler = new FixtureHandler(HttpStatusCode.OK, """
+            <rss><channel><item><guid>dell</guid><title>Dell signs supply contract with hyperscaler</title></item></channel></rss>
+            """);
+        var context = NewsRelevanceContext.Create([new NewsWatchSymbol("DELL", "Dell")]);
+        var feed = new SbhNewsFeed(new NewsOptions(), new HttpClient(handler), context: new StaticContextSource(context));
+
+        var batch = await feed.FetchAsync(1, CancellationToken.None);
+
+        var relevance = Assert.Single(batch.Items).Relevance!;
+        Assert.Equal(NewsRelevanceDecisions.Include, relevance.Decision);
+        Assert.Equal("DELL", Assert.Single(relevance.Targets).Id);
+        Assert.Equal("sbh-relevance-v2+" + context.Version, relevance.PolicyVersion);
+        Assert.Equal(relevance.PolicyVersion, Assert.Single(batch.Providers).FilterPolicyVersion);
+    }
+
+    [Fact]
+    public async Task context_source_실패는_빈_사전으로_판정을_계속한다()
+    {
+        var handler = new FixtureHandler(HttpStatusCode.OK, """
+            <rss><channel><item><guid>dell</guid><title>Dell signs supply contract with hyperscaler</title></item></channel></rss>
+            """);
+        var feed = new SbhNewsFeed(new NewsOptions(), new HttpClient(handler), context: new ThrowingContextSource());
+
+        var batch = await feed.FetchAsync(1, CancellationToken.None);
+
+        Assert.Equal("ok", batch.Status);
+        Assert.Equal(NewsRelevanceDecisions.Review, Assert.Single(batch.Items).Relevance!.Decision);
+    }
+
+    sealed class StaticContextSource(NewsRelevanceContext context) : INewsRelevanceContextSource
+    {
+        public Task<NewsRelevanceContext> GetAsync(CancellationToken ct) => Task.FromResult(context);
+    }
+
+    sealed class ThrowingContextSource : INewsRelevanceContextSource
+    {
+        public Task<NewsRelevanceContext> GetAsync(CancellationToken ct) => throw new IOException("watchlist");
     }
 }

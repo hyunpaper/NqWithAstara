@@ -69,12 +69,26 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         providers = state.Providers,
         queue = state.Queue,
         translationQueue = translations?.QueueDepth ?? 0,
+        relevanceAdjudication = new { status = state.RelevanceAdjudicationStatus,
+            reason = state.RelevanceAdjudicationReason, queue = state.RelevanceAdjudicationQueue },
+        relevanceFilter = RelevanceFilter(state.RelevanceFilter),
         dropped = state.Dropped,
         seen = state.Seen,
         classified = state.Classified,
         storageLimited = state.StorageLimited,
         ollama = state.OllamaOk ? "ok" : "down",
         promptVersion = NewsPromptVersions.V2c,
+    };
+
+    static object RelevanceFilter(NewsRelevanceFilterStats stats) => new
+    {
+        policyVersion = stats.PolicyVersion ?? NewsRelevancePolicy.CurrentVersion,
+        lexiconVersion = NewsRelevanceLexicon.Version,
+        included = stats.Included,
+        excluded = stats.Excluded,
+        review = stats.Review,
+        reviewUnadjudicated = stats.ReviewUnadjudicated,
+        recentExcluded = stats.RecentExcluded.Select(x => new { title = x.Title, reason = x.Reason, at = x.At }).ToArray(),
     };
 
     public object? Detail(string id, string? symbol = null)
@@ -107,6 +121,7 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
             sentiment = record.Sentiment, strength = record.Strength, reason = record.Reason,
             impactScores = record.ImpactScores, model = record.Model,
             promptVersion = record.PromptVersion, classifiedAt = record.ClassifiedAt,
+            relevance = record.Relevance,
             evidenceSymbol = selectedSymbol,
             snapshotId = snapshot is null ? SnapshotId(now) : SnapshotId(now),
             asOf = now,
@@ -157,6 +172,7 @@ public sealed class NewsQueryService(NewsOptions options, NewsRuntimeState state
         entities = record.Entities,
         inputKind = record.InputKind,
         promptVersion = record.PromptVersion,
+        relevance = record.Relevance,
         classifiedFrom = record.ClassifiedFrom,
         url = record.Url,
         collectedAt = record.CollectedAt,
