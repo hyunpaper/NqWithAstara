@@ -17,6 +17,11 @@ if (args is [ConfluenceMeasureCommand.Name, ..])
         CancellationToken.None);
     return;
 }
+if (args is [BarTimeMigrationCommand.Name, ..])
+{
+    Environment.ExitCode = await BarTimeMigrationCommand.RunAsync(args, Console.Out, CancellationToken.None);
+    return;
+}
 if (args is [ConfluenceBackfillCommand.Name, ..])
 {
     using var http = new HttpClient { BaseAddress = new Uri("https://openapi.tossinvest.com/"), Timeout = TimeSpan.FromSeconds(30) };

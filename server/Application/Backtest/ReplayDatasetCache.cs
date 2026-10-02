@@ -81,6 +81,11 @@ public sealed class ReplayDatasetCache(string appDataRoot, IHistoricalBarSource 
             {
                 ct.ThrowIfCancellationRequested();
                 var pages = await ReadPagesAsync(acquisitionRoot, symbol, ct);
+                if (pages.Any(x => !string.Equals(x.BarTimeConvention, source.BarTimeConvention, StringComparison.Ordinal)))
+                {
+                    Directory.Delete(Path.Combine(acquisitionRoot, "raw", SafeSymbol(symbol)), true);
+                    pages = [];
+                }
                 if (pages.LastOrDefault() is { } last && Terminal(last)) continue;
                 var nextCursor = pages.LastOrDefault()?.NextCursor;
                 var completedPages = pages.Count;
@@ -113,7 +118,8 @@ public sealed class ReplayDatasetCache(string appDataRoot, IHistoricalBarSource 
                 {
                     var read = await source.ReadAsync(symbol, EasternOffset(from), EasternOffset(to.AddDays(1)), ct);
                     var page = new HistoricalBarPage(EasternOffset(to.AddDays(1)).ToString("O"), null, read.Bars,
-                        read.RawBarCount, read.ReachedRequestedStart, read.OldestBar, read.StopReason);
+                        read.RawBarCount, read.ReachedRequestedStart, read.OldestBar, read.StopReason,
+                        source.BarTimeConvention);
                     await WritePageAsync(acquisitionRoot, symbol, completedPages, page, ct);
                     pages.Add(page);
                     await WriteAcquiringManifestAsync(acquisitionRoot, requestKey, symbols, normalizedBenchmark,
