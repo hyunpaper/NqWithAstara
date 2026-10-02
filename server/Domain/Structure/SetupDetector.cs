@@ -88,6 +88,7 @@ public static class SetupDetector
 {
     public const string BlockerStaleLatestBar = "STALE_LATEST_BAR";
     public const string BlockerAfterEntryCutoff = "AFTER_ENTRY_CUTOFF";
+    public const string CodeHighVolatilityRangeBlocked = "HIGH_VOLATILITY_RANGE_BLOCKED";
     public const string BlockerMissingQuote = "MISSING_QUOTE";
     public const string BlockerStaleQuote = "STALE_QUOTE";
     public const string BlockerQuoteInFuture = "QUOTE_IN_FUTURE";
@@ -121,6 +122,12 @@ public static class SetupDetector
     /// <summary>REBOUND가 극단적 하락 추세에서 롱으로 승격되는 것을 막는 거절 사유(§I-1, #208).</summary>
     public const string CodeTrendDeeplyOpposesRebound = "TREND_DEEPLY_OPPOSES_REBOUND";
     public const string CodeTrendDeeplyOpposesShortRebound = "TREND_DEEPLY_OPPOSES_SHORT_REBOUND";
+    public const string CodeReboundLongAboveVwap = "REBOUND_LONG_ABOVE_VWAP";
+    public const string CodePullbackTooFarFromVwap = "PULLBACK_TOO_FAR_FROM_VWAP";
+    public const string CodeBreakoutTooFarFromVwap = "BREAKOUT_TOO_FAR_FROM_VWAP";
+    public const string CodeReboundEntryQualityTooLow = "REBOUND_ENTRY_QUALITY_TOO_LOW";
+    public const string CodeBreakoutBelowVwap = "BREAKOUT_BELOW_VWAP";
+    public const string CodeReboundNetRTooHigh = "REBOUND_NET_R_TOO_HIGH";
     public const string CodeTransitionPullbackBlocked = "TRANSITION_PULLBACK_BLOCKED";
     public const string CodeTransitionBreakoutBlocked = "TRANSITION_BREAKOUT_BLOCKED";
 
@@ -509,15 +516,40 @@ public static class SetupDetector
             rejections.Add(code);
         }
         foreach (var reason in quality.Reasons) rejections.Add(reason);
+        if (RejectsLowQualityRebound(hypothesis.Kind, quality.Score, policy))
+            rejections.Add(CodeReboundEntryQualityTooLow);
+
+        var vwapDistance = request.Trend.Vwap is { } vwap && request.Trend.Atr1m is > 0 &&
+                           double.IsFinite(vwap) && double.IsFinite(request.Trend.Atr1m.Value)
+            ? (side == TradeSide.Long ? (double)trigger.Close - vwap : vwap - (double)trigger.Close)
+              / request.Trend.Atr1m.Value : (double?)null;
+        if (RejectsReboundLongAboveVwap(hypothesis.Kind, side, vwapDistance))
+            rejections.Add(CodeReboundLongAboveVwap);
+        if (RejectsPullbackTooFarFromVwap(hypothesis.Kind, side, vwapDistance, policy))
+            rejections.Add(CodePullbackTooFarFromVwap);
+        if (RejectsBreakoutTooFarFromVwap(hypothesis.Kind, side, vwapDistance, policy))
+            rejections.Add(CodeBreakoutTooFarFromVwap);
+        if (RejectsBreakoutBelowVwap(hypothesis.Kind, side, vwapDistance, policy))
+            rejections.Add(CodeBreakoutBelowVwap);
+        if (RejectsHighVolatilityRange(regime, policy))
+            rejections.Add(CodeHighVolatilityRangeBlocked);
 
         if (request.Trend.State == TrendState.Transition && hypothesis.Kind == SetupKind.Pullback &&
-            !policy.AllowTransitionPullback)
+            !policy.AllowTransitionPullback &&
+            !AllowsQualifiedTransitionPullback(relativeVolume,
+                planning.NetR is { } transitionNetR ? (double)transitionNetR : null, policy) &&
+            !AllowsTrendAlignedTransitionPullback(request.Trend.SignedTrend, side,
+                planning.NetR is { } alignedTransitionNetR ? (double)alignedTransitionNetR : null, policy))
             rejections.Add(CodeTransitionPullbackBlocked);
         if (request.Trend.State == TrendState.Transition && hypothesis.Kind == SetupKind.Breakout &&
-            !policy.AllowTransitionBreakout)
+            !policy.AllowTransitionBreakout &&
+            !AllowsQualifiedTransitionBreakout(relativeVolume,
+                planning.NetR is { } transitionBreakoutNetR ? (double)transitionBreakoutNetR : null, policy))
             rejections.Add(CodeTransitionBreakoutBlocked);
 
         var expectedNetR = planning.NetR is { } netR ? (double)netR : (double?)null;
+        if (RejectsReboundNetR(hypothesis.Kind, expectedNetR, policy))
+            rejections.Add(CodeReboundNetRTooHigh);
         if (expectedNetR is { } expected && expected <= policy.MinimumExpectedNetR)
             rejections.Add("EXPECTED_NET_R_NON_POSITIVE");
         if (expectedNetR is { } feature && !WalkForwardExpectedValue.Allows(policy, feature))
@@ -595,15 +627,11 @@ public static class SetupDetector
 
         var trendAlignment = request.Trend.SignedTrend is { } signed && double.IsFinite(signed)
             ? Math.Clamp((side == TradeSide.Long ? signed : -signed) / 100d, -1d, 1d) : (double?)null;
-        var vwapDistance = request.Trend.Vwap is { } vwap && request.Trend.Atr1m is > 0 &&
-                           double.IsFinite(vwap) && double.IsFinite(request.Trend.Atr1m.Value)
-            ? (side == TradeSide.Long ? (double)trigger.Close - vwap : vwap - (double)trigger.Close)
-              / request.Trend.Atr1m.Value : (double?)null;
         var distance = planning.Stop is { } stopDistance && request.Atr1mAtStructureCutoff is > 0
             ? (double)Math.Abs(entryReference - stopDistance) / request.Atr1mAtStructureCutoff.Value : (double?)null;
         var planCosts = planning.Plan?.Costs;
         var forecast = ConditionalReturnForecaster.Evaluate(new ConditionalReturnForecastInput(
-            request.AnalysisAsOf, side, quality.Score,
+            request.AnalysisAsOf, side, quality.Score is { } qualityScore ? qualityScore / 100d : null,
             request.Atr1mAtStructureCutoff is > 0 && entryReference > 0
                 ? request.Atr1mAtStructureCutoff.Value / (double)entryReference * 100d : null,
             trendAlignment, regime.Volatility,
@@ -639,8 +667,56 @@ public static class SetupDetector
             hypothesis.RetestConfirmed, hypothesis.EpisodeStartAt, side, regime, evidence);
     }
 
+    public static bool AllowsQualifiedTransitionPullback(double? relativeVolume, double? expectedNetR,
+        StructurePolicy policy) => policy.AllowQualifiedTransitionPullback &&
+        relativeVolume is { } volume && double.IsFinite(volume) &&
+        volume >= policy.TransitionPullbackMinimumRelativeVolume &&
+        expectedNetR is { } netR && double.IsFinite(netR) && netR <= policy.TransitionPullbackMaximumNetR;
+
+    public static bool AllowsQualifiedTransitionBreakout(double? relativeVolume, double? expectedNetR,
+        StructurePolicy policy) => policy.AllowQualifiedTransitionBreakout &&
+        relativeVolume is { } volume && double.IsFinite(volume) &&
+        volume >= policy.TransitionBreakoutMinimumRelativeVolume &&
+        expectedNetR is { } netR && double.IsFinite(netR) && netR <= policy.TransitionBreakoutMaximumNetR;
+
+    public static bool AllowsTrendAlignedTransitionPullback(double? signedTrend, TradeSide side,
+        double? expectedNetR, StructurePolicy policy) => policy.AllowTrendAlignedTransitionPullback &&
+        signedTrend is { } trend && double.IsFinite(trend) &&
+        (side == TradeSide.Long ? trend >= policy.TrendStateThreshold : trend <= -policy.TrendStateThreshold) &&
+        expectedNetR is { } netR && double.IsFinite(netR) && netR <= policy.TransitionPullbackMaximumNetR;
+
     /// <summary>추세 정렬을 전제로 하는 종류. REBOUND는 제외다(§8/§9.4).</summary>
     static bool RequiresTrendAlignment(SetupKind kind) => kind is SetupKind.Pullback or SetupKind.Breakout;
+
+    public static bool RejectsReboundLongAboveVwap(SetupKind kind, TradeSide side, double? vwapDistance) =>
+        kind == SetupKind.Rebound && side == TradeSide.Long &&
+        vwapDistance is > 0 and var distance && double.IsFinite(distance);
+
+    public static bool RejectsHighVolatilityRange(StrategyRegime regime, StructurePolicy policy) =>
+        policy.RejectHighVolatilityRangeEntries && regime.Direction == StrategyDirection.Range &&
+        regime.Volatility == VolatilityBand.High;
+
+    public static bool RejectsPullbackTooFarFromVwap(SetupKind kind, TradeSide side, double? vwapDistance,
+        StructurePolicy policy) => policy.RequirePullbackNearVwap && kind == SetupKind.Pullback &&
+        side == TradeSide.Long && vwapDistance is { } distance && double.IsFinite(distance) &&
+        distance > policy.PullbackMaximumVwapDistanceAtr;
+
+    public static bool RejectsBreakoutTooFarFromVwap(SetupKind kind, TradeSide side, double? vwapDistance,
+        StructurePolicy policy) => policy.RequireBreakoutNearVwap && kind == SetupKind.Breakout &&
+        side == TradeSide.Long && vwapDistance is { } distance && double.IsFinite(distance) &&
+        distance > policy.BreakoutMaximumVwapDistanceAtr;
+
+    public static bool RejectsLowQualityRebound(SetupKind kind, double? entryQuality, StructurePolicy policy) =>
+        policy.RequireMinimumReboundEntryQuality && kind == SetupKind.Rebound &&
+        entryQuality is { } quality && double.IsFinite(quality) && quality < policy.MinimumReboundEntryQuality;
+
+    public static bool RejectsBreakoutBelowVwap(SetupKind kind, TradeSide side, double? vwapDistance,
+        StructurePolicy policy) => policy.RequireBreakoutAboveVwap && kind == SetupKind.Breakout &&
+        side == TradeSide.Long && vwapDistance is { } distance && double.IsFinite(distance) && distance < 0;
+
+    public static bool RejectsReboundNetR(SetupKind kind, double? expectedNetR, StructurePolicy policy) =>
+        policy.RequireMaximumReboundNetR && kind == SetupKind.Rebound &&
+        expectedNetR is { } netR && double.IsFinite(netR) && netR > policy.MaximumReboundNetR;
 
     /// <summary>§8 stable EventId=(symbol,sessionStart,kind,zoneId,triggerBarStart).</summary>
     public static string EventId(string symbol, DateTimeOffset sessionStart, string kindName, string zoneId,
@@ -659,8 +735,8 @@ public static class SetupDetector
 public static class CandidateSelection
 {
     /// <summary>
-    /// 정렬 키는 (종류 문자열 ordinal, EventId ordinal)뿐이다 — 성과 지표를 대표 선택에 쓰지 않는다(§9.4, #209).
-    /// 같은 중복 방지 키에서는 실제 신규 거래 후보를 1개만 남긴다.
+    /// 같은 중복 방지 키에서는 1개만 남긴다. Range 롱 복수 후보의 VWAP 위치 외에는
+    /// (종류 문자열 ordinal, EventId ordinal) 순서를 유지한다(#245).
     /// </summary>
     public static EntryCandidate? SelectPreferred(IEnumerable<EntryCandidate> candidates)
     {
@@ -672,8 +748,23 @@ public static class CandidateSelection
             .GroupBy(x => x.DuplicateGuardKey, StringComparer.Ordinal)
             .Select(group => Ordered(group).First());
 
-        return Ordered(perKey).First();
+        var eligible = perKey.ToArray();
+        if (eligible.Length >= 2 && eligible.All(IsRangeLongWithFiniteVwap))
+        {
+            var atOrBelow = eligible.Where(x => x.Evidence!.VwapDistanceAtr <= 0).ToArray();
+            if (atOrBelow.Length > 0)
+                return atOrBelow.OrderBy(x => Math.Abs(x.Evidence!.VwapDistanceAtr!.Value))
+                    .ThenBy(x => x.KindName, StringComparer.Ordinal)
+                    .ThenBy(x => x.EventId, StringComparer.Ordinal).First();
+        }
+
+        return Ordered(eligible).First();
     }
+
+    static bool IsRangeLongWithFiniteVwap(EntryCandidate candidate) =>
+        candidate.Side == TradeSide.Long &&
+        candidate.Regime?.Direction == StrategyDirection.Range &&
+        candidate.Evidence?.VwapDistanceAtr is { } distance && double.IsFinite(distance);
 
     static IOrderedEnumerable<EntryCandidate> Ordered(IEnumerable<EntryCandidate> candidates) =>
         candidates

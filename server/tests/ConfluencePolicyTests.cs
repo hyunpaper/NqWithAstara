@@ -121,11 +121,35 @@ public sealed class ConfluencePolicyTests
         Assert.Null(p.CorrelationGroupOf("UNKNOWN"));
     }
 
-    /// <summary>컨플루언스 정책은 v5 §16A 정책과 완전히 분리된다 — StructurePolicy 해시는 변하지 않는다.</summary>
+    /// <summary>컨플루언스와 분리된 StructurePolicy 직렬화 계보에는 기본 비활성 실험 필드도 포함된다.</summary>
     [Fact]
     public void StructurePolicyHashIsUntouchedByTheConfluenceLayer()
     {
-        Assert.Equal("65281f3f5c25b48e469bd9d5c8674f8926bdb9328dd672d10d5a00d4583e39b5",
+        Assert.True(StructurePolicy.Default.RequirePullbackNearVwap);
+        Assert.True(StructurePolicy.Default.RequireBreakoutNearVwap);
+        Assert.True(StructurePolicy.Default.RequireMinimumReboundEntryQuality);
+        Assert.True(StructurePolicy.Default.RequireBreakoutAboveVwap);
+        Assert.True(StructurePolicy.Default.RequireMaximumReboundNetR);
+        Assert.True(StructurePolicy.Default.EnableTwoRFeeBreakEvenStop);
+        Assert.False(StructurePolicy.Default.RejectHighVolatilityRangeEntries);
+        Assert.True(StructurePolicy.Default.CapStructuralTargetAtTwoR);
+        Assert.True(StructurePolicy.Default.EnableHalfRFeeBreakEvenStopForPositiveBenchmark);
+        Assert.Contains("\"RequirePullbackNearVwap\":true", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"PullbackMaximumVwapDistanceAtr\":2.1", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"RequireBreakoutNearVwap\":true", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"BreakoutMaximumVwapDistanceAtr\":5", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"RequireMinimumReboundEntryQuality\":true", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"MinimumReboundEntryQuality\":50", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"RequireBreakoutAboveVwap\":true", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"RequireMaximumReboundNetR\":true", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"MaximumReboundNetR\":1.9", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"EnableTwoRFeeBreakEvenStop\":true", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"RejectHighVolatilityRangeEntries\":false", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"CapStructuralTargetAtTwoR\":true", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"EnableHalfRFeeBreakEvenStopForPositiveBenchmark\":true", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"ExemptBreakoutFromPositiveBenchmarkHalfRStop\":true", StructurePolicy.Default.CanonicalJson);
+        // #245 Cycle45 운영 기본값(11개 플래그 true)의 정책 해시.
+        Assert.Equal("be8ab761d2790666981719d64452fb77f6567bc5af380f10d0a7fad77e47197b",
             StructurePolicy.Default.PolicyHash);
         Assert.NotEqual(StructurePolicy.Default.PolicyHash, ConfluencePolicy.Default.PolicyHash);
     }
@@ -160,3 +184,5 @@ public sealed class ConfluencePolicyTests
         return null!;
     }
 }
+
+

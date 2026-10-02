@@ -5,19 +5,34 @@ using Astra.Server.Domain.Structure;
 namespace Astra.Server.Application.Backtest;
 
 public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePolicy policy,
-    IHistoricalLiquiditySource? liquiditySource = null)
+    IHistoricalLiquiditySource? liquiditySource = null, int maxDegreeOfParallelism = 2,
+    string benchmarkSymbol = "QQQ")
 {
+    public const string ReplayLongOnlyShortRejected = "REPLAY_LONG_ONLY_SHORT_REJECTED";
+    readonly object _liquidityLock = new();
+
     public const string GateAttributionOrder =
         "data-quality>session-time>direction>structure>entry-quality>risk-cost>expected-value>other.v1";
 
-    /// <summary>replay에서 생성된 후보의 1단계 후보화·2단계 최종 게이트 결과를 보존한다.</summary>
+    /// <summary>replay 후보의 게이트와 실행 단계 누적 결과를 EventId 단위로 보존한다.</summary>
     public sealed record ReplayCandidateDiagnostic(string Symbol, DateOnly SessionDate,
         string EventId, DateTimeOffset SignalAt, TradeSide Side, string Regime,
         CandidateDisposition Disposition, bool StructuralReady, bool FinalApproved,
         bool CostComplete, bool CostModeled, string CostSource,
         double? ExpectedNetR, ImmutableArray<string> RejectionReasons, ImmutableArray<string> FeatureContributions,
         double? RealizedNetR = null, ConditionalReturnForecast? Forecast = null,
-        StrategyRegimeAssessment? RegimeAssessment = null);
+        StrategyRegimeAssessment? RegimeAssessment = null,
+        ConditionalReturnForecastInput? ForecastInput = null)
+    {
+        public bool GateApproved => FinalApproved;
+        public bool Preferred { get; init; }
+        public bool PendingQueued { get; init; }
+        public bool Confirmed { get; init; }
+        public bool Filled { get; init; }
+        public string? ExecutionStopReason { get; init; }
+        public string? BenchmarkContextReason { get; init; }
+        public double? BenchmarkReturnPercent { get; init; }
+    }
 
     public sealed record ReplaySourceCoverage(string Symbol, int Sessions, int ExpectedBars, int ActualBars,
         int MissingBars, double CoverageRate, double SourceBarMinutes, string GranularityStatus,
@@ -25,9 +40,17 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
 
     public sealed record ReplayGateCount(string Reason, int Candidates, int ExclusiveFirstFailures);
 
+    public sealed record ReplayExecutionFunnel(int Candidates, int Preferred, int PendingQueued, int Confirmed,
+        int Filled, bool Reconciled, string Unit, string Definition);
+
     public sealed record ReplayGateSummary(int Generated, int StructuralReady, int FinalApproved, int Rejected,
         int LongCandidates, int ShortCandidates, bool CountsOverlap, string ExclusiveAttributionOrder,
-        ImmutableArray<ReplayGateCount> Gates);
+        ImmutableArray<ReplayGateCount> Gates)
+    {
+        public int GateApproved => FinalApproved;
+        public int GateRejected => Rejected;
+        public ReplayExecutionFunnel? ExecutionFunnel { get; init; }
+    }
 
     public sealed record ReplayRun(ImmutableDictionary<string, ImmutableArray<SimTrade>> Trades,
         ImmutableArray<ReplayCandidateDiagnostic> Candidates, ImmutableArray<ReplaySourceCoverage> Coverage,
@@ -69,21 +92,68 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
     public async Task<ReplayRun> RunDetailedAsync(DateOnly from, DateOnly to,
         IReadOnlyList<string> symbols, CancellationToken ct, double? expectedValueThreshold = null)
     {
+        if (maxDegreeOfParallelism is < 1 or > 2)
+            throw new ArgumentOutOfRangeException(nameof(maxDegreeOfParallelism),
+                "과거 replay 동시성은 1 또는 2만 허용합니다.");
         var replayPolicy = expectedValueThreshold is { } threshold
             ? policy with { ExpectedValueFeatureThreshold = threshold }
             : policy;
         var days = (await store.ListDaysAsync(ct)).Where(x => DateOnly.TryParseExact(x, "yyyy-MM-dd", out var day)
             && day >= from && day <= to).Order().ToArray();
-        var result = symbols.ToImmutableDictionary(x => x, _ => new List<SimTrade>(),
-            StringComparer.OrdinalIgnoreCase).ToBuilder();
-        var daily = symbols.ToDictionary(x => x, _ => new List<Candle>(), StringComparer.OrdinalIgnoreCase);
-        var candidateDiagnostics = new Dictionary<string, ReplayCandidateDiagnostic>(StringComparer.Ordinal);
-        var coverage = symbols.ToDictionary(x => x, _ => new CoverageAccumulator(),
+        var benchmarkByDay = new Dictionary<string, ImmutableArray<Candle>>(StringComparer.Ordinal);
+        if (replayPolicy.RequirePositiveBenchmarkForRebound ||
+            replayPolicy.EnableHalfRFeeBreakEvenStopForPositiveBenchmark)
+            foreach (var day in days)
+                benchmarkByDay[day] = ConfluenceReplay.Parse(await store.ReadLinesAsync(day, benchmarkSymbol, ct))
+                    .Select(x => new Candle(x.Start, (double)x.Open, (double)x.High, (double)x.Low,
+                        (double)x.Close, (double)x.Volume)).ToImmutableArray();
+        using var gate = new SemaphoreSlim(maxDegreeOfParallelism, maxDegreeOfParallelism);
+        var tasks = symbols.Select(async (symbol, index) =>
+        {
+            await gate.WaitAsync(ct);
+            try
+            {
+                return (index, Replay: await ReplaySymbolAsync(days, symbol, replayPolicy, benchmarkByDay, ct));
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }).ToArray();
+        var completed = await Task.WhenAll(tasks);
+        var ordered = completed.OrderBy(x => x.index).Select(x => x.Replay).ToArray();
+        var trades = ordered.ToImmutableDictionary(x => x.Symbol, x => x.Trades,
             StringComparer.OrdinalIgnoreCase);
+        if (liquiditySource?.IsModeled == true)
+            trades = trades.ToImmutableDictionary(x => x.Key,
+                x => x.Value.Select(ApplyModeledRealizedSpread).ToImmutableArray(),
+                StringComparer.OrdinalIgnoreCase);
+        var realized = trades.Values.SelectMany(x => x).Where(x => x.ExitAt is not null && x.PnlPercent is not null &&
+                x.Structure?.EntryEventId is not null)
+            .GroupBy(x => x.Structure!.EntryEventId, StringComparer.Ordinal)
+            .ToDictionary(x => x.Key, x => x.First(), StringComparer.Ordinal);
+        var diagnostics = ordered.SelectMany(x => x.Candidates)
+            .Select(x => realized.TryGetValue(x.EventId, out var trade) && trade.Structure?.PlanSnapshot.RiskPercent is > 0
+                ? x with { RealizedNetR = trade.PnlPercent / trade.Structure.PlanSnapshot.RiskPercent }
+                : x)
+            .OrderBy(x => x.SessionDate).ThenBy(x => x.Symbol, StringComparer.Ordinal)
+            .ThenBy(x => x.SignalAt).ThenBy(x => x.EventId, StringComparer.Ordinal).ToImmutableArray();
+        return new ReplayRun(trades, diagnostics,
+            ordered.Select(x => x.Coverage).OrderBy(x => x.Symbol, StringComparer.Ordinal).ToImmutableArray(),
+            SummarizeGates(diagnostics));
+    }
+
+    async Task<SymbolReplayResult> ReplaySymbolAsync(string[] days, string symbol, StructurePolicy replayPolicy,
+        IReadOnlyDictionary<string, ImmutableArray<Candle>> benchmarkByDay, CancellationToken ct)
+    {
+        var result = new List<SimTrade>();
+        var daily = new List<Candle>();
+        var candidateDiagnostics = new Dictionary<string, ReplayCandidateDiagnostic>(StringComparer.Ordinal);
+        var forecastInputs = new Dictionary<string, ConditionalReturnForecastInput>(StringComparer.Ordinal);
+        var coverage = new CoverageAccumulator();
 
         foreach (var day in days)
-            foreach (var symbol in symbols)
-            {
+        {
                 ct.ThrowIfCancellationRequested();
                 var bars = ConfluenceReplay.Parse(await store.ReadLinesAsync(day, symbol, ct))
                     .Select(x => new Candle(x.Start, (double)x.Open, (double)x.High, (double)x.Low,
@@ -93,7 +163,7 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                 var timeframe = ReplayTimeframePolicy.Contract(barSpan);
                 var sessionStart = bars[0].Timestamp;
                 var sessionEnd = sessionStart.AddHours(6.5);
-                coverage[symbol].Add(bars, sessionStart, sessionEnd, barSpan, timeframe);
+                coverage.Add(bars, sessionStart, sessionEnd, barSpan, timeframe);
                 if (!timeframe.Supported) continue;
                 var sessionPolicy = ReplayTimeframePolicy.Apply(replayPolicy, timeframe);
                 var market = new MarketSession(true, "과거 replay", null, sessionStart, sessionEnd);
@@ -107,9 +177,9 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                 for (var index = 0; index < bars.Length && bars[index].Timestamp.Add(barSpan) < sessionEnd; index++)
                 {
                     var current = bars[index];
-                    var openBeforeBar = result[symbol].Count(x => x.Status == "OPEN");
-                    result[symbol] = SimulationEngine.ReplayBars(result[symbol], symbol, [current]);
-                    var exitedThisPoll = result[symbol].Count(x => x.Status == "OPEN") < openBeforeBar;
+                    var openBeforeBar = result.Count(x => x.Status == "OPEN");
+                    result = SimulationEngine.ReplayBars(result, symbol, [current]);
+                    var exitedThisPoll = result.Count(x => x.Status == "OPEN") < openBeforeBar;
                     processedBars = index + 1;
                     var now = current.Timestamp.Add(barSpan);
                     var completedStarts = bars.Take(index + 1).Select(x => x.Timestamp).ToArray();
@@ -120,12 +190,41 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                         var resolution = ResolvePending(queued.Pending, current, now, barSpan);
                         if (resolution.Confirmation is { Decision: PendingEntryDecision.Confirmed } confirmation)
                         {
-                            var entered = StructuralSimulation.Enter(result[symbol], new StructuralEntryRequest(symbol,
-                                queued.Candidate.TriggerBarStart, now, sessionEnd, queued.Context,
-                                completedStarts, sessionStart, queued.Candidate.Plan?.TargetZoneSnapshot.Aliases, confirmation,
-                                RequireCompleteLiquidityCost: sessionPolicy.RequireCompleteLiquidityCost), sessionPolicy);
-                            result[symbol] = entered.Trades;
+                            var benchmark = BenchmarkEntryGate.Evaluate(sessionPolicy,
+                                queued.Context.PlanSnapshot.Kind, queued.Pending.Side,
+                                benchmarkByDay.GetValueOrDefault(day), now);
+                            UpdateDiagnostic(candidateDiagnostics, queued.Pending.EntryEventId,
+                                row => row with
+                                {
+                                    Confirmed = true,
+                                    BenchmarkContextReason = benchmark.Reason,
+                                    BenchmarkReturnPercent = benchmark.ReturnPercent
+                                });
+                            if (benchmark.Allowed)
+                            {
+                                var entered = StructuralSimulation.Enter(result, new StructuralEntryRequest(symbol,
+                                    queued.Candidate.TriggerBarStart, now, sessionEnd, queued.Context,
+                                    completedStarts, sessionStart, queued.Candidate.Plan?.TargetZoneSnapshot.Aliases,
+                                    confirmation, RequireCompleteLiquidityCost:
+                                    sessionPolicy.RequireCompleteLiquidityCost,
+                                    BenchmarkReturnPercent: BenchmarkEntryGate.SessionReturnPercent(
+                                        benchmarkByDay.GetValueOrDefault(day), now)), sessionPolicy);
+                                result = entered.Trades;
+                                UpdateDiagnostic(candidateDiagnostics, queued.Pending.EntryEventId, row => row with
+                                {
+                                    Filled = entered.Outcome is StructuralEntryOutcome.Entered or
+                                        StructuralEntryOutcome.AlreadyEntered,
+                                    ExecutionStopReason = entered.Outcome is StructuralEntryOutcome.Entered or
+                                        StructuralEntryOutcome.AlreadyEntered ? null : entered.Outcome.ToString()
+                                });
+                            }
+                            else
+                                UpdateDiagnostic(candidateDiagnostics, queued.Pending.EntryEventId,
+                                    row => row with { ExecutionStopReason = benchmark.Reason });
                         }
+                        else
+                            UpdateDiagnostic(candidateDiagnostics, queued.Pending.EntryEventId,
+                                row => row with { ExecutionStopReason = resolution.Reason });
                         pendingEventIds.Add(queued.Pending.EntryEventId);
                         pending = null;
                     }
@@ -135,13 +234,17 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                         if (resolution.Clear)
                         {
                             // exact confirmation 봉을 놓치면 추후 봉으로 소급 체결하지 않는다.
+                            UpdateDiagnostic(candidateDiagnostics, unresolved.Pending.EntryEventId,
+                                row => row with { ExecutionStopReason = resolution.Reason });
                             pendingEventIds.Add(unresolved.Pending.EntryEventId);
                             pending = null;
                         }
                     }
                     var prefix = bars.Take(index + 1).ToArray();
-                    var liquidity = liquiditySource?.Get(symbol, now, (decimal)current.Close);
-                    var build = StructureSnapshotFactory.Create(symbol, market, prefix, daily[symbol], current.Close,
+                    StructureLiquidity? liquidity;
+                    lock (_liquidityLock)
+                        liquidity = liquiditySource?.Get(symbol, now, (decimal)current.Close);
+                    var build = StructureSnapshotFactory.Create(symbol, market, prefix, daily, current.Close,
                         now, now, 1, sessionPolicy, liquidity, barSpan);
                     if (build.Snapshot is null || build.LastCompletedBarStart is null ||
                         build.Status != StructureAnalysisStatus.Available) continue;
@@ -164,11 +267,13 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                         snapshot.SessionEnd, snapshot.AnalysisAsOf, now, build.Bars.Bars, evaluated.Zones,
                         evaluated.Episodes, trend, built.Atr1mAtCutoff, snapshot.QuotePrice, snapshot.QuoteAt,
                          snapshot.OptionalLiquidity, build.Quality.BlockersForCandidate.Concat(gate.Blockers).ToImmutableArray()), sessionPolicy);
-                    var candidates = StructuralLifecycle.ApplyLive(
+                    var candidates = ApplyReplayPositionPolicy(StructuralLifecycle.ApplyLive(
                         StructuralLifecycle.ApplyLatch(latch, detected.Candidates, gate.AllowNewTrigger, sessionPolicy,
-                            evaluated.Zones), snapshot.QuotePrice, now);
+                            evaluated.Zones), snapshot.QuotePrice, now));
                     foreach (var candidate in candidates)
                     {
+                        if (candidate.Evidence?.Forecast?.Input is { } forecastInput)
+                            forecastInputs.TryAdd(candidate.EventId, forecastInput);
                         var reasons = candidate.RejectionCodes
                             .Concat(candidate.Planning.ReasonCodes)
                             .Concat(candidate.Evidence?.GateReasons ?? ImmutableArray<string>.Empty)
@@ -177,69 +282,61 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                         var structuralReady = candidate.Disposition == CandidateDisposition.Ready;
                         var costComplete = candidate.Evidence?.CostComplete == true;
                         var expectedValueReady = candidate.Evidence?.ExpectedNetR is > 0;
-                        candidateDiagnostics[candidate.EventId] = new ReplayCandidateDiagnostic(
+                        var gateApproved = structuralReady && costComplete && expectedValueReady;
+                        var diagnostic = new ReplayCandidateDiagnostic(
                             symbol, MarketRules.TradingDate(sessionStart), candidate.EventId,
                             candidate.TriggerBarStart, candidate.Side, candidate.Regime?.Key ?? "UNCOLLECTED",
                             candidate.Disposition, structuralReady,
-                            structuralReady && costComplete && expectedValueReady,
+                            gateApproved,
                             costComplete, liquiditySource?.IsModeled == true,
                             liquiditySource?.SourceName ?? "MISSING",
                             candidate.Evidence?.ExpectedNetR,
                             reasons, contributions, Forecast: candidate.Evidence?.Forecast,
-                            RegimeAssessment: candidate.Evidence?.RegimeAssessment);
+                            RegimeAssessment: candidate.Evidence?.RegimeAssessment,
+                            ForecastInput: forecastInputs.GetValueOrDefault(candidate.EventId));
+                        candidateDiagnostics[candidate.EventId] = ReconcileDiagnostic(
+                            candidateDiagnostics.GetValueOrDefault(candidate.EventId), diagnostic);
                     }
                     var preferred = CandidateSelection.SelectPreferred(candidates);
+                    if (preferred is not null)
+                        UpdateDiagnostic(candidateDiagnostics, preferred.EventId, row => row with { Preferred = true });
 
                     if (!exitedThisPoll && pending is null && preferred is { Disposition: CandidateDisposition.Ready, Plan: not null }
-                        && ShouldQueuePending(pendingEventIds, new PendingEntry(preferred.EventId, symbol,
-                            preferred.Side, preferred.TriggerBarStart, preferred.TriggerBarStart.Add(barSpan),
-                            preferred.ExpiresAt, (double)preferred.Plan.Stop, (double)preferred.Plan.Target,
-                            (double)preferred.Plan.EntryReference, preferred.Plan.PlanId, preferred.Plan.PolicyHash)))
+                        && ShouldQueuePending(pendingEventIds, PendingEntryPolicy.Create(preferred.EventId, symbol,
+                            preferred.TriggerBarStart, preferred.TriggerBarStart.Add(barSpan), preferred.ExpiresAt,
+                            preferred.Plan, replayPolicy.BreakoutConfirmationGateVersion)))
                     {
                         var context = StructuralSimulation.Freeze(preferred.Plan, preferred.EventId,
                             trend.State.ToString(), trend.SignedTrend, preferred.EntryQuality,
-                            snapshot.AnalysisAsOf, snapshot.QuoteAt);
-                        var pendingEntry = new PendingEntry(preferred.EventId, symbol, preferred.Side,
+                            snapshot.AnalysisAsOf, snapshot.QuoteAt, sessionPolicy);
+                        var pendingEntry = PendingEntryPolicy.Create(preferred.EventId, symbol,
                             preferred.TriggerBarStart, preferred.TriggerBarStart.Add(barSpan), preferred.ExpiresAt,
-                            (double)preferred.Plan.Stop, (double)preferred.Plan.Target,
-                            (double)preferred.Plan.EntryReference, preferred.Plan.PlanId, preferred.Plan.PolicyHash);
+                            preferred.Plan, replayPolicy.BreakoutConfirmationGateVersion);
                         pending = new PendingReplayEntry(pendingEntry, context, preferred);
+                        UpdateDiagnostic(candidateDiagnostics, preferred.EventId,
+                            row => row with { PendingQueued = true, ExecutionStopReason = null });
                     }
                     latch = StructuralLifecycle.Commit(latch, cutoff, candidates, evaluated.RetiredZoneIds,
                         StructuralLifecycle.EventSignature(candidates,
                             CandidateSelection.SelectPreferred(candidates)?.EventId), null, consumeOnReady: false);
                 }
 
-                result[symbol] = ReplayPendingBars(result[symbol], symbol, bars, processedBars);
-                result[symbol] = SimulationEngine.CloseExpiredSessions(result[symbol], sessionEnd);
-                daily[symbol].Add(Daily(bars));
-            }
+                result = ReplayPendingBars(result, symbol, bars, processedBars);
+                result = SimulationEngine.CloseExpiredSessions(result, sessionEnd);
+                daily.Add(Daily(bars));
+        }
 
-        var trades = result.ToImmutableDictionary(x => x.Key, x => x.Value.ToImmutableArray(),
-            StringComparer.OrdinalIgnoreCase);
-        if (liquiditySource?.IsModeled == true)
-            trades = trades.ToImmutableDictionary(x => x.Key,
-                x => x.Value.Select(ApplyModeledRealizedSpread).ToImmutableArray(),
-                StringComparer.OrdinalIgnoreCase);
-        var realized = trades.Values.SelectMany(x => x).Where(x => x.ExitAt is not null && x.PnlPercent is not null &&
-                x.Structure?.EntryEventId is not null)
-            .GroupBy(x => x.Structure!.EntryEventId, StringComparer.Ordinal)
-            .ToDictionary(x => x.Key, x => x.First(), StringComparer.Ordinal);
-        var diagnostics = candidateDiagnostics.Values
-            .Select(x => realized.TryGetValue(x.EventId, out var trade) && trade.Structure?.PlanSnapshot.RiskPercent is > 0
-                ? x with { RealizedNetR = trade.PnlPercent / trade.Structure.PlanSnapshot.RiskPercent }
-                : x)
-            .OrderBy(x => x.SessionDate).ThenBy(x => x.Symbol, StringComparer.Ordinal)
-            .ThenBy(x => x.SignalAt).ThenBy(x => x.EventId, StringComparer.Ordinal).ToImmutableArray();
-        return new ReplayRun(trades, diagnostics,
-            coverage.OrderBy(x => x.Key, StringComparer.Ordinal).Select(x => x.Value.Build(x.Key)).ToImmutableArray(),
-            SummarizeGates(diagnostics));
+        return new SymbolReplayResult(symbol, result.ToImmutableArray(),
+            candidateDiagnostics.Values.ToImmutableArray(), coverage.Build(symbol));
     }
+
+    sealed record SymbolReplayResult(string Symbol, ImmutableArray<SimTrade> Trades,
+        ImmutableArray<ReplayCandidateDiagnostic> Candidates, ReplaySourceCoverage Coverage);
 
     public static ReplayGateSummary SummarizeGates(IEnumerable<ReplayCandidateDiagnostic> diagnostics)
     {
         var rows = diagnostics.ToArray();
-        var rejected = rows.Where(x => !x.FinalApproved).ToArray();
+        var rejected = rows.Where(x => !Approved(x)).ToArray();
         var failures = rejected.ToDictionary(x => x.EventId, FailureReasons, StringComparer.Ordinal);
         var exclusive = rejected.Select(x => failures[x.EventId][0]).GroupBy(x => x, StringComparer.Ordinal)
             .ToDictionary(x => x.Key, x => x.Count(), StringComparer.Ordinal);
@@ -249,10 +346,55 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
             .OrderBy(GateOrder).ThenBy(x => x, StringComparer.Ordinal)
             .Select(x => new ReplayGateCount(x, overlapping.GetValueOrDefault(x), exclusive.GetValueOrDefault(x)))
             .ToImmutableArray();
-        return new ReplayGateSummary(rows.Length, rows.Count(x => x.StructuralReady),
-            rows.Count(x => x.FinalApproved), rejected.Length,
+        var funnel = new ReplayExecutionFunnel(rows.Length, rows.Count(x => x.Preferred),
+            rows.Count(x => x.PendingQueued), rows.Count(x => x.Confirmed), rows.Count(x => x.Filled),
+            rows.All(x => !x.Filled || x.Confirmed) && rows.All(x => !x.Confirmed || x.PendingQueued) &&
+            rows.All(x => !x.PendingQueued || x.Preferred), "distinct-entry-event-id",
+            "candidate→preferred→pending-queued→confirmation-accepted→trade-filled");
+        var approved = rows.Count(Approved);
+        return new ReplayGateSummary(rows.Length, rows.Count(x => x.StructuralReady), approved, rejected.Length,
             rows.Count(x => x.Side == TradeSide.Long), rows.Count(x => x.Side == TradeSide.Short),
-            overlapping.Values.Sum() > rejected.Length, GateAttributionOrder, gates);
+            overlapping.Values.Sum() > rejected.Length, GateAttributionOrder, gates)
+            { ExecutionFunnel = funnel };
+    }
+
+    public static ReplayCandidateDiagnostic ReconcileDiagnostic(ReplayCandidateDiagnostic? previous,
+        ReplayCandidateDiagnostic current)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        if (previous is null) return current;
+        if (!string.Equals(previous.EventId, current.EventId, StringComparison.Ordinal))
+            throw new ArgumentException("같은 EventId의 진단만 누적할 수 있습니다.", nameof(previous));
+        return current with
+        {
+            StructuralReady = previous.StructuralReady || current.StructuralReady,
+            FinalApproved = previous.FinalApproved || current.FinalApproved,
+            Preferred = previous.Preferred || current.Preferred,
+            PendingQueued = previous.PendingQueued || current.PendingQueued,
+            Confirmed = previous.Confirmed || current.Confirmed,
+            Filled = previous.Filled || current.Filled,
+            ExecutionStopReason = current.ExecutionStopReason ?? previous.ExecutionStopReason,
+            BenchmarkContextReason = current.BenchmarkContextReason ?? previous.BenchmarkContextReason,
+            BenchmarkReturnPercent = current.BenchmarkReturnPercent ?? previous.BenchmarkReturnPercent
+        };
+    }
+
+    public static ImmutableArray<EntryCandidate> ApplyReplayPositionPolicy(IEnumerable<EntryCandidate> candidates) =>
+        candidates.Select(candidate => candidate.Side == TradeSide.Short
+            ? candidate with
+            {
+                Disposition = CandidateDisposition.Rejected,
+                RejectionCodes = candidate.RejectionCodes.Add(ReplayLongOnlyShortRejected)
+                    .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToImmutableArray()
+            }
+            : candidate).ToImmutableArray();
+
+    static bool Approved(ReplayCandidateDiagnostic row) => row.FinalApproved;
+
+    static void UpdateDiagnostic(IDictionary<string, ReplayCandidateDiagnostic> diagnostics, string eventId,
+        Func<ReplayCandidateDiagnostic, ReplayCandidateDiagnostic> update)
+    {
+        if (diagnostics.TryGetValue(eventId, out var row)) diagnostics[eventId] = update(row);
     }
 
     static ImmutableArray<string> FailureReasons(ReplayCandidateDiagnostic row)
@@ -370,3 +512,5 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
     static Candle Daily(ImmutableArray<Candle> bars) => new(bars[0].Timestamp, bars[0].Open,
         bars.Max(x => x.High), bars.Min(x => x.Low), bars[^1].Close, bars.Sum(x => x.Volume));
 }
+
+

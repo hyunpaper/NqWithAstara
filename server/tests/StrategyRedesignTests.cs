@@ -158,6 +158,7 @@ public sealed class StrategyRedesignTests
         Assert.True(candidate.Plan!.Stop > candidate.EntryReference);
         Assert.True(candidate.Plan.Target < candidate.EntryReference);
         Assert.True(candidate.Evidence!.TrendAlignment > 0);
+        Assert.Equal(2.5, candidate.Evidence.VwapDistanceAtr);
         var invalidated = StructuralLifecycle.ApplyLive([candidate], candidate.Plan.Stop + .01m, Fx.At(31));
         Assert.Equal(CandidateDisposition.Invalidated, Assert.Single(invalidated).Disposition);
     }

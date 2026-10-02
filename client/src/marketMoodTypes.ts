@@ -27,7 +27,29 @@ export type MarketMoodResponse = {
   limitations: string[];
   evidence: string[];
   economicCalendar: EconomicCalendarSnapshot;
+  policyRates: MarketPolicyRateSnapshot;
   assets: MarketMoodAsset[];
+};
+
+export type MarketPolicyRate = {
+  key: string;
+  label: string;
+  value: number;
+  previous: number | null;
+  asOf: string | null;
+  note: string | null;
+  checkedAt: string | null;
+  source: string;
+  delayStatus: "fresh" | "stale" | "unavailable";
+  reason: string | null;
+};
+
+export type MarketPolicyRateSnapshot = {
+  status: "available" | "delayed" | "unavailable" | "unsupported";
+  checkedAt: string | null;
+  source: string;
+  reason: string | null;
+  rates: MarketPolicyRate[];
 };
 
 export type EconomicCalendarEvent = {
@@ -117,6 +139,28 @@ export const normalizeMarketMood = (value: unknown): MarketMoodResponse | null =
       reason: text(event.reason),
     }];
   }) : [];
+  const rawPolicyRates = record(root.policyRates);
+  const policyRateStatus = text(rawPolicyRates?.status);
+  const policyRates = Array.isArray(rawPolicyRates?.rates) ? rawPolicyRates.rates.flatMap((raw): MarketPolicyRate[] => {
+    const rate = record(raw);
+    const key = text(rate?.key);
+    const label = text(rate?.label);
+    const value = finite(rate?.value);
+    if (!rate || !key || !label || value == null) return [];
+    const delayStatus = text(rate.delayStatus);
+    return [{
+      key,
+      label,
+      value,
+      previous: finite(rate.previous),
+      asOf: text(rate.asOf),
+      note: text(rate.note),
+      checkedAt: text(rate.checkedAt),
+      source: text(rate.source) ?? text(rawPolicyRates?.source) ?? "출처 미상",
+      delayStatus: delayStatus === "fresh" || delayStatus === "stale" ? delayStatus : "unavailable",
+      reason: text(rate.reason),
+    }];
+  }) : [];
   return {
     asOf: text(root.asOf) ?? "",
     status: status === "available" || status === "partial" ? status : "unavailable",
@@ -138,6 +182,13 @@ export const normalizeMarketMood = (value: unknown): MarketMoodResponse | null =
       reason: text(rawCalendar?.reason),
       events: calendarEvents,
     },
+    policyRates: {
+      status: policyRateStatus === "available" || policyRateStatus === "delayed" || policyRateStatus === "unavailable" ? policyRateStatus : "unsupported",
+      checkedAt: text(rawPolicyRates?.checkedAt),
+      source: text(rawPolicyRates?.source) ?? "미연결",
+      reason: text(rawPolicyRates?.reason),
+      rates: policyRates,
+    },
     assets,
   };
 };
@@ -155,3 +206,16 @@ export const marketMoodDirectionLabel = (asset: MarketMoodAsset): string => {
   if (!asset.isAvailable) return direction ? `집계 제외 · ${direction}` : "집계 제외";
   return direction || "방향 없음";
 };
+
+export const policyRateStatusLabel = (status: MarketPolicyRateSnapshot["status"]): string => ({
+  available: "최신",
+  delayed: "지연",
+  unavailable: "조회 불가",
+  unsupported: "미지원",
+})[status];
+
+export const policyRateDelayLabel = (status: MarketPolicyRate["delayStatus"]): string => ({
+  fresh: "최신",
+  stale: "지연",
+  unavailable: "조회 불가",
+})[status];

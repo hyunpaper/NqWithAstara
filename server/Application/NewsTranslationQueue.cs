@@ -27,7 +27,35 @@ public sealed class NewsTranslationQueue(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     readonly HashSet<string> _pending = new(StringComparer.Ordinal);
     readonly SemaphoreSlim _cacheGate = new(1, 1);
+    readonly SemaphoreSlim _processingGate = new(1, 1);
     NewsTranslationCacheDocument? _cache;
+
+    public Task ClearCacheAsync(CancellationToken ct)
+        => RunExclusiveMaintenanceAsync<int>(_ => Task.FromResult(0), ct);
+
+    public async Task<TResult> RunExclusiveMaintenanceAsync<TResult>(
+        Func<CancellationToken, Task<TResult>> operation, CancellationToken ct)
+    {
+        await _processingGate.WaitAsync(ct);
+        try
+        {
+            var result = await operation(ct);
+            await ClearCacheCoreAsync(ct);
+            return result;
+        }
+        finally { _processingGate.Release(); }
+    }
+
+    async Task ClearCacheCoreAsync(CancellationToken ct)
+    {
+        await _cacheGate.WaitAsync(ct);
+        try
+        {
+            _cache = null;
+            await store.DeleteAsync(CacheFile, ct);
+        }
+        finally { _cacheGate.Release(); }
+    }
 
     sealed record TranslationWork(string Id, string Hash);
     sealed record TextResult(string? Value, string Status);
@@ -65,59 +93,66 @@ public sealed class NewsTranslationQueue(
     async Task ProcessAsync(TranslationWork work, CancellationToken ct)
     {
         var key = work.Id + "\n" + work.Hash;
+        var acquired = false;
         try
         {
-            var record = state.Find(work.Id);
-            if (record is null || !string.Equals(ContentHash(record), work.Hash, StringComparison.Ordinal)) return;
-
-            if (!translator.IsConfigured)
+            await _processingGate.WaitAsync(ct);
+            acquired = true;
+            try
             {
+                var record = state.Find(work.Id);
+                if (record is null || !string.Equals(ContentHash(record), work.Hash, StringComparison.Ordinal)) return;
+
+                if (!translator.IsConfigured)
+                {
+                    await SaveAsync(record with
+                    {
+                        TranslationStatus = "not_configured",
+                        TitleTranslationStatus = "not_configured",
+                        SummaryTranslationStatus = EmptyStatus(record.Summary, "not_configured"),
+                        ContentTranslationStatus = EmptyStatus(record.Content, "not_configured"),
+                        ClassificationTranslationStatus = EmptyStatus(record.ClassificationText, "not_configured"),
+                        TranslationContentHash = work.Hash
+                    }, ct);
+                    return;
+                }
+
+                var title = await TranslateAsync(record.Title, ct);
+                var source = await TranslateAsync(record.Source, ct);
+                var summary = await TranslateAsync(record.Summary, ct);
+                var content = await TranslateAsync(record.Content, ct);
+                var classification = await TranslateAsync(record.ClassificationText, ct);
+                var statuses = new[] { title.Status, source.Status, summary.Status, content.Status, classification.Status };
+                var overall = statuses.Any(x => x == "quota_wait") ? "quota_wait"
+                    : statuses.Any(x => x == "failed") ? (statuses.Any(x => x is "translated" or "not_needed" or "partial") ? "partial" : "failed")
+                    : statuses.All(x => x is "not_needed" or "not_available") ? "not_needed"
+                    : statuses.Any(x => x == "partial") ? "partial" : "translated";
+
                 await SaveAsync(record with
                 {
-                    TranslationStatus = "not_configured",
-                    TitleTranslationStatus = "not_configured",
-                    SummaryTranslationStatus = EmptyStatus(record.Summary, "not_configured"),
-                    ContentTranslationStatus = EmptyStatus(record.Content, "not_configured"),
-                    ClassificationTranslationStatus = EmptyStatus(record.ClassificationText, "not_configured"),
+                    TitleKo = title.Value ?? record.TitleKo,
+                    SourceKo = source.Value ?? record.SourceKo,
+                    SummaryKo = summary.Value,
+                    ContentKo = content.Value,
+                    ClassificationTextKo = classification.Value,
+                    TranslationStatus = overall,
+                    TitleTranslationStatus = title.Status,
+                    SummaryTranslationStatus = summary.Status,
+                    ContentTranslationStatus = content.Status,
+                    ClassificationTranslationStatus = classification.Status,
                     TranslationContentHash = work.Hash
                 }, ct);
-                return;
             }
-
-            var title = await TranslateAsync(record.Title, ct);
-            var source = await TranslateAsync(record.Source, ct);
-            var summary = await TranslateAsync(record.Summary, ct);
-            var content = await TranslateAsync(record.Content, ct);
-            var classification = await TranslateAsync(record.ClassificationText, ct);
-            var statuses = new[] { title.Status, source.Status, summary.Status, content.Status, classification.Status };
-            var overall = statuses.Any(x => x == "quota_wait") ? "quota_wait"
-                : statuses.Any(x => x == "failed") ? (statuses.Any(x => x is "translated" or "not_needed" or "partial") ? "partial" : "failed")
-                : statuses.All(x => x is "not_needed" or "not_available") ? "not_needed"
-                : statuses.Any(x => x == "partial") ? "partial" : "translated";
-
-            await SaveAsync(record with
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch
             {
-                TitleKo = title.Value ?? record.TitleKo,
-                SourceKo = source.Value ?? record.SourceKo,
-                SummaryKo = summary.Value,
-                ContentKo = content.Value,
-                ClassificationTextKo = classification.Value,
-                TranslationStatus = overall,
-                TitleTranslationStatus = title.Status,
-                SummaryTranslationStatus = summary.Status,
-                ContentTranslationStatus = content.Status,
-                ClassificationTranslationStatus = classification.Status,
-                TranslationContentHash = work.Hash
-            }, ct);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch
-        {
-            diagnostics.PollFailed("news-translate", new InvalidOperationException("뉴스 번역 처리에 실패했습니다."));
+                diagnostics.PollFailed("news-translate", new InvalidOperationException("뉴스 번역 처리에 실패했습니다."));
+            }
         }
         finally
         {
             lock (_pending) _pending.Remove(key);
+            if (acquired) _processingGate.Release();
         }
     }
 

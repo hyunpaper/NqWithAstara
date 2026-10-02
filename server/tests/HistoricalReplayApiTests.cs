@@ -60,6 +60,56 @@ public sealed class HistoricalReplayApiTests : IDisposable
         finally { try { Directory.Delete(isolatedRoot, true); } catch { } }
     }
 
+    [Fact]
+    public async Task IncompleteSourceCoverageSuppressesPerformanceAndSelection()
+    {
+        var isolatedRoot = Directory.CreateTempSubdirectory("astra-replay-insufficient-").FullName;
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseContentRoot(isolatedRoot);
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IHistoricalBarSource>();
+                services.AddSingleton<IHistoricalBarSource, PartialHistoricalSource>();
+            });
+        });
+        try
+        {
+            var store = factory.Services.GetRequiredService<ILocalStore>();
+            await store.Write("watchlist.json", new List<WatchItem> { new("TSLA", "Tesla") });
+            using var client = factory.CreateClient();
+            var response = await client.PostAsJsonAsync("/api/replays",
+                new { from = "2026-09-01", to = "2026-09-08" });
+            using var started = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            var id = started.RootElement.GetProperty("id").GetString()!;
+            JsonElement result = default;
+            for (var i = 0; i < 100; i++)
+            {
+                await Task.Delay(20);
+                using var read = JsonDocument.Parse(await client.GetStringAsync($"/api/replays/{id}"));
+                result = read.RootElement.Clone();
+                if (result.GetProperty("status").GetString() is "completed" or "failed") break;
+            }
+
+            Assert.True(result.GetProperty("status").GetString() == "completed",
+                result.GetProperty("failureReason").GetString());
+            Assert.Equal("insufficient-data", result.GetProperty("dataStatus").GetString());
+            Assert.Contains("성과 집계", result.GetProperty("dataReason").GetString());
+            Assert.Equal(JsonValueKind.Null, result.GetProperty("aggregate").ValueKind);
+            Assert.Equal(JsonValueKind.Null, result.GetProperty("strategyGateSummary").ValueKind);
+            Assert.Equal("insufficient-source-coverage",
+                result.GetProperty("selectionDiagnostics").GetProperty("status").GetString());
+            var source = result.GetProperty("sourceQuality").EnumerateArray().First(x =>
+                x.GetProperty("symbol").GetString() == "TSLA");
+            Assert.Equal("2026-09-01", source.GetProperty("requestedFrom").GetString());
+            Assert.Equal("2026-09-08", source.GetProperty("requestedTo").GetString());
+            Assert.Equal("2026-09-08", source.GetProperty("firstCoveredSession").GetString());
+            Assert.Equal("2026-09-08", source.GetProperty("lastCoveredSession").GetString());
+            Assert.False(File.Exists(Path.Combine(isolatedRoot, "App_Data", "replays", id, "trades.jsonl")));
+        }
+        finally { try { Directory.Delete(isolatedRoot, true); } catch { } }
+    }
+
     readonly string _root = Directory.CreateTempSubdirectory("astra-replay-api-").FullName;
     readonly WebApplicationFactory<Program> _factory;
 
@@ -105,6 +155,12 @@ public sealed class HistoricalReplayApiTests : IDisposable
         }
 
         Assert.Equal("completed", result.GetProperty("status").GetString());
+        var datasetId = result.GetProperty("datasetId").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(datasetId));
+        Assert.Equal("available", result.GetProperty("datasetStatus").GetString());
+        Assert.False(result.GetProperty("datasetReused").GetBoolean());
+        Assert.True(Directory.Exists(Path.Combine(_root, "App_Data", "replay-datasets", datasetId!, "bars")));
+        Assert.False(Directory.Exists(Path.Combine(_root, "App_Data", "replays", id, "bars")));
         Assert.Equal("partial", result.GetProperty("dataStatus").GetString());
         Assert.Contains("실제 체결 성과", result.GetProperty("notice").GetString());
         Assert.Equal("TSLA", Assert.Single(result.GetProperty("watchlist").EnumerateArray()).GetString());
@@ -119,25 +175,51 @@ public sealed class HistoricalReplayApiTests : IDisposable
         Assert.Equal(JsonValueKind.Number, symbol.GetProperty("grossPnlPercent").ValueKind);
         Assert.Equal(JsonValueKind.Number, symbol.GetProperty("feePercent").ValueKind);
         Assert.Equal(JsonValueKind.Null, symbol.GetProperty("slippagePercent").ValueKind);
+        Assert.Contains("진입 후보 수가 아닙니다", symbol.GetProperty("signalsDefinition").GetString());
+        Assert.Contains("진입 후보 수가 아닙니다",
+            result.GetProperty("aggregate").GetProperty("signalsDefinition").GetString());
         var source = result.GetProperty("sourceQuality").EnumerateArray().First(x =>
             x.GetProperty("symbol").GetString() == "TSLA");
         Assert.Equal(20, source.GetProperty("requiredDailySeed").GetInt32());
         Assert.Equal(1, source.GetProperty("availableDailySeed").GetInt32());
         Assert.Equal("session-reset", source.GetProperty("carryPolicy").GetString());
         Assert.Equal(JsonValueKind.String, source.GetProperty("newestBar").ValueKind);
+        Assert.Equal("2026-09-08", source.GetProperty("requestedFrom").GetString());
+        Assert.Equal("2026-09-08", source.GetProperty("requestedTo").GetString());
+        Assert.Equal("2026-09-08", source.GetProperty("firstCoveredSession").GetString());
+        Assert.Equal("2026-09-08", source.GetProperty("lastCoveredSession").GetString());
         var coverage = Assert.Single(result.GetProperty("replayCoverage").EnumerateArray());
         Assert.Equal(1, coverage.GetProperty("sourceBarMinutes").GetDouble());
         Assert.Equal("supported", coverage.GetProperty("granularityStatus").GetString());
-        Assert.Equal(JsonValueKind.Object, result.GetProperty("strategyGateSummary").ValueKind);
+        var gateSummary = result.GetProperty("strategyGateSummary");
+        Assert.Equal(JsonValueKind.Object, gateSummary.ValueKind);
+        Assert.Equal(gateSummary.GetProperty("generated").GetInt32(),
+            gateSummary.GetProperty("executionFunnel").GetProperty("candidates").GetInt32());
+        Assert.True(gateSummary.GetProperty("executionFunnel").GetProperty("reconciled").GetBoolean());
+        Assert.Equal(gateSummary.GetProperty("finalApproved").GetInt32(),
+            gateSummary.GetProperty("gateApproved").GetInt32());
+        Assert.Equal(gateSummary.GetProperty("rejected").GetInt32(),
+            gateSummary.GetProperty("gateRejected").GetInt32());
         Assert.Equal(JsonValueKind.Null, result.GetProperty("timeframeNotice").ValueKind);
-        Assert.Equal("historical.ohlcv-spread-borrow-model.v2", result.GetProperty("costProfile").GetString());
+        Assert.Equal("historical.fee-only-long-only.v1", result.GetProperty("costProfile").GetString());
         Assert.Equal("modeled-v2", result.GetProperty("selectedCostPolicy").GetString());
         Assert.Equal(2, result.GetProperty("costResults").GetArrayLength());
+        var feeOnly = result.GetProperty("costResults").EnumerateArray().First();
+        Assert.Equal("fee-only", feeOnly.GetProperty("basis").GetString());
+        Assert.Equal(.2, feeOnly.GetProperty("commissionPercent").GetDouble());
+        Assert.Equal(0, feeOnly.GetProperty("modeledSpreadPercent").GetDouble());
+        Assert.Equal(0, feeOnly.GetProperty("modeledBorrowPercent").GetDouble());
+        Assert.Equal("unavailable", feeOnly.GetProperty("slippageStatus").GetString());
+        Assert.Equal("long-only", feeOnly.GetProperty("positionPolicy").GetString());
         Assert.Equal("insufficient-training-sample",
             result.GetProperty("selectionDiagnostics").GetProperty("status").GetString());
         Assert.Equal(ProbabilityCalibrationEvaluator.InsufficientData,
             result.GetProperty("probabilityCalibration").GetProperty("status").GetString());
         Assert.Equal(0, result.GetProperty("probabilityCalibration").GetProperty("usableRows").GetInt32());
+        Assert.Equal(ConditionalReturnWalkForwardTrainer.InsufficientData,
+            result.GetProperty("conditionalReturnModelEvaluation").GetProperty("status").GetString());
+        Assert.Equal(ConditionalReturnWalkForwardTrainer.FeatureSchemaHash,
+            result.GetProperty("conditionalReturnModelEvaluation").GetProperty("featureSchemaHash").GetString());
         using var diagnosticsResponse = await client.GetAsync($"/api/replays/{id}/diagnostics");
         Assert.Equal(HttpStatusCode.OK, diagnosticsResponse.StatusCode);
         using var diagnosticsDocument = JsonDocument.Parse(await diagnosticsResponse.Content.ReadAsStringAsync());
@@ -148,7 +230,11 @@ public sealed class HistoricalReplayApiTests : IDisposable
         Assert.Contains("slippage", diagnostics.GetProperty("notice").GetString(), StringComparison.Ordinal);
         using var trades = JsonDocument.Parse(await client.GetStringAsync($"/api/replays/{id}/trades"));
         Assert.Equal(JsonValueKind.Array, trades.RootElement.ValueKind);
+        Assert.All(trades.RootElement.EnumerateArray(), row =>
+            Assert.Equal((int)TradeSide.Long, row.GetProperty("trade").GetProperty("side").GetInt32()));
         Assert.True(File.Exists(Path.Combine(_root, "App_Data", "replays", id, "trades.jsonl")));
+        Assert.True(File.Exists(Path.Combine(_root, "App_Data", "replays", id,
+            "conditional-model-evaluation.json")));
         using var latest = JsonDocument.Parse(await client.GetStringAsync("/api/replays/latest"));
         Assert.Equal(id, latest.RootElement.GetProperty("id").GetString());
         Assert.True(File.Exists(Path.Combine(_root, "App_Data", "replay-runs.json")));
@@ -167,6 +253,45 @@ public sealed class HistoricalReplayApiTests : IDisposable
         var response = await client.PostAsJsonAsync("/api/replays",
             new { from = "2026-09-09", to = "2026-09-08" });
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("../TSLA")]
+    [InlineData("CON")]
+    [InlineData("THIS_SYMBOL_IS_LONGER_THAN_THIRTY_TWO_CHARS")]
+    public async Task PostRejectsInvalidDatasetSymbolsSynchronously(string symbol)
+    {
+        using var client = _factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/api/replays",
+            new { from = "2026-09-08", to = "2026-09-08", symbols = new[] { symbol } });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var source = Assert.IsType<FakeHistoricalSource>(_factory.Services.GetRequiredService<IHistoricalBarSource>());
+        Assert.Equal(0, source.Calls);
+    }
+
+    [Fact]
+    public async Task SameReplayRequestReusesDatasetAndOnlyExplicitRefreshFetchesAgain()
+    {
+        using var client = _factory.CreateClient();
+        var source = Assert.IsType<FakeHistoricalSource>(_factory.Services.GetRequiredService<IHistoricalBarSource>());
+        var request = new { from = "2026-09-08", to = "2026-09-08", symbols = new[] { "TSLA" } };
+
+        var first = await StartAndWaitAsync(client, request);
+        var callsAfterFirst = source.Calls;
+        var second = await StartAndWaitAsync(client, request);
+
+        Assert.Equal(first.GetProperty("datasetId").GetString(), second.GetProperty("datasetId").GetString());
+        Assert.True(second.GetProperty("datasetReused").GetBoolean());
+        Assert.Equal(callsAfterFirst, source.Calls);
+
+        var refreshed = await StartAndWaitAsync(client,
+            new { from = "2026-09-08", to = "2026-09-08", symbols = new[] { "TSLA" }, refreshDataset = true });
+
+        Assert.True(refreshed.GetProperty("refreshDataset").GetBoolean());
+        Assert.False(refreshed.GetProperty("datasetReused").GetBoolean());
+        Assert.True(source.Calls > callsAfterFirst);
     }
 
     [Fact]
@@ -244,6 +369,42 @@ public sealed class HistoricalReplayApiTests : IDisposable
     }
 
     [Fact]
+    public async Task LegacyGateSummaryJsonLoadsAndRoundTripsThroughTheApi()
+    {
+        const string id = "legacy-gate-summary";
+        var summary = new HistoricalStructureTradeReplay.ReplayGateSummary(3, 1, 1, 2, 1, 2, false,
+            HistoricalStructureTradeReplay.GateAttributionOrder, []);
+        var run = Run(id) with { StrategyGateSummary = summary };
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
+        var document = JsonNode.Parse(JsonSerializer.Serialize(new[] { run }, options))!.AsArray();
+        var storedSummary = document[0]!["strategyGateSummary"]!.AsObject();
+        storedSummary.Remove("gateApproved");
+        storedSummary.Remove("gateRejected");
+        storedSummary.Remove("executionFunnel");
+        Directory.CreateDirectory(Path.Combine(_root, "App_Data"));
+        await File.WriteAllTextAsync(Path.Combine(_root, "App_Data", "replay-runs.json"),
+            document.ToJsonString(options));
+        using var client = _factory.CreateClient();
+
+        using var response = await client.GetAsync($"/api/replays/{id}");
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var apiSummary = body.RootElement.GetProperty("strategyGateSummary");
+        Assert.Equal(1, apiSummary.GetProperty("finalApproved").GetInt32());
+        Assert.Equal(2, apiSummary.GetProperty("rejected").GetInt32());
+        Assert.Equal(1, apiSummary.GetProperty("gateApproved").GetInt32());
+        Assert.Equal(2, apiSummary.GetProperty("gateRejected").GetInt32());
+        Assert.Equal(JsonValueKind.Null, apiSummary.GetProperty("executionFunnel").ValueKind);
+
+        var roundTripped = JsonSerializer.Deserialize<HistoricalReplayRun>(body.RootElement.GetRawText(), options);
+        Assert.NotNull(roundTripped);
+        Assert.Equal(1, roundTripped.StrategyGateSummary!.FinalApproved);
+        Assert.Equal(2, roundTripped.StrategyGateSummary.Rejected);
+        Assert.Null(roundTripped.StrategyGateSummary.ExecutionFunnel);
+    }
+
+    [Fact]
     public async Task DiagnosticsTreatsMissingAndNullStoredFeeAsUncollected()
     {
         const string id = "raw-costs";
@@ -291,11 +452,14 @@ public sealed class HistoricalReplayApiTests : IDisposable
 
     sealed class FakeHistoricalSource : IHistoricalBarSource
     {
+        int _calls;
         public string Name => "mock";
         public bool Adjusted => false;
+        public int Calls => Volatile.Read(ref _calls);
         public Task<HistoricalBarReadResult> ReadAsync(string symbol, DateTimeOffset from, DateTimeOffset to,
             CancellationToken ct)
         {
+            Interlocked.Increment(ref _calls);
             var start = DateTimeOffset.Parse("2026-09-08T13:30:00Z");
             IReadOnlyList<Candle> bars = Enumerable.Range(0, 90).Select(i =>
                 new Candle(start.AddMinutes(i), 100 + i, 101 + i, 99 + i, 100.5 + i, 1000)).ToArray();
@@ -326,7 +490,38 @@ public sealed class HistoricalReplayApiTests : IDisposable
             CancellationToken ct) => Task.FromResult(new HistoricalBarReadResult([], 0, false, null, "빈 응답"));
     }
 
+    sealed class PartialHistoricalSource : IHistoricalBarSource
+    {
+        public string Name => "partial-mock";
+        public bool Adjusted => true;
+        public Task<HistoricalBarReadResult> ReadAsync(string symbol, DateTimeOffset from, DateTimeOffset to,
+            CancellationToken ct)
+        {
+            var start = DateTimeOffset.Parse("2026-09-08T13:30:00Z");
+            IReadOnlyList<Candle> bars = Enumerable.Range(0, 30).Select(i =>
+                new Candle(start.AddMinutes(i), 100 + i, 101 + i, 99 + i, 100.5 + i, 1000)).ToArray();
+            return Task.FromResult(new HistoricalBarReadResult(bars, bars.Count, false,
+                bars.Min(x => x.Timestamp), "페이지 상한"));
+        }
+    }
+
     sealed record WeightMarker(string Marker);
+
+    static async Task<JsonElement> StartAndWaitAsync(HttpClient client, object request)
+    {
+        using var response = await client.PostAsJsonAsync("/api/replays", request);
+        response.EnsureSuccessStatusCode();
+        using var started = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var id = started.RootElement.GetProperty("id").GetString()!;
+        for (var i = 0; i < 200; i++)
+        {
+            await Task.Delay(20);
+            using var read = JsonDocument.Parse(await client.GetStringAsync($"/api/replays/{id}"));
+            var result = read.RootElement.Clone();
+            if (result.GetProperty("status").GetString() is "completed" or "no-data" or "failed") return result;
+        }
+        throw new TimeoutException("replay가 제한 시간 안에 종료되지 않았습니다.");
+    }
 
     HistoricalReplayRun Run(string id) => new(id, new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 8),
         ImmutableArray.Create("TSLA"), "QQQ", "mock", "policy", "weights", "completed",

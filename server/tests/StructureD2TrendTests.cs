@@ -438,6 +438,19 @@ public sealed class StructureD2TrendTests
         Assert.Equal(.5, sd!.Value, 12);
     }
 
+    [Fact]
+    public void VwapForANewSessionDoesNotCarryThePriorSession()
+    {
+        var prior = ImmutableArray.Create(Bar(0, 100m, .10m));
+        var current = ImmutableArray.Create(Bar(0, 200m, .10m));
+
+        var (currentVwap, _) = SessionIndicators.Vwap(current);
+        var (incorrectlyCarriedVwap, _) = SessionIndicators.Vwap(prior.AddRange(current));
+
+        Assert.Equal(200, currentVwap);
+        Assert.Equal(150, incorrectlyCarriedVwap);
+    }
+
     // ── fixture ──
 
     /// <summary>지그재그를 유지하되 상승 폭이 커서 두 family가 모두 +이고 efficiency가 높은 경로.</summary>

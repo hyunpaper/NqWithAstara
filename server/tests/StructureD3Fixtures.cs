@@ -9,6 +9,8 @@ using Astra.Server.Domain.Structure;
 /// </summary>
 static class D3
 {
+    public static readonly StructurePolicy P = D2.PreCycle45;
+
     public static readonly DateTimeOffset SessionStart = Fx.SessionStart;
     public static readonly DateTimeOffset SessionEnd = Fx.SessionEnd;
     public const string Symbol = "TEST";
@@ -38,8 +40,8 @@ static class D3
     public static StructureAnalysisService Service(StructureEngineMode mode, MemoryObservationStore observations,
         MonitorRuntimeState runtime, TimeProvider clock, ILocalStore? store = null,
         ConfluenceService? confluence = null) =>
-        new(store ?? new RecordingStore(), new StructureObservationWriter(observations, StructurePolicy.Default),
-            runtime, clock, new SilentDiagnostics(), new StructureEngineOptions(mode), StructurePolicy.Default,
+        new(store ?? new RecordingStore(), new StructureObservationWriter(observations, P),
+            runtime, clock, new SilentDiagnostics(), new StructureEngineOptions(mode), P,
             confluence: confluence);
 
     public static long StartedRuntime(MonitorRuntimeState runtime, MarketSession? session = null)

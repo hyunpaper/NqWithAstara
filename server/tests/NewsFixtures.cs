@@ -86,6 +86,7 @@ sealed class FakeNewsTranslator : INewsTranslator
 
 sealed class MemoryNewsStore : INewsStore
 {
+    readonly SemaphoreSlim _gate = new(1, 1);
     public Dictionary<string, List<string>> Files { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, string> Texts { get; } = new(StringComparer.Ordinal);
 
@@ -97,11 +98,50 @@ sealed class MemoryNewsStore : INewsStore
     public Task<IReadOnlyList<string>> ReadLinesAsync(string file, CancellationToken ct)
         => Task.FromResult<IReadOnlyList<string>>(Files.TryGetValue(file, out var lines) ? lines.ToArray() : []);
 
-    public Task AppendAsync(string file, string line, CancellationToken ct)
+    public async Task<int> FilterLinesAsync(string file, Func<string, bool> keep, CancellationToken ct)
     {
-        if (!Files.TryGetValue(file, out var lines)) Files[file] = lines = [];
-        lines.Add(line);
-        return Task.CompletedTask;
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (!Files.TryGetValue(file, out var lines)) return 0;
+            var retained = lines.Where(keep).ToList();
+            var removed = lines.Count - retained.Count;
+            Files[file] = retained;
+            return removed;
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<IReadOnlyDictionary<string, int>> FilterFilesAsync(
+        IReadOnlyList<string> files, Func<string, bool> keep, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var removed = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var file in files.Distinct(StringComparer.Ordinal))
+            {
+                if (!Files.TryGetValue(file, out var lines)) continue;
+                var retained = lines.Where(keep).ToList();
+                var count = lines.Count - retained.Count;
+                if (count == 0) continue;
+                Files[file] = retained;
+                removed[file] = count;
+            }
+            return removed;
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task AppendAsync(string file, string line, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (!Files.TryGetValue(file, out var lines)) Files[file] = lines = [];
+            lines.Add(line);
+        }
+        finally { _gate.Release(); }
     }
 
     public Task<string?> ReadTextAsync(string file, CancellationToken ct)
@@ -109,7 +149,23 @@ sealed class MemoryNewsStore : INewsStore
 
     public Task WriteTextAsync(string file, string content, CancellationToken ct)
     {
+        if (file.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase))
+        {
+            Files[file] = content.Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList();
+            Texts.Remove(file);
+            return Task.CompletedTask;
+        }
         Texts[file] = content;
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<string>> ListFilesAsync(CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<string>>(Files.Keys.Concat(Texts.Keys).Distinct(StringComparer.Ordinal).ToArray());
+
+    public Task DeleteAsync(string file, CancellationToken ct)
+    {
+        Files.Remove(file);
+        Texts.Remove(file);
         return Task.CompletedTask;
     }
 }

@@ -17,6 +17,8 @@ public sealed record StructurePolicy
     public string Version { get; init; } = "v5-structure.1";
     public string EligibilityCostModelVersion { get; init; } = "eligibility.fee-plus-spread.1";
     public string RealizedFillCostModelVersion { get; init; } = "realized.v4-fill.1";
+    public string ReboundLongVwapGateVersion { get; init; } = "reject-positive-distance.1";
+    public string BreakoutConfirmationGateVersion { get; init; } = "hold-breakout-boundary.1";
 
     // ── 피벗·최소 관측 (§16A 표) ──
     public int PivotLeft { get; init; } = 2;
@@ -130,8 +132,42 @@ public sealed record StructurePolicy
     public double? ExpectedValueFeatureThreshold { get; init; }
     public double MinimumExpectedNetR { get; init; } = 0.0;
     public bool RequireCompleteLiquidityCost { get; init; } = true;
+    /// <summary>
+    /// TRANSITION은 확정된 추세 정렬이 없는 구간이므로 PULLBACK의 최종 진입 자격을 기본 차단한다.
+    /// 후보와 근거는 관측을 위해 생성하되, 명시적으로 허용한 정책에서만 최종 자격 차단을 해제한다.
+    /// </summary>
     public bool AllowTransitionPullback { get; init; }
+    public bool AllowQualifiedTransitionPullback { get; init; } = true;
+    public bool AllowTrendAlignedTransitionPullback { get; init; }
+    public double TransitionPullbackMinimumRelativeVolume { get; init; } = .75;
+    public double TransitionPullbackMaximumNetR { get; init; } = 1.4;
     public bool AllowTransitionBreakout { get; init; }
+    public bool AllowQualifiedTransitionBreakout { get; init; } = true;
+    public double TransitionBreakoutMinimumRelativeVolume { get; init; } = .9;
+    public double TransitionBreakoutMaximumNetR { get; init; } = 1.65;
+    public bool RequirePositiveBenchmarkForRebound { get; init; }
+    public bool RequirePullbackNearVwap { get; init; } = true;
+    public double PullbackMaximumVwapDistanceAtr { get; init; } = 2.1;
+    public bool RequireBreakoutNearVwap { get; init; } = true;
+    public double BreakoutMaximumVwapDistanceAtr { get; init; } = 5.0;
+    public bool RequireMinimumReboundEntryQuality { get; init; } = true;
+    public double MinimumReboundEntryQuality { get; init; } = 50.0;
+    public bool RequireBreakoutAboveVwap { get; init; } = true;
+    public bool RequireMaximumReboundNetR { get; init; } = true;
+    public double MaximumReboundNetR { get; init; } = 1.9;
+    /// <summary>
+    /// v5 청산 정책. 완료 봉 종가가 최초 구조 위험의 2배 이상 유리해진 뒤 다음 봉부터
+    /// 왕복 비용을 회수하는 가격으로 손절을 올린다. Cycle45 운영 기본값 true(§10, #245).
+    /// </summary>
+    public bool EnableTwoRFeeBreakEvenStop { get; init; } = true;
+    /// <summary>기존 regime classifier가 RANGE_HIGH로 확정한 후보만 차단하는 실험 정책. 기본 비활성.</summary>
+    public bool RejectHighVolatilityRangeEntries { get; init; }
+    /// <summary>최초 구조 위험의 2R보다 먼 목표만 2R로 제한한다. Cycle45 운영 기본값 true(§10, #245).</summary>
+    public bool CapStructuralTargetAtTwoR { get; init; } = true;
+    public bool EnableHalfRFeeBreakEvenStopForPositiveBenchmark { get; init; } = true;
+    /// <summary>양의 벤치마크 0.5R 비용회수 손절에서 BREAKOUT만 제외한다. Cycle45 운영 기본값 true(§10, #245).</summary>
+    public bool ExemptBreakoutFromPositiveBenchmarkHalfRStop { get; init; } = true;
+    public bool EnableHalfRFeeBreakEvenStopForQualifiedTransition { get; init; }
 
     /// <summary>§7 UP/DOWN 진입·이탈에 요구하는 연속 완료 봉 수. TRANSITION은 여기서 제외된다(§7, #148).</summary>
     public int TrendStateHoldBars { get; init; } = 2;
@@ -238,3 +274,7 @@ public sealed record StructurePolicy
         _ => throw new NotSupportedException($"Unsupported policy value type {value.GetType().Name}.")
     };
 }
+
+
+
+

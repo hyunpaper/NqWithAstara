@@ -12,6 +12,15 @@ public interface IHistoricalBarSource
         CancellationToken ct);
 }
 
+public sealed record HistoricalBarPage(string RequestCursor, string? NextCursor, IReadOnlyList<Candle> Bars,
+    int RawBarCount, bool ReachedRequestedStart, DateTimeOffset? OldestBar, string? StopReason);
+
+public interface IHistoricalBarPageSource : IHistoricalBarSource
+{
+    IAsyncEnumerable<HistoricalBarPage> ReadPagesAsync(string symbol, DateTimeOffset from, DateTimeOffset to,
+        string? before, int completedPages, IReadOnlyCollection<string> visitedCursors, CancellationToken ct);
+}
+
 public sealed record HistoricalBarReadResult(IReadOnlyList<Candle> Bars, int RawBarCount,
     bool ReachedRequestedStart, DateTimeOffset? OldestBar, string? StopReason);
 
@@ -28,7 +37,8 @@ public sealed record ReplayImportReport(string Source, DateTimeOffset FetchedAt,
 
 public sealed record ReplayImportSourceRow(string Symbol, int RawBars, int ActualTradingDays,
     bool ReachedRequestedStart, DateTimeOffset? OldestBar, string DataStatus, string? Reason,
-    DateTimeOffset? NewestBar = null);
+    DateTimeOffset? NewestBar = null, DateOnly? FirstCoveredSession = null,
+    DateOnly? LastCoveredSession = null, DateOnly? RequestedFrom = null, DateOnly? RequestedTo = null);
 
 public sealed class ReplayBackfill(IHistoricalBarSource source, TimeProvider clock)
 {
@@ -48,17 +58,30 @@ public sealed class ReplayBackfill(IHistoricalBarSource source, TimeProvider clo
         var fetchedAt = clock.GetUtcNow();
         var start = EasternOffset(from, 0, 0);
         var end = EasternOffset(to.AddDays(1), 0, 0);
-        var normalized = new Dictionary<string, Dictionary<DateOnly, Normalized>>(StringComparer.OrdinalIgnoreCase);
         var reads = new Dictionary<string, HistoricalBarReadResult>(StringComparer.OrdinalIgnoreCase);
         foreach (var symbol in all)
         {
             ct.ThrowIfCancellationRequested();
             var raw = await source.ReadAsync(symbol, start, end, ct);
             reads[symbol] = raw;
-            normalized[symbol] = Normalize(raw.Bars, from, to);
         }
 
-        var sourceRows = all.Select(symbol => SourceRow(symbol, reads[symbol], normalized[symbol])).ToImmutableArray();
+        return await WriteAsync(root, watchlist, benchmark, from, to, fetchedAt, reads, ct);
+    }
+
+    internal async Task<ReplayImportReport> WriteAsync(string root, IReadOnlyList<string> watchlist, string benchmark,
+        DateOnly from, DateOnly to, DateTimeOffset fetchedAt,
+        IReadOnlyDictionary<string, HistoricalBarReadResult> reads, CancellationToken ct)
+    {
+        var symbols = watchlist.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim().ToUpperInvariant())
+            .Where(x => !string.Equals(x, benchmark, StringComparison.OrdinalIgnoreCase)).Distinct().ToArray();
+        var all = symbols.Append(benchmark.ToUpperInvariant()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var normalized = all.ToDictionary(x => x, x => Normalize(reads[x].Bars, from, to),
+            StringComparer.OrdinalIgnoreCase);
+        var end = EasternOffset(to.AddDays(1), 0, 0);
+
+        var sourceRows = all.Select(symbol => SourceRow(symbol, reads[symbol], normalized[symbol], from, to))
+            .ToImmutableArray();
         var benchmarkRow = sourceRows.First(x => string.Equals(x.Symbol, benchmark, StringComparison.OrdinalIgnoreCase));
         var dataStatus = sourceRows.All(x => x.ActualTradingDays == 0) || benchmarkRow.ActualTradingDays == 0 ? "no-data" :
             sourceRows.Any(x => x.DataStatus != "available") ? "partial" : "available";
@@ -72,6 +95,7 @@ public sealed class ReplayBackfill(IHistoricalBarSource source, TimeProvider clo
 
         var barsRoot = Path.Combine(Path.GetFullPath(root), "bars");
         if (Directory.Exists(barsRoot)) Directory.Delete(barsRoot, true);
+        Directory.CreateDirectory(barsRoot);
         var tradingDays = normalized.Values.SelectMany(x => x.Keys).Distinct().Order().ToArray();
         var rows = ImmutableArray.CreateBuilder<ReplayImportRow>();
         foreach (var day in tradingDays)
@@ -94,7 +118,7 @@ public sealed class ReplayBackfill(IHistoricalBarSource source, TimeProvider clo
     }
 
     static ReplayImportSourceRow SourceRow(string symbol, HistoricalBarReadResult read,
-        Dictionary<DateOnly, Normalized> normalized)
+        Dictionary<DateOnly, Normalized> normalized, DateOnly requestedFrom, DateOnly requestedTo)
     {
         var status = normalized.Count == 0 ? "no-data" : read.ReachedRequestedStart ? "available" : "partial";
         var reason = status switch
@@ -105,7 +129,9 @@ public sealed class ReplayBackfill(IHistoricalBarSource source, TimeProvider clo
         };
         var actual = normalized.Values.SelectMany(x => x.Bars).Select(x => (DateTimeOffset?)x.Timestamp);
         return new ReplayImportSourceRow(symbol, read.RawBarCount, normalized.Count,
-            read.ReachedRequestedStart, actual.Min(), status, reason, actual.Max());
+            read.ReachedRequestedStart, actual.Min(), status, reason, actual.Max(),
+            normalized.Count == 0 ? null : normalized.Keys.Min(),
+            normalized.Count == 0 ? null : normalized.Keys.Max(), requestedFrom, requestedTo);
     }
 
     static Dictionary<DateOnly, Normalized> Normalize(IEnumerable<Candle> source, DateOnly from, DateOnly to)

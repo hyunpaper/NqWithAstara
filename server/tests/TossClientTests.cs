@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
 using Astra.Server;
+using Astra.Server.Application.Backtest;
 using Xunit;
 
 namespace Astra.Server.Tests;
@@ -64,7 +65,7 @@ public sealed class TossClientTests : IDisposable
     {
         var handler = new FixtureHandler((request, count) => request.RequestUri!.AbsolutePath == "/oauth2/token"
             ? Json("{\"access_token\":\"fixture\",\"expires_in\":3600}")
-            : request.RequestUri.Query.Contains("before=")
+            : request.RequestUri.Query.Contains("before=older")
                 ? CandlePage("2026-09-07T13:30:00Z", null)
                 : CandlePage("2026-09-08T13:30:00Z", "older"));
 
@@ -76,6 +77,87 @@ public sealed class TossClientTests : IDisposable
         Assert.Equal(DateTimeOffset.Parse("2026-09-07T13:30:00Z"), result.OldestBar);
         Assert.Single(result.Bars);
         Assert.Null(result.StopReason);
+        Assert.Equal(2, handler.Paths.Count(x => x == "/api/v1/candles"));
+    }
+
+    [Fact]
+    public async Task HistoricalCandlesAnchorsTheFirstPageAtTheRequestedExclusiveEnd()
+    {
+        string? query = null;
+        var handler = new FixtureHandler((request, count) => request.RequestUri!.AbsolutePath == "/oauth2/token"
+            ? Json("{\"access_token\":\"fixture\",\"expires_in\":3600}")
+            : Capture(request, value => query = value));
+
+        await Client(handler).HistoricalCandles("TSLA", DateTimeOffset.Parse("2026-06-29T04:00:00Z"),
+            DateTimeOffset.Parse("2026-09-27T04:00:00Z"), CancellationToken.None);
+
+        Assert.Contains("before=2026-09-27T04%3A00%3A00.0000000%2B00%3A00", query);
+        Assert.Contains("count=200", query);
+    }
+
+    [Fact]
+    public void HistoricalCandlePageBudgetCoversEveryMinuteInNinetyDaysBeyondTheLegacyCap()
+    {
+        var from = DateTimeOffset.Parse("2026-06-29T04:00:00Z");
+        var to = from.AddDays(90);
+
+        Assert.Equal(649, TossClient.HistoricalCandlePageBudget(from, to));
+    }
+
+    [Fact]
+    public void HistoricalCandlePageBudgetRejectsRangesBeyondTheReplayContract()
+    {
+        var from = DateTimeOffset.Parse("2026-01-01T05:00:00Z");
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            TossClient.HistoricalCandlePageBudget(from, from.AddDays(91)));
+    }
+
+    [Fact]
+    public async Task HistoricalCandlesHonorsCancellationBeforeFetchingAPage()
+    {
+        var handler = new FixtureHandler((request, count) => request.RequestUri!.AbsolutePath == "/oauth2/token"
+            ? Json("{\"access_token\":\"fixture\",\"expires_in\":3600}")
+            : CandlePage("2026-09-08T13:30:00Z", null));
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Client(handler).HistoricalCandles("TSLA",
+            DateTimeOffset.Parse("2026-09-01T00:00:00Z"), DateTimeOffset.Parse("2026-09-09T00:00:00Z"),
+            cancellation.Token));
+
+        Assert.DoesNotContain("/api/v1/candles", handler.Paths);
+    }
+
+    [Fact]
+    public async Task BackfillAndMonitorCandlesShareTheMarketDataChartLimiter()
+    {
+        var handler = new ChartConcurrencyHandler();
+        var client = Client(handler);
+        var from = DateTimeOffset.Parse("2026-09-01T00:00:00Z");
+        var to = DateTimeOffset.Parse("2026-09-02T00:00:00Z");
+
+        await Task.WhenAll(
+            client.HistoricalCandles("TSLA", from, to, CancellationToken.None),
+            client.Candles("QQQ", CancellationToken.None),
+            client.DailyCandles("SPY", CancellationToken.None));
+
+        Assert.Equal(1, handler.MaximumConcurrentChartRequests);
+    }
+
+    [Fact]
+    public async Task HistoricalCandlesStopsWhenTheProviderRepeatsACursor()
+    {
+        var handler = new FixtureHandler((request, count) => request.RequestUri!.AbsolutePath == "/oauth2/token"
+            ? Json("{\"access_token\":\"fixture\",\"expires_in\":3600}")
+            : CandlePage("2026-09-08T13:30:00Z", "same"));
+
+        var result = await Client(handler).HistoricalCandles("TSLA", DateTimeOffset.Parse("2026-09-01T00:00:00Z"),
+            DateTimeOffset.Parse("2026-09-09T00:00:00Z"), CancellationToken.None);
+
+        Assert.False(result.ReachedRequestedStart);
+        Assert.Equal(2, result.RawBarCount);
+        Assert.Contains("동일한", result.StopReason);
     }
 
     [Fact]
@@ -90,7 +172,75 @@ public sealed class TossClientTests : IDisposable
 
         Assert.False(result.ReachedRequestedStart);
         Assert.Equal(1, result.RawBarCount);
-        Assert.Contains("커서", result.StopReason);
+        Assert.Contains("가용 과거 데이터의 끝", result.StopReason);
+    }
+
+    [Fact]
+    public async Task HistoricalCandlesTreatsWhitespaceCursorAsTheEndOfAvailableData()
+    {
+        var handler = new FixtureHandler((request, count) => request.RequestUri!.AbsolutePath == "/oauth2/token"
+            ? Json("{\"access_token\":\"fixture\",\"expires_in\":3600}")
+            : CandlePage("2026-09-08T13:30:00Z", "   "));
+
+        var result = await Client(handler).HistoricalCandles("TSLA", DateTimeOffset.Parse("2026-09-01T00:00:00Z"),
+            DateTimeOffset.Parse("2026-09-09T00:00:00Z"), CancellationToken.None);
+
+        Assert.False(result.ReachedRequestedStart);
+        Assert.Equal(1, result.RawBarCount);
+        Assert.Contains("가용 과거 데이터의 끝", result.StopReason);
+        Assert.Single(handler.Paths, x => x == "/api/v1/candles");
+    }
+
+    [Fact]
+    public async Task HistoricalCandlePagesResumeFromThePersistedCursor()
+    {
+        string? query = null;
+        var handler = new FixtureHandler((request, count) => request.RequestUri!.AbsolutePath == "/oauth2/token"
+            ? Json("{\"access_token\":\"fixture\",\"expires_in\":3600}")
+            : Capture(request, value => query = value));
+        var pages = new List<HistoricalBarPage>();
+
+        await foreach (var page in Client(handler).HistoricalCandlePages("TSLA",
+                           DateTimeOffset.Parse("2026-09-08T00:00:00Z"),
+                           DateTimeOffset.Parse("2026-09-09T00:00:00Z"), "older", 1,
+                           [], CancellationToken.None))
+            pages.Add(page);
+
+        Assert.Single(pages);
+        Assert.Contains("before=older", query);
+        Assert.DoesNotContain("2026-09-09", query);
+    }
+
+    [Fact]
+    public async Task HistoricalCandlePagesStopsAnABACursorCycleBeforeCallingASecondTime()
+    {
+        var handler = new FixtureHandler((request, count) =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/oauth2/token")
+                return Json("{\"access_token\":\"fixture\",\"expires_in\":3600}");
+            var query = request.RequestUri.Query;
+            var next = query.Contains("before=A", StringComparison.Ordinal) ? "B" :
+                query.Contains("before=B", StringComparison.Ordinal) ? "A" : "A";
+            return CandlePage("2026-09-08T13:30:00Z", next);
+        });
+        var pages = new List<HistoricalBarPage>();
+
+        await foreach (var page in Client(handler).HistoricalCandlePages("TSLA",
+                           DateTimeOffset.Parse("2026-09-01T00:00:00Z"),
+                           DateTimeOffset.Parse("2026-09-09T00:00:00Z"), null, 0, [],
+                           CancellationToken.None))
+            pages.Add(page);
+
+        Assert.Equal(3, pages.Count);
+        Assert.Equal(3, pages.Select(x => x.RequestCursor).Distinct(StringComparer.Ordinal).Count());
+        Assert.Contains("순환", pages[^1].StopReason);
+        Assert.Equal(3, handler.Paths.Count(x => x == "/api/v1/candles"));
+    }
+
+    static HttpResponseMessage Capture(HttpRequestMessage request, Action<string> capture)
+    {
+        capture(request.RequestUri!.Query);
+        return CandlePage("2026-06-28T13:30:00Z", null);
     }
 
     [Fact]
@@ -202,6 +352,33 @@ public sealed class TossClientTests : IDisposable
     {
         int _count; public ConcurrentBag<string> Paths { get; } = [];
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) { Paths.Add(request.RequestUri!.AbsolutePath); return Task.FromResult(reply(request, Interlocked.Increment(ref _count))); }
+    }
+    sealed class ChartConcurrencyHandler : HttpMessageHandler
+    {
+        int _activeChartRequests;
+        int _maximumConcurrentChartRequests;
+        public int MaximumConcurrentChartRequests => _maximumConcurrentChartRequests;
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (request.RequestUri!.AbsolutePath == "/oauth2/token")
+                return Json("{\"access_token\":\"fixture\",\"expires_in\":3600}");
+            var active = Interlocked.Increment(ref _activeChartRequests);
+            var maximum = Volatile.Read(ref _maximumConcurrentChartRequests);
+            while (active > maximum)
+            {
+                var observed = Interlocked.CompareExchange(ref _maximumConcurrentChartRequests, active, maximum);
+                if (observed == maximum) break;
+                maximum = observed;
+            }
+            try
+            {
+                await Task.Delay(100, cancellationToken);
+                return CandlePage("2026-08-31T13:30:00Z", null);
+            }
+            finally { Interlocked.Decrement(ref _activeChartRequests); }
+        }
     }
 }
 

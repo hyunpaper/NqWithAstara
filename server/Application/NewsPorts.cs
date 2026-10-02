@@ -5,6 +5,8 @@ namespace Astra.Server.Application;
 public static class NewsFeedProviders
 {
     public const string FoxNewsRss = "fox-news-rss";
+    public const string SbhNews = "sbhnews";
+    public const string SbhNewsSource = "SBHNews / 센서스튜디오 (CC BY 4.0)";
 }
 
 /// <summary>
@@ -24,13 +26,16 @@ public sealed record NewsFeedItem(
     IReadOnlyList<NewsEntity>? Entities = null,
     string Content = "",
     string? Url = null,
-    string Provider = "");
+    string Provider = "",
+    NewsRelevanceAssessment? Relevance = null);
 
 
 /// <summary>기사 상세(#151). AI 요약이 있으면 본문 대신 그것을 분류 입력으로 쓴다.</summary>
 public sealed record NewsDetail(string Summary, string Body);
 
-public sealed record NewsProviderFetchStatus(string Provider, string Status, int Count, int NewCount = 0);
+public sealed record NewsProviderFetchStatus(string Provider, string Status, int Count, int NewCount = 0,
+    TimeSpan? RetryAfter = null, int IncludedCount = 0, int ExcludedCount = 0, int ReviewCount = 0,
+    string? FilterPolicyVersion = null);
 
 public sealed record NewsFeedBatch(
     IReadOnlyList<NewsFeedItem> Items,
@@ -86,12 +91,21 @@ public interface INewsClassifier
     Task<NewsClassificationResult> ClassifyAsync(NewsClassificationRequest request, CancellationToken ct);
 }
 
+public interface INewsRelevanceAdjudicator
+{
+    Task<NewsRelevanceAssessment?> AdjudicateAsync(NewsFeedItem item, CancellationToken ct);
+}
+
 /// <summary>`App_Data/news` 전용 파일 포트(#151 §5). 실거래·v5 관측 파일과 분리한다.</summary>
 public interface INewsStore
 {
     Task<long> SizeAsync(string file, CancellationToken ct);
     Task<IReadOnlyList<string>> ReadLinesAsync(string file, CancellationToken ct);
+    Task<int> FilterLinesAsync(string file, Func<string, bool> keep, CancellationToken ct);
+    Task<IReadOnlyDictionary<string, int>> FilterFilesAsync(IReadOnlyList<string> files, Func<string, bool> keep, CancellationToken ct);
     Task AppendAsync(string file, string line, CancellationToken ct);
     Task<string?> ReadTextAsync(string file, CancellationToken ct);
     Task WriteTextAsync(string file, string content, CancellationToken ct);
+    Task<IReadOnlyList<string>> ListFilesAsync(CancellationToken ct);
+    Task DeleteAsync(string file, CancellationToken ct);
 }

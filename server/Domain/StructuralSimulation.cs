@@ -41,7 +41,8 @@ public sealed record StructuralEntryRequest(string Symbol, DateTimeOffset Trigge
     IReadOnlyList<string>? TargetZoneAliases = null,
     // 확인봉 체결을 사용한 경우 관측 근거를 SimTrade에 전파한다. null은 기존 실시간 호출의
     // 미관측 호가 경로로 남겨 하위 호환한다.
-    EntryConfirmation? Confirmation = null, bool RequireCompleteLiquidityCost = false);
+    EntryConfirmation? Confirmation = null, bool RequireCompleteLiquidityCost = false,
+    double? BenchmarkReturnPercent = null);
 
 public sealed record StructuralEntryResult(List<SimTrade> Trades, StructuralEntryOutcome Outcome, SimTrade? Trade);
 
@@ -52,6 +53,10 @@ public static class StructuralSimulation
     /// 조기 청산/트레일링/v4 CUT을 적용하지 않는다는 계약을 저장 데이터에 남긴다.
     /// </summary>
     public const string ExitPolicyVersion = "v5-exit.frozen-plan.1";
+    public const string TwoRFeeBreakEvenExitPolicyVersion = "v5-exit.two-r-fee-break-even.1";
+    public const string TwoRTargetAndFeeBreakEvenExitPolicyVersion = "v5-exit.two-r-target-fee-break-even.1";
+    public const string HalfRPositiveBenchmarkFeeBreakEvenExitPolicyVersion = "v5-exit.positive-benchmark-half-r-fee-break-even.1";
+    public const string HalfRQualifiedTransitionFeeBreakEvenExitPolicyVersion = "v5-exit.qualified-transition-half-r-fee-break-even.1";
 
     /// <summary>v5 거래의 손절/목표 근거 표기(표시용). 숫자의 원천은 FrozenPlan이다.</summary>
     public const string StopBasis = "구조 무효화 anchor 아래";
@@ -69,7 +74,8 @@ public static class StructuralSimulation
     /// 이후 계산 결과가 바뀌어도 이 스냅샷은 다시 만들지 않는다.
     /// </summary>
     public static FrozenStructureContext Freeze(StructuralTradePlan plan, string entryEventId, string trendAtEntry,
-        double? signedTrendAtEntry, double? entryQualityAtEntry, DateTimeOffset analysisAsOf, DateTimeOffset? quoteAt)
+        double? signedTrendAtEntry, double? entryQualityAtEntry, DateTimeOffset analysisAsOf, DateTimeOffset? quoteAt,
+        StructurePolicy? policy = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentException.ThrowIfNullOrEmpty(entryEventId);
@@ -82,8 +88,12 @@ public static class StructuralSimulation
             plan.Costs.RealizedFillCostModelVersion, plan.CreatedAt, plan.ExpiresAt, plan.EngineVersion,
             plan.PolicyHash, plan.ReasonCodes.ToArray(), plan.HumanExplanation, plan.Atr1mAtPlan,
             plan.Side, plan.Regime, plan.Evidence, plan.Costs.BorrowCostPerShare, plan.Costs.BorrowCostMissing);
+        var selectedPolicy = policy ?? StructurePolicy.Default;
+        var exitPolicyVersion = selectedPolicy.EnableTwoRFeeBreakEvenStop && selectedPolicy.CapStructuralTargetAtTwoR
+            ? TwoRTargetAndFeeBreakEvenExitPolicyVersion
+            : selectedPolicy.EnableTwoRFeeBreakEvenStop ? TwoRFeeBreakEvenExitPolicyVersion : ExitPolicyVersion;
         return new FrozenStructureContext(entryEventId, snapshot, trendAtEntry, signedTrendAtEntry,
-            entryQualityAtEntry, analysisAsOf, quoteAt, ExitPolicyVersion, null, plan.Regime, plan.Evidence);
+            entryQualityAtEntry, analysisAsOf, quoteAt, exitPolicyVersion, null, plan.Regime, plan.Evidence);
     }
 
     /// <summary>
@@ -97,6 +107,7 @@ public static class StructuralSimulation
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(request);
         var trades = source.ToList();
+        var selectedPolicy = policy ?? StructurePolicy.Default;
 
         var existing = trades.FirstOrDefault(x =>
             string.Equals(x.Structure?.EntryEventId, request.Context.EntryEventId, StringComparison.Ordinal));
@@ -105,7 +116,7 @@ public static class StructuralSimulation
         if (trades.Any(x => x.Symbol.Equals(request.Symbol, StringComparison.OrdinalIgnoreCase) && x.Status == "OPEN"))
             return new StructuralEntryResult(trades, StructuralEntryOutcome.BlockedByOpenTrade, null);
 
-        if (StopCooldownActive(trades, request, (policy ?? StructurePolicy.Default).StopReentryCooldownBars))
+        if (StopCooldownActive(trades, request, selectedPolicy.StopReentryCooldownBars))
             return new StructuralEntryResult(trades, StructuralEntryOutcome.BlockedByStopCooldown, null);
 
         var plan = request.Context.PlanSnapshot;
@@ -113,6 +124,12 @@ public static class StructuralSimulation
             ? confirmation.FillPrice!.Value : (double)plan.EntryReference;
         var stop = (double)plan.Stop;
         var target = (double)plan.Target;
+        if (request.Context.StructuralExitPolicyVersion == TwoRTargetAndFeeBreakEvenExitPolicyVersion)
+        {
+            var risk = Math.Abs(entry - stop);
+            var twoRTarget = plan.Side == TradeSide.Long ? entry + 2 * risk : entry - 2 * risk;
+            target = plan.Side == TradeSide.Long ? Math.Min(target, twoRTarget) : Math.Max(target, twoRTarget);
+        }
         var ordered = plan.Side == TradeSide.Long
             ? stop > 0 && stop < entry && target > entry
             : stop > entry && target > 0 && target < entry;
@@ -123,7 +140,14 @@ public static class StructuralSimulation
 
         // 결정적 ID: 같은 이벤트의 재시도가 다른 거래처럼 보이지 않게 한다(§16B 재시작 규칙과 같은 방향).
         var id = StructureMath.SourceId("simtrade", request.Symbol, request.Context.EntryEventId)[..8];
-        var context = request.Context with { PlanSnapshot = plan, Reentry = Reentry(trades, request) };
+        var exitPolicyVersion = selectedPolicy.EnableHalfRFeeBreakEvenStopForQualifiedTransition &&
+                                string.Equals(request.Context.TrendAtEntry, "Transition", StringComparison.OrdinalIgnoreCase)
+            ? HalfRQualifiedTransitionFeeBreakEvenExitPolicyVersion
+            : selectedPolicy.EnableHalfRFeeBreakEvenStopForPositiveBenchmark && request.BenchmarkReturnPercent > 0 &&
+              !(selectedPolicy.ExemptBreakoutFromPositiveBenchmarkHalfRStop && string.Equals(plan.Kind, "BREAKOUT", StringComparison.Ordinal))
+                ? HalfRPositiveBenchmarkFeeBreakEvenExitPolicyVersion
+                : request.Context.StructuralExitPolicyVersion;
+        var context = request.Context with { PlanSnapshot = plan, Reentry = Reentry(trades, request), StructuralExitPolicyVersion = exitPolicyVersion };
         var trade = new SimTrade(id, request.Symbol, plan.Kind, request.EnteredAt, entry, target, stop,
             TargetBasis, StopBasis, "OPEN", null, null, null, entry,
             Score: null, ExtSigma: null, RelVolume: null, BuyShare: null, Rsi: null,

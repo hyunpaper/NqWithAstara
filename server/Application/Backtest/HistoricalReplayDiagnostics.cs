@@ -11,7 +11,8 @@ public sealed record HistoricalReplayCostSummary(int ClosedTrades, int Wins, int
     int CostCollectedTrades, int CostUncollectedTrades, double? GrossPnlPercent, double? FeePercent,
     double? SlippagePercent, double? NetPnlPercent, int ReconciledTrades, int MismatchedTrades,
     int UnverifiableTrades, double? MaxAbsoluteDifference, string ReconciliationBasis,
-    double? ProfitFactor = null, double? MaxDrawdownPercent = null, int MissingCostRows = 0);
+    double? ProfitFactor = null, string ProfitFactorStatus = "unavailable",
+    double? MaxDrawdownPercent = null, int MissingCostRows = 0);
 
 public sealed record HistoricalReplayCohort(string Dimension, string Key, string Label, bool Collected,
     HistoricalReplayCostSummary Summary);
@@ -148,7 +149,10 @@ public static class HistoricalReplayDiagnosticsBuilder
         var slippageCollected = complete && rows.All(x => x.SlippagePercent.Finite);
         var positive = netRows.Where(x => x.NetPnlPercent.Value > 0).Sum(x => x.NetPnlPercent.Value!.Value);
         var negative = netRows.Where(x => x.NetPnlPercent.Value < 0).Sum(x => x.NetPnlPercent.Value!.Value);
-        double? profitFactor = negative < 0 ? positive / Math.Abs(negative) : positive > 0 ? double.PositiveInfinity : null;
+        double? profitFactor = negative < 0 ? positive / Math.Abs(negative) : null;
+        var profitFactorStatus = negative < 0 ? "finite"
+            : positive > 0 ? "no-losses"
+            : netRows.Length == 0 ? "no-data" : "no-gains";
         double peak = 0, cumulative = 0, drawdown = 0;
         foreach (var row in netRows.OrderBy(x => x.Trade.EnteredAt).ThenBy(x => x.Trade.Id, StringComparer.Ordinal))
         {
@@ -156,8 +160,8 @@ public static class HistoricalReplayDiagnosticsBuilder
             peak = Math.Max(peak, cumulative);
             drawdown = Math.Min(drawdown, cumulative - peak);
         }
-        double? roundedProfitFactor = profitFactor is { } pf && double.IsFinite(pf)
-            ? Math.Round(pf, 6) : profitFactor;
+        double? roundedProfitFactor = profitFactor is { } pf && double.IsFinite(pf) ? Math.Round(pf, 6) : null;
+        if (profitFactor is not null && roundedProfitFactor is null) profitFactorStatus = "non-finite";
         return new HistoricalReplayCostSummary(rows.Count, wins, netRows.Length - wins,
             netRows.Length == 0 ? null : Math.Round(wins * 100d / netRows.Length, 1), costs.Length,
             rows.Count - costs.Length,
@@ -169,6 +173,7 @@ public static class HistoricalReplayDiagnosticsBuilder
             differences.Length == 0 ? null : Math.Round(differences.Max(), 6),
             "slippage 수집 행: gross - fee - slippage = net; slippage 미수집 행: gross - fee = net",
             roundedProfitFactor,
+            profitFactorStatus,
             Math.Round(Math.Abs(drawdown), 6), rows.Count - costs.Length);
     }
 

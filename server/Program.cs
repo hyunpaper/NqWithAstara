@@ -2,9 +2,11 @@ using Astra.Server;
 using Astra.Server.Api;
 using Astra.Server.Application;
 using Astra.Server.Application.Backtest;
+using Astra.Server.Application.ScoreCore;
 using Astra.Server.Backtest;
 using Astra.Server.Domain.Confluence;
 using Astra.Server.Infrastructure;
+using Astra.Server.Infrastructure.ScoreCore;
 
 // 이슈 #169: 측정 서브커맨드. 서버를 띄우지 않고 저장 봉만 재생해 가중치를 산출하고 종료한다.
 if (args is [ConfluenceMeasureCommand.Name, ..])
@@ -53,7 +55,7 @@ builder.Services.AddSingleton<StructuralPendingEntryService>();
 // 이슈 #41: 폴링 → 구조 엔진 호가 배선. 새 게이트웨이가 아니라 LiquidityQueryService 캐시를 공유한다.
 builder.Services.AddSingleton<StructureLiquidityFeed>();
 builder.Services.AddSingleton<MonitorRuntimeState>(); builder.Services.AddSingleton<MonitorPollingService>(); builder.Services.AddSingleton<MonitorService>(); builder.Services.AddSingleton<IMonitorSignals>(x => x.GetRequiredService<MonitorPollingService>());
-builder.Services.AddSingleton<MonitorControlService>(); builder.Services.AddSingleton<MetricsQueryService>(); builder.Services.AddSingleton<LiquidityQueryService>(); builder.Services.AddSingleton<EntryObservabilityQueryService>(); builder.Services.AddSingleton<SimulationReportQueryService>(); builder.Services.AddSingleton<SimulationResetService>(); builder.Services.AddSingleton<ValidationQueryService>(); builder.Services.AddSingleton<CatalogQueryService>(); builder.Services.AddSingleton<PositionService>(); builder.Services.AddSingleton<StateQueryService>(); builder.Services.AddSingleton<IEconomicCalendarProvider, UnsupportedEconomicCalendarProvider>(); builder.Services.AddSingleton<MarketMoodQueryService>(); builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<MonitorControlService>(); builder.Services.AddSingleton<MetricsQueryService>(); builder.Services.AddSingleton<LiquidityQueryService>(); builder.Services.AddSingleton<EntryObservabilityQueryService>(); builder.Services.AddSingleton<SimulationReportQueryService>(); builder.Services.AddSingleton<SimulationResetService>(); builder.Services.AddSingleton<ValidationQueryService>(); builder.Services.AddSingleton<CatalogQueryService>(); builder.Services.AddSingleton<PositionService>(); builder.Services.AddSingleton<StateQueryService>(); builder.Services.AddSingleton<IEconomicCalendarProvider, UnsupportedEconomicCalendarProvider>(); builder.Services.AddSingleton<IMarketPolicyRateProvider>(x => x.GetRequiredService<NewsOptions>().UseSbhNews ? new SbhMarketPolicyRateProvider(x.GetRequiredService<NewsOptions>(), store: x.GetRequiredService<INewsStore>()) : new UnsupportedMarketPolicyRateProvider()); builder.Services.AddSingleton<MarketMoodQueryService>(); builder.Services.AddSingleton(TimeProvider.System);
 // 이슈 #130: 실계좌 US 왕복 수수료와 StructurePolicy.RoundTripFeePercent 정합 확인.
 builder.Services.AddSingleton<FeeRateCheckService>();
 // 이슈 #213: 코드 기본 수수료 단일 출처와 설정 바인딩 결과가 갈라지면 기동 시 경고한다.
@@ -90,20 +92,35 @@ builder.Services.AddSingleton<ConfluenceService>();
 // 이슈 #151: 뉴스 감성(선택 기능). News:Enabled 기본 false이며 false면 피드·Ollama를 호출하지 않는다.
 builder.Services.AddSingleton(_ => { var news = new NewsOptions(); builder.Configuration.GetSection("News").Bind(news); return news; });
 builder.Services.AddSingleton<INewsStore, NewsStore>();
+builder.Services.AddSingleton<INewsRelevancePolicy, NewsRelevancePolicy>();
+builder.Services.AddSingleton<INewsRelevanceContextSource>(x => new WatchlistNewsRelevanceContextSource(x.GetRequiredService<ILocalStore>()));
 builder.Services.AddSingleton<INewsFeed>(x =>
 {
     var options = x.GetRequiredService<NewsOptions>();
+    if (options.UseSbhNews) return new SbhNewsFeed(options, relevance: x.GetRequiredService<INewsRelevancePolicy>(),
+        context: x.GetRequiredService<INewsRelevanceContextSource>());
     if (options.UseFoxNewsRss) return new FoxNewsRssFeed(options);
     return options.UseSaveTicker ? new SaveTickerNewsFeed(options) : new MarketauxNewsFeed(options);
 });
 builder.Services.AddSingleton<INewsClassifier>(x => new OllamaNewsClassifier(x.GetRequiredService<NewsOptions>()));
+builder.Services.AddSingleton<INewsRelevanceAdjudicator>(x => new OllamaNewsRelevanceAdjudicator(x.GetRequiredService<NewsOptions>()));
 builder.Services.AddSingleton<INewsTranslator>(x => new PapagoNewsTranslator(x.GetRequiredService<NewsOptions>()));
 builder.Services.AddSingleton<NewsRuntimeState>();
 builder.Services.AddSingleton<NewsTranslationQueue>();
+builder.Services.AddSingleton<NewsStorageMigrationService>();
 builder.Services.AddSingleton<NewsFeedService>(); builder.Services.AddSingleton<NewsQueryService>();
 builder.Services.AddHostedService(x => x.GetRequiredService<MonitorService>());
 builder.Services.AddHostedService<NewsService>();
 builder.Services.AddHostedService<NewsTranslationService>();
+builder.Services.AddHostedService<NewsRelevanceAdjudicationService>();
+// 이슈 #309: Score Core shadow 수집. ScoreCore:Enabled 기본 false이며 진입 판정에는 쓰지 않는다.
+builder.Services.AddSingleton(_ => { var scoreCore = new ScoreCoreOptions(); builder.Configuration.GetSection("ScoreCore").Bind(scoreCore); return scoreCore; });
+builder.Services.AddSingleton<IScoreCoreSnapshotStore>(x => new JsonlScoreCoreSnapshotStore(Path.Combine(x.GetRequiredService<IWebHostEnvironment>().ContentRootPath, "App_Data", "score-core"), x.GetRequiredService<IMonitorDiagnostics>()));
+builder.Services.AddSingleton<NewsScoreRecordReader>();
+builder.Services.AddSingleton<IScoreEvidenceSource, NewsScoreEvidenceSource>(); builder.Services.AddSingleton<IScoreEvidenceSource, MacroCalendarEvidenceSource>();
+builder.Services.AddSingleton<AsOfEvidenceAssembler>(); builder.Services.AddSingleton(x => new ScoreCoreSnapshotService(x.GetRequiredService<AsOfEvidenceAssembler>(), x.GetRequiredService<IScoreCoreSnapshotStore>()));
+builder.Services.AddSingleton<ScoreCoreShadowCaptureOrchestrator>(); builder.Services.AddSingleton<ScoreCoreTargetSelector>(); builder.Services.AddSingleton<ScoreCoreRuntimeState>(); builder.Services.AddSingleton<ScoreCoreQueryService>();
+builder.Services.AddHostedService<ScoreCoreShadowCaptureService>();
 var app = builder.Build();
 app.Services.GetRequiredService<TradingCostPolicyCheckService>();
 var clientRoot = Environment.GetEnvironmentVariable("ASTRA_CLIENT_ROOT") ?? Path.Combine(app.Environment.ContentRootPath, "..", "client"); var clientDist = Path.GetFullPath(Path.Combine(clientRoot, "dist"));
