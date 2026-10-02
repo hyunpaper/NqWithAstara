@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import EntryObservabilityPanel from "./EntryObservabilityPanel";
 import type {
   EntryObservabilityReport,
+  EntryObservationCandidateRow,
   EntryObservationHistoryReport,
   EntryObservationHistoryWindow,
 } from "./entryObservability";
@@ -23,32 +24,47 @@ const window = (over: Partial<EntryObservationHistoryWindow> = {}): EntryObserva
   ...over,
 });
 
-const history: EntryObservationHistoryReport = {
+const rejected: EntryObservationCandidateRow = {
+  symbol: "NBIS",
+  eventId: "ev-rejected",
+  kind: "BREAKOUT",
+  state: "REJECTED",
+  triggerBarStart: "2026-10-02T14:10:00Z",
+  firstObservedAt: "2026-10-02T14:10:15Z",
+  lastObservedAt: "2026-10-02T14:12:15Z",
+  rejectionCodes: ["V5_ENTRY_NET_R", "STALE_QUOTE"],
+  policyHash: "abe5d3a6fa8d40b1",
+};
+
+const entered: EntryObservationCandidateRow = {
+  ...rejected,
+  symbol: "IREN",
+  eventId: "ev-entered",
+  kind: "REBOUND",
+  state: "ENTERED",
+  rejectionCodes: [],
+};
+
+const historyWithoutEntry: EntryObservationHistoryReport = {
   generatedAt: "2026-10-02T14:30:00Z",
   policyHash: "abe5d3a6fa8d40b1",
   today: window(),
   currentPolicy: window({ label: "현재 정책", from: "2026-09-26", files: 5, candidates: 9, rejected: 6 }),
-  recentCandidates: [
-    {
-      symbol: "NBIS",
-      eventId: "ev-rejected",
-      kind: "BREAKOUT",
-      state: "REJECTED",
-      triggerBarStart: "2026-10-02T14:10:00Z",
-      firstObservedAt: "2026-10-02T14:10:15Z",
-      lastObservedAt: "2026-10-02T14:12:15Z",
-      rejectionCodes: ["V5_ENTRY_NET_R", "STALE_QUOTE"],
-      policyHash: "abe5d3a6fa8d40b1",
-    },
-  ],
+  recentCandidates: [rejected],
   warning: null,
 };
 
-const snapshotWithoutRejections: EntryObservabilityReport = {
+const historyWithEntry: EntryObservationHistoryReport = {
+  ...historyWithoutEntry,
+  today: window({ entered: 1 }),
+  recentCandidates: [rejected, entered],
+};
+
+const snapshot: EntryObservabilityReport = {
   generatedAt: "2026-10-02T14:30:00Z",
-  candidateCount: 0,
-  approvedCount: 0,
-  rejectedCount: 0,
+  candidateCount: 3,
+  approvedCount: 1,
+  rejectedCount: 2,
   symbols: [
     {
       symbol: "NBIS",
@@ -56,62 +72,68 @@ const snapshotWithoutRejections: EntryObservabilityReport = {
       evaluatedAt: "2026-10-02T14:30:00Z",
       analysisAsOf: null,
       quoteAt: null,
-      dataDelaySeconds: null,
-      candidateCount: 0,
+      dataDelaySeconds: 120,
+      candidateCount: 2,
       approvedCount: 0,
-      rejectedCount: 0,
-      finalDisposition: "NO_CANDIDATE",
-      firstGateReason: null,
-      duplicateReasons: [],
-      rejectionReasons: [],
+      rejectedCount: 2,
+      finalDisposition: "REJECTED",
+      firstGateReason: "STALE_QUOTE",
+      duplicateReasons: ["DUPLICATE_TRIGGER_GUARD"],
+      rejectionReasons: ["STALE_QUOTE"],
     },
   ],
 };
 
 describe("EntryObservabilityPanel", () => {
-  it("스냅샷 제목에 재기동 이후 범위를 명시하고 누적 영역을 따로 그린다", () => {
-    render(<EntryObservabilityPanel report={snapshotWithoutRejections} history={history} />);
-    expect(screen.getByText("진입 관측 — 현재 스냅샷(재기동 이후)")).toBeTruthy();
-    expect(screen.getByText("누적 (관측 파일 기준)")).toBeTruthy();
-    expect(screen.getByText(/오늘 누적/)).toBeTruthy();
-    expect(screen.getByText(/현재 정책 누적 \(2026-09-26 ~ 2026-10-02\)/)).toBeTruthy();
-    expect(screen.getAllByText(/시세 지연 4/).length).toBe(2);
+  it("누적·정책·차단 사유 영역을 그리지 않는다", () => {
+    render(<EntryObservabilityPanel report={snapshot} history={historyWithEntry} />);
+    expect(screen.queryByText(/누적/)).toBeNull();
+    expect(screen.queryByText(/현재 정책/)).toBeNull();
+    expect(screen.queryByText(/차단 사유/)).toBeNull();
+    expect(screen.queryByText(/재기동 이후/)).toBeNull();
+    expect(screen.queryByTestId("entry-observation-history")).toBeNull();
   });
 
-  it("스냅샷에 거절이 없어도 누적 거절 이력은 서버 집계대로 보인다", () => {
-    render(<EntryObservabilityPanel report={snapshotWithoutRejections} history={history} />);
-    expect(screen.getByText("최종 거절")).toBeTruthy();
-    expect(screen.getByText("V5_ENTRY_NET_R · 시세 지연")).toBeTruthy();
-  });
-
-  it("화면 전환(언마운트 후 재마운트)과 스냅샷 교체 후에도 같은 거절 이력이 유지된다", () => {
-    const first = render(<EntryObservabilityPanel report={snapshotWithoutRejections} history={history} />);
-    expect(screen.getByText("최종 거절")).toBeTruthy();
-    first.unmount();
+  it("후보·거절 종목과 거절 사유는 보이지 않는다", () => {
+    render(<EntryObservabilityPanel report={snapshot} history={historyWithEntry} />);
+    expect(screen.queryByText("NBIS")).toBeNull();
     expect(screen.queryByText("최종 거절")).toBeNull();
-
-    const emptySnapshot: EntryObservabilityReport = { ...snapshotWithoutRejections, symbols: [] };
-    render(<EntryObservabilityPanel report={emptySnapshot} history={history} />);
-    expect(screen.getByText("아직 평가된 종목이 없습니다.")).toBeTruthy();
-    expect(screen.getByText("최종 거절")).toBeTruthy();
-    expect(screen.getByText("NBIS")).toBeTruthy();
+    expect(screen.queryByText(/시세 지연/)).toBeNull();
+    expect(screen.queryByText(/후보/)).toBeNull();
   });
 
-  it("스냅샷이 없어도(재기동 직후) 누적만으로 패널을 그린다", () => {
-    render(<EntryObservabilityPanel report={null} history={history} />);
-    expect(screen.getByText("누적 (관측 파일 기준)")).toBeTruthy();
-    expect(screen.getByText("최종 거절")).toBeTruthy();
+  it("실제 진입한 거래만 건수와 함께 표시한다", () => {
+    render(<EntryObservabilityPanel report={snapshot} history={historyWithEntry} />);
+    expect(screen.getByText("진입 관측")).toBeTruthy();
+    expect(screen.getByText("오늘 진입 1건")).toBeTruthy();
+    expect(screen.getByText("IREN")).toBeTruthy();
+    expect(screen.getByText("REBOUND")).toBeTruthy();
   });
 
-  it("누적 경고와 손상 줄 수를 숨기지 않는다", () => {
+  it("진입이 없으면 한 줄 문구만 보이고 표를 그리지 않는다", () => {
+    render(<EntryObservabilityPanel report={snapshot} history={historyWithoutEntry} />);
+    expect(screen.getByText("오늘 진입 없음")).toBeTruthy();
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("누적 데이터가 없으면 스냅샷의 진입 완료 종목을 표시한다", () => {
+    const enteredSnapshot: EntryObservabilityReport = {
+      ...snapshot,
+      symbols: [{ ...snapshot.symbols[0], symbol: "IREN", finalDisposition: "ENTERED" }],
+    };
+    render(<EntryObservabilityPanel report={enteredSnapshot} history={null} />);
+    expect(screen.getByText("오늘 진입 1건")).toBeTruthy();
+    expect(screen.getByText("IREN")).toBeTruthy();
+  });
+
+  it("관측 파일 경고는 숨기지 않는다", () => {
     render(
       <EntryObservabilityPanel
         report={null}
-        history={{ ...history, warning: "관측 파일 읽기 실패: x.jsonl (IOException)", today: window({ corruptLines: 3 }) }}
+        history={{ ...historyWithoutEntry, warning: "관측 파일 읽기 실패: x.jsonl (IOException)" }}
       />,
     );
     expect(screen.getByText("관측 파일 읽기 실패: x.jsonl (IOException)")).toBeTruthy();
-    expect(screen.getByText(/손상 줄 3/)).toBeTruthy();
   });
 
   it("스냅샷도 누적도 없으면 아무것도 그리지 않는다", () => {

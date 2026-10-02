@@ -90,12 +90,11 @@ public sealed record StructurePolicy
 
     static readonly ImmutableArray<string> DefaultAllowedSecurityTypes = ["STOCK", "DEPOSITARY_RECEIPT"];
 
-    /// <summary>
-    /// 롱 신규 READY를 막는 셋업 유형 이름 집합(`PULLBACK`·`BREAKOUT`·`REBOUND`, #245 Cycle77).
-    /// 기본 빈 값이며, 비어 있으면 canonical JSON에서 빠져 기존 PolicyHash가 유지된다.
-    /// </summary>
+    /// <summary>롱 신규 READY를 막는 셋업 유형 집합. 기본 PULLBACK 비활성(Cycle77 train +2.30→+4.08, eval −0.44→+0.61; §16A, #245).</summary>
     [OmitFromPolicyHashWhenEmpty]
-    public ImmutableArray<string> DisabledLongKinds { get; init; } = ImmutableArray<string>.Empty;
+    public ImmutableArray<string> DisabledLongKinds { get; init; } = DefaultDisabledLongKinds;
+
+    static readonly ImmutableArray<string> DefaultDisabledLongKinds = ["PULLBACK"];
 
     /// <summary>롱 <paramref name="kindName"/>이 정책으로 비활성인지 판정한다(#245 Cycle77).</summary>
     public bool IsLongKindDisabled(string kindName) =>

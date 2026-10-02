@@ -6,7 +6,7 @@ using Xunit;
 
 public sealed class StructureSymbolGateTests
 {
-    static readonly StructurePolicy P = StructurePolicy.Default;
+    static readonly StructurePolicy P = D2.AllLongKinds;
 
     static StockInfo Info(string securityType, bool common = true, decimal? leverage = null) =>
         new(D3.Symbol, "테스트", securityType, "NASDAQ", common, "NORMAL", leverage, 1_000_000m);
