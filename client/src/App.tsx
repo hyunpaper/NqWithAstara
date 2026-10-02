@@ -71,6 +71,7 @@ import type { Badge } from "./newsFormat";
 import { gaugeTone, scoreText2 } from "./confluenceFormat";
 import HistoricalReplayPanel from "./HistoricalReplayPanel";
 import MarketMoodPopover from "./MarketMoodPopover";
+import ChatWidget from "./ChatWidget";
 import { normalizeMarketMood, type MarketMoodResponse } from "./marketMoodTypes";
 import TreasuryRatesStrip from "./TreasuryRatesStrip";
 import { normalizeRates, type RatesResponse } from "./ratesTypes";
@@ -1431,6 +1432,7 @@ export default function App() {
           <span className="app-version">v{__ASTRA_VERSION__}</span>
         </footer>
       </main>
+      <ChatWidget />
     </div>
   );
 }

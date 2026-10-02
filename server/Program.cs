@@ -2,11 +2,13 @@ using Astra.Server;
 using Astra.Server.Api;
 using Astra.Server.Application;
 using Astra.Server.Application.Backtest;
+using Astra.Server.Application.Chat;
 using Astra.Server.Application.Rates;
 using Astra.Server.Application.ScoreCore;
 using Astra.Server.Backtest;
 using Astra.Server.Domain.Confluence;
 using Astra.Server.Infrastructure;
+using Astra.Server.Infrastructure.Chat;
 using Astra.Server.Infrastructure.Rates;
 using Astra.Server.Infrastructure.ScoreCore;
 
@@ -140,11 +142,16 @@ builder.Services.AddSingleton<IDailyRateSource>(x => new FredCsvRateSource(rates
 builder.Services.AddSingleton<IRateObservationStore>(x => new JsonlRateObservationStore(Path.Combine(x.GetRequiredService<IWebHostEnvironment>().ContentRootPath, "App_Data", "rates")));
 builder.Services.AddSingleton<RatesCollector>();
 builder.Services.AddHostedService<RatesCollectorService>();
+// 이슈 #338: Ollama 채팅 프록시. Chat:OllamaUrl이 비면 News.OllamaUrl을 따르고 keep_alive·num_ctx는 보내지 않는다.
+builder.Services.AddSingleton(_ => { var chat = new ChatOptions(); builder.Configuration.GetSection("Chat").Bind(chat); return chat; });
+builder.Services.AddSingleton<IChatModelGateway>(x => new OllamaChatGateway(x.GetRequiredService<ChatOptions>(), x.GetRequiredService<NewsOptions>()));
+builder.Services.AddSingleton<ChatService>();
 var app = builder.Build();
 app.Services.GetRequiredService<TradingCostPolicyCheckService>();
 var clientRoot = Environment.GetEnvironmentVariable("ASTRA_CLIENT_ROOT") ?? Path.Combine(app.Environment.ContentRootPath, "..", "client"); var clientDist = Path.GetFullPath(Path.Combine(clientRoot, "dist"));
 if (Directory.Exists(clientDist)) { var files = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(clientDist); app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = files }); app.UseStaticFiles(new StaticFileOptions { FileProvider = files }); }
 app.MapAstraApi();
+app.MapChatApi();
 if (Directory.Exists(clientDist)) app.MapFallback(async context => { context.Response.ContentType = "text/html; charset=utf-8"; await context.Response.SendFileAsync(Path.Combine(clientDist, "index.html")); });
 app.Run();
 public partial class Program { }
