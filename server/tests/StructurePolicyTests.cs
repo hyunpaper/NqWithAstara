@@ -81,6 +81,32 @@ public sealed class StructurePolicyTests
     }
 
     [Fact]
+    public void EmptyDisabledLongKindsKeepsTheExistingCanonicalJsonAndHash()
+    {
+        var policy = StructurePolicy.Default;
+
+        Assert.True(policy.DisabledLongKinds.IsEmpty);
+        Assert.DoesNotContain("DisabledLongKinds", policy.CanonicalJson, StringComparison.Ordinal);
+        Assert.Equal(policy.PolicyHash, (policy with { DisabledLongKinds = [] }).PolicyHash);
+        Assert.Equal(policy.PolicyHash, (policy with { DisabledLongKinds = default }).PolicyHash);
+        Assert.False(policy.IsLongKindDisabled("PULLBACK"));
+    }
+
+    [Fact]
+    public void NonEmptyDisabledLongKindsStartsANewPolicyLineage()
+    {
+        var pullback = StructurePolicy.Default with { DisabledLongKinds = ["PULLBACK"] };
+        var rebound = StructurePolicy.Default with { DisabledLongKinds = ["REBOUND"] };
+
+        Assert.Contains("\"DisabledLongKinds\":[\"PULLBACK\"]", pullback.CanonicalJson, StringComparison.Ordinal);
+        Assert.NotEqual(StructurePolicy.Default.PolicyHash, pullback.PolicyHash);
+        Assert.NotEqual(pullback.PolicyHash, rebound.PolicyHash);
+        Assert.True(pullback.IsLongKindDisabled("PULLBACK"));
+        Assert.True(pullback.IsLongKindDisabled("pullback"));
+        Assert.False(pullback.IsLongKindDisabled("REBOUND"));
+    }
+
+    [Fact]
     public void TransitionPullbackIsBlockedByDefaultAndExplicitEnablementStartsANewPolicyLineage()
     {
         var policy = StructurePolicy.Default;

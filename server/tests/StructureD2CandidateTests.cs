@@ -201,6 +201,26 @@ public sealed class StructureD2CandidateTests
         Assert.DoesNotContain(SetupDetector.CodeTransitionPullbackBlocked, enabledCandidate.RejectionCodes);
     }
 
+    [Fact]
+    public void DisabledLongKindRejectsOnlyThatLongKind()
+    {
+        var baseline = SetupDetector.Detect(Request(PullbackBars(), PullbackZones(), PullbackEpisodes(),
+            D2.Trend(TrendState.Up, 10)), P);
+        var disabled = SetupDetector.Detect(Request(PullbackBars(), PullbackZones(), PullbackEpisodes(),
+            D2.Trend(TrendState.Up, 10)), P with { DisabledLongKinds = ["PULLBACK"] });
+        var otherKind = SetupDetector.Detect(Request(PullbackBars(), PullbackZones(), PullbackEpisodes(),
+            D2.Trend(TrendState.Up, 10)), P with { DisabledLongKinds = ["REBOUND"] });
+
+        var baselineCandidate = baseline.Candidates.Single(x => x.Kind == SetupKind.Pullback);
+        var disabledCandidate = disabled.Candidates.Single(x => x.Kind == SetupKind.Pullback);
+        var otherCandidate = otherKind.Candidates.Single(x => x.Kind == SetupKind.Pullback);
+        Assert.DoesNotContain(SetupDetector.CodeLongKindDisabled, baselineCandidate.RejectionCodes);
+        Assert.Contains(SetupDetector.CodeLongKindDisabled, disabledCandidate.RejectionCodes);
+        Assert.Equal(CandidateDisposition.Rejected, disabledCandidate.Disposition);
+        Assert.DoesNotContain(SetupDetector.CodeLongKindDisabled, otherCandidate.RejectionCodes);
+        Assert.Equal(baselineCandidate.Disposition, otherCandidate.Disposition);
+    }
+
     /// <summary>히스테리시스로 UP이 유지되는 efficiency 1봉 딥에서는 PULLBACK 가설이 그대로 생성된다(§7, #148).</summary>
     [Fact]
     public void PullbackSurvivesTheOneBarEfficiencyDipThatUsedToDropTheUpLabel()
