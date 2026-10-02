@@ -25,6 +25,9 @@ public sealed class NewsOptions
     public int SbhRelevanceAdjudicationConcurrency { get; set; } = 1;
     public int SbhRelevanceAdjudicationTimeoutSeconds { get; set; } = 8;
     public int SbhRelevanceAdjudicationQueueCapacity { get; set; } = 32;
+    public int SbhRelevanceAdjudicationMaxAttempts { get; set; } = 3;
+    public int SbhRelevanceReviewTtlMinutes { get; set; } = 30;
+    public int SbhRelevanceRetryBackoffSeconds { get; set; } = 60;
     public int MaxClassificationsPerMinute { get; set; } = 12;
     public double HalfLifeMinutes { get; set; } = NewsSentimentDecay.DefaultHalfLifeMinutes;
     public string KeepAlive { get; set; } = "30m";

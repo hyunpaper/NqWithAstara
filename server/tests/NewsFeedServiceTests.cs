@@ -939,7 +939,10 @@ public sealed class NewsFeedServiceTests
         Assert.Contains("sports", savedState.SeenIds!);
         Assert.Contains("unclear", savedState.SeenIds!);
         Assert.True(savedState.Inbox!.Single(x => x.Item.Id == "sports").Processed);
-        Assert.False(savedState.Inbox!.Single(x => x.Item.Id == "unclear").Processed);
+        var unclear = savedState.Inbox!.Single(x => x.Item.Id == "unclear");
+        Assert.True(unclear.Processed);
+        Assert.Equal(NewsRelevanceDecisions.Exclude, unclear.Item.Relevance!.Decision);
+        Assert.Equal(NewsRelevanceReasons.ReviewUnadjudicatedDisabled, unclear.Item.Relevance.Reason);
 
         var restarted = new Harness();
         restarted.Feed.Name = NewsFeedProviders.SbhNews;
@@ -1009,7 +1012,8 @@ public sealed class NewsFeedServiceTests
     [Fact]
     public async Task 재시작은_pending_inbox를_재큐하고_실패시_pending을_유지한다()
     {
-        var first = new Harness();
+        var first = new Harness(null, new FakeRelevanceAdjudicator(null));
+        first.Options.SbhRelevanceAdjudicationEnabled = true;
         first.Feed.Name = NewsFeedProviders.SbhNews;
         first.Page(1, Relevant("base", "base", NewsRelevanceDecisions.Include));
         await first.PollAsync();
@@ -1032,6 +1036,7 @@ public sealed class NewsFeedServiceTests
             new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
         Assert.False(state.Inbox!.Single(x => x.Item.Id == "review").Processed);
         Assert.Equal(NewsRelevanceDecisions.Review, state.Inbox.Single(x => x.Item.Id == "review").Item.Relevance!.Decision);
+        Assert.Equal(1, state.Inbox.Single(x => x.Item.Id == "review").ReviewAttempts);
     }
 
     [Fact]

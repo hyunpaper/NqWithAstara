@@ -11,7 +11,17 @@ public sealed record NewsInboxEntry(
     IReadOnlyList<string> Keys,
     NewsFeedItem Item,
     DateTimeOffset CollectedAt,
-    bool Processed);
+    bool Processed,
+    int ReviewAttempts = 0,
+    DateTimeOffset? ReviewDeadline = null,
+    DateTimeOffset? ReviewLastAttemptAt = null);
+
+/// <summary>재심 미완료 review 기사의 확정 제외 사유(§A R1, #310).</summary>
+public static class NewsRelevanceReasons
+{
+    public const string ReviewUnadjudicatedDisabled = "review_unadjudicated_disabled";
+    public const string ReviewUnadjudicatedTimeout = "review_unadjudicated_timeout";
+}
 
 public sealed record NewsFeedState(long LastId, DateTimeOffset? LastCreatedAt,
     IReadOnlyList<DateTimeOffset>? FeedRequestTimes = null, string? LastKey = null,
@@ -213,7 +223,11 @@ public sealed class NewsFeedService(
         if (budget <= 0) return new CollectionResult(budget, "quota_wait", false, 0, null, []);
         var watchlist = await WatchlistAsync(ct);
         var known = await LoadStateAsync(ct);
-        QueuePendingReviews(known?.Inbox ?? []);
+        if (known?.Inbox is { Count: > 0 } pendingInbox)
+        {
+            var swept = SweepReviews(pendingInbox, clock.GetUtcNow());
+            if (!ReferenceEquals(swept, pendingInbox)) known = known with { Inbox = swept };
+        }
         QueuePendingInbox((known?.Inbox ?? []).Where(x => string.IsNullOrWhiteSpace(x.Item.Provider)
             || string.Equals(x.Item.Provider, feed.Name, StringComparison.OrdinalIgnoreCase)).ToArray(), watchlist);
 
@@ -286,11 +300,14 @@ public sealed class NewsFeedService(
                 if (alreadySeen) continue;
                 observedThisPage++;
                 var eligible = item.Relevance?.Included ?? true;
-                var pendingReview = IsSbhReview(item);
+                var review = IsSbhReview(item);
+                var adjudicate = review && AdjudicationAvailable;
                 var entry = new NewsInboxEntry(keys, item, requestedAt,
-                    known is null || providerBaseline || (!eligible && !pendingReview));
+                    known is null || providerBaseline || (!eligible && !adjudicate));
+                if (review && !adjudicate) entry = Unadjudicated(entry, NewsRelevanceReasons.ReviewUnadjudicatedDisabled);
+                else if (adjudicate) entry = entry with { ReviewDeadline = requestedAt + ReviewTtl };
                 inbox.Add(entry);
-                if (pendingReview) TryQueueReview(item.Id);
+                if (adjudicate && !entry.Processed) TryQueueReview(item.Id);
                 foreach (var key in keys) seenKeys.Add(key);
                 if (known is not null && eligible)
                 {
@@ -337,14 +354,52 @@ public sealed class NewsFeedService(
             latestPublishedAt, providerSummary);
     }
 
-    void QueuePendingReviews(IReadOnlyList<NewsInboxEntry> inbox)
+    bool AdjudicationAvailable => options.SbhRelevanceAdjudicationEnabled && relevanceAdjudicator is not null
+        && string.Equals(feed.Name, NewsFeedProviders.SbhNews, StringComparison.OrdinalIgnoreCase);
+    TimeSpan ReviewTtl => TimeSpan.FromMinutes(Math.Max(1, options.SbhRelevanceReviewTtlMinutes));
+    int ReviewMaxAttempts => Math.Max(1, options.SbhRelevanceAdjudicationMaxAttempts);
+    TimeSpan ReviewBackoff => TimeSpan.FromSeconds(Math.Max(0, options.SbhRelevanceRetryBackoffSeconds));
+
+    /// <summary>미처리 review를 시도 횟수·TTL로 종결하고 backoff가 지난 항목만 재큐한다(§A R1·R2, #310).</summary>
+    IReadOnlyList<NewsInboxEntry> SweepReviews(IReadOnlyList<NewsInboxEntry> inbox, DateTimeOffset now)
     {
-        if (!options.SbhRelevanceAdjudicationEnabled || relevanceAdjudicator is null
-            || !string.Equals(feed.Name, NewsFeedProviders.SbhNews, StringComparison.OrdinalIgnoreCase)) return;
-        foreach (var entry in inbox.Where(x => !x.Processed && IsSbhReview(x.Item))
-                     .Take(Math.Max(0, options.SbhRelevanceAdjudicationMaxPerPoll)))
-            TryQueueReview(entry.Item.Id);
+        var changed = false;
+        var requeue = new List<string>();
+        var budget = Math.Max(0, options.SbhRelevanceAdjudicationMaxPerPoll);
+        var result = new NewsInboxEntry[inbox.Count];
+        for (var i = 0; i < inbox.Count; i++)
+        {
+            var entry = inbox[i];
+            if (entry.Processed || !IsSbhReview(entry.Item)) { result[i] = entry; continue; }
+            var next = ReviewProgress(entry, now);
+            changed |= !ReferenceEquals(next, entry);
+            if (!next.Processed && requeue.Count < budget
+                && (next.ReviewLastAttemptAt is not { } last || now - last >= ReviewBackoff))
+                requeue.Add(next.Item.Id);
+            result[i] = next;
+        }
+        foreach (var id in requeue) TryQueueReview(id);
+        return changed ? result : inbox;
     }
+
+    NewsInboxEntry ReviewProgress(NewsInboxEntry entry, DateTimeOffset now)
+    {
+        if (!AdjudicationAvailable) return Unadjudicated(entry, NewsRelevanceReasons.ReviewUnadjudicatedDisabled);
+        var current = entry.ReviewDeadline is null ? entry with { ReviewDeadline = entry.CollectedAt + ReviewTtl } : entry;
+        return current.ReviewAttempts >= ReviewMaxAttempts || now > current.ReviewDeadline
+            ? Unadjudicated(current, NewsRelevanceReasons.ReviewUnadjudicatedTimeout)
+            : current;
+    }
+
+    static NewsInboxEntry Unadjudicated(NewsInboxEntry entry, string reason)
+        => entry with
+        {
+            Processed = true,
+            Item = entry.Item with
+            {
+                Relevance = entry.Item.Relevance! with { Decision = NewsRelevanceDecisions.Exclude, Reason = reason }
+            }
+        };
 
     void TryQueueReview(string id)
     {
@@ -384,8 +439,13 @@ public sealed class NewsFeedService(
             catch (Exception exception) { diagnostics.PollFailed("sbh-relevance-adjudication", exception); }
             if (assessment is null)
             {
-                state.RelevanceAdjudication("pending", "timeout_offline_or_invalid_response", _relevanceReviews.Reader.Count);
-                lock (_queuedRelevanceReviews) _queuedRelevanceReviews.Remove(id);
+                await _gate.WaitAsync(ct);
+                try { await RecordFailedReviewAsync(id, ct); }
+                finally
+                {
+                    _gate.Release();
+                    lock (_queuedRelevanceReviews) _queuedRelevanceReviews.Remove(id);
+                }
                 continue;
             }
             await _gate.WaitAsync(ct);
@@ -405,6 +465,27 @@ public sealed class NewsFeedService(
                 lock (_queuedRelevanceReviews) _queuedRelevanceReviews.Remove(id);
             }
         }
+    }
+
+    async Task RecordFailedReviewAsync(string id, CancellationToken ct)
+    {
+        var known = await LoadStateAsync(ct);
+        var now = clock.GetUtcNow();
+        var finalized = false;
+        if (known?.Inbox is not null)
+        {
+            var inbox = known.Inbox.Select(x =>
+            {
+                if (x.Processed || x.Item.Id != id || !IsSbhReview(x.Item)) return x;
+                var next = ReviewProgress(x with { ReviewAttempts = x.ReviewAttempts + 1, ReviewLastAttemptAt = now }, now);
+                finalized = next.Processed;
+                return next;
+            }).ToArray();
+            await SaveStateAsync(known with { Inbox = inbox }, ct);
+        }
+        state.RelevanceAdjudication(finalized ? "completed" : "pending",
+            finalized ? NewsRelevanceReasons.ReviewUnadjudicatedTimeout : "timeout_offline_or_invalid_response",
+            _relevanceReviews.Reader.Count);
     }
 
     static bool IsSbhReview(NewsFeedItem item)
