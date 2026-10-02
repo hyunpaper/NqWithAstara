@@ -39,16 +39,16 @@ public sealed class StructurePolicyTests
             StructurePolicy.Default with { AllowTransitionPullback = true },
             StructurePolicy.Default with { ObservationDailyByteLimit = 1 },
             StructurePolicy.Default with { RequirePositiveBenchmarkForRebound = true },
-            StructurePolicy.Default with { RequirePullbackNearVwap = true },
+            StructurePolicy.Default with { RequirePullbackNearVwap = false },
             StructurePolicy.Default with { PullbackMaximumVwapDistanceAtr = 2.0 },
-            StructurePolicy.Default with { RequireBreakoutNearVwap = true },
+            StructurePolicy.Default with { RequireBreakoutNearVwap = false },
             StructurePolicy.Default with { BreakoutMaximumVwapDistanceAtr = 4.9 },
-            StructurePolicy.Default with { RequireMinimumReboundEntryQuality = true },
+            StructurePolicy.Default with { RequireMinimumReboundEntryQuality = false },
             StructurePolicy.Default with { MinimumReboundEntryQuality = 49.9 },
-            StructurePolicy.Default with { RequireBreakoutAboveVwap = true },
-            StructurePolicy.Default with { RequireMaximumReboundNetR = true },
+            StructurePolicy.Default with { RequireBreakoutAboveVwap = false },
+            StructurePolicy.Default with { RequireMaximumReboundNetR = false },
             StructurePolicy.Default with { MaximumReboundNetR = 1.8 },
-            StructurePolicy.Default with { ExemptBreakoutFromPositiveBenchmarkHalfRStop = true }
+            StructurePolicy.Default with { ExemptBreakoutFromPositiveBenchmarkHalfRStop = false }
         };
         var hashes = variants.Select(x => x.PolicyHash).ToArray();
         Assert.DoesNotContain(baseline, hashes);
@@ -68,14 +68,14 @@ public sealed class StructurePolicyTests
         Assert.Contains("\"PriceTick\":0.01", json);
         Assert.Contains("\"PivotLeft\":2", json);
         Assert.Contains("\"AllowTransitionPullback\":false", json);
-        Assert.Contains("\"RequirePullbackNearVwap\":false", json);
+        Assert.Contains("\"RequirePullbackNearVwap\":true", json);
         Assert.Contains("\"PullbackMaximumVwapDistanceAtr\":2.1", json);
-        Assert.Contains("\"RequireBreakoutNearVwap\":false", json);
+        Assert.Contains("\"RequireBreakoutNearVwap\":true", json);
         Assert.Contains("\"BreakoutMaximumVwapDistanceAtr\":5", json);
-        Assert.Contains("\"RequireMinimumReboundEntryQuality\":false", json);
+        Assert.Contains("\"RequireMinimumReboundEntryQuality\":true", json);
         Assert.Contains("\"MinimumReboundEntryQuality\":50", json);
-        Assert.Contains("\"RequireBreakoutAboveVwap\":false", json);
-        Assert.Contains("\"RequireMaximumReboundNetR\":false", json);
+        Assert.Contains("\"RequireBreakoutAboveVwap\":true", json);
+        Assert.Contains("\"RequireMaximumReboundNetR\":true", json);
         Assert.Contains("\"MaximumReboundNetR\":1.9", json);
         Assert.DoesNotContain("2026", json);           // 실행 시각/경로가 들어가면 hash가 재현되지 않는다
     }

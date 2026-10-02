@@ -125,31 +125,31 @@ public sealed class ConfluencePolicyTests
     [Fact]
     public void StructurePolicyHashIsUntouchedByTheConfluenceLayer()
     {
-        Assert.False(StructurePolicy.Default.RequirePullbackNearVwap);
-        Assert.False(StructurePolicy.Default.RequireBreakoutNearVwap);
-        Assert.False(StructurePolicy.Default.RequireMinimumReboundEntryQuality);
-        Assert.False(StructurePolicy.Default.RequireBreakoutAboveVwap);
-        Assert.False(StructurePolicy.Default.RequireMaximumReboundNetR);
-        Assert.False(StructurePolicy.Default.EnableTwoRFeeBreakEvenStop);
+        Assert.True(StructurePolicy.Default.RequirePullbackNearVwap);
+        Assert.True(StructurePolicy.Default.RequireBreakoutNearVwap);
+        Assert.True(StructurePolicy.Default.RequireMinimumReboundEntryQuality);
+        Assert.True(StructurePolicy.Default.RequireBreakoutAboveVwap);
+        Assert.True(StructurePolicy.Default.RequireMaximumReboundNetR);
+        Assert.True(StructurePolicy.Default.EnableTwoRFeeBreakEvenStop);
         Assert.False(StructurePolicy.Default.RejectHighVolatilityRangeEntries);
-        Assert.False(StructurePolicy.Default.CapStructuralTargetAtTwoR);
-        Assert.False(StructurePolicy.Default.EnableHalfRFeeBreakEvenStopForPositiveBenchmark);
-        Assert.Contains("\"RequirePullbackNearVwap\":false", StructurePolicy.Default.CanonicalJson);
+        Assert.True(StructurePolicy.Default.CapStructuralTargetAtTwoR);
+        Assert.True(StructurePolicy.Default.EnableHalfRFeeBreakEvenStopForPositiveBenchmark);
+        Assert.Contains("\"RequirePullbackNearVwap\":true", StructurePolicy.Default.CanonicalJson);
         Assert.Contains("\"PullbackMaximumVwapDistanceAtr\":2.1", StructurePolicy.Default.CanonicalJson);
-        Assert.Contains("\"RequireBreakoutNearVwap\":false", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"RequireBreakoutNearVwap\":true", StructurePolicy.Default.CanonicalJson);
         Assert.Contains("\"BreakoutMaximumVwapDistanceAtr\":5", StructurePolicy.Default.CanonicalJson);
-        Assert.Contains("\"RequireMinimumReboundEntryQuality\":false", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"RequireMinimumReboundEntryQuality\":true", StructurePolicy.Default.CanonicalJson);
         Assert.Contains("\"MinimumReboundEntryQuality\":50", StructurePolicy.Default.CanonicalJson);
-        Assert.Contains("\"RequireBreakoutAboveVwap\":false", StructurePolicy.Default.CanonicalJson);
-        Assert.Contains("\"RequireMaximumReboundNetR\":false", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"RequireBreakoutAboveVwap\":true", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"RequireMaximumReboundNetR\":true", StructurePolicy.Default.CanonicalJson);
         Assert.Contains("\"MaximumReboundNetR\":1.9", StructurePolicy.Default.CanonicalJson);
-        Assert.Contains("\"EnableTwoRFeeBreakEvenStop\":false", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"EnableTwoRFeeBreakEvenStop\":true", StructurePolicy.Default.CanonicalJson);
         Assert.Contains("\"RejectHighVolatilityRangeEntries\":false", StructurePolicy.Default.CanonicalJson);
-        Assert.Contains("\"CapStructuralTargetAtTwoR\":false", StructurePolicy.Default.CanonicalJson);
-        Assert.Contains("\"EnableHalfRFeeBreakEvenStopForPositiveBenchmark\":false", StructurePolicy.Default.CanonicalJson);
-        Assert.Contains("\"ExemptBreakoutFromPositiveBenchmarkHalfRStop\":false", StructurePolicy.Default.CanonicalJson);
-        // 기본 비활성이어도 실험 정책 필드는 직렬화된 정책 정체성의 일부이므로 hash가 바뀐다.
-        Assert.Equal("87033212656a5747958eb5994c6d49d3fa469acfd79466028d3f7a4c10a56f8d",
+        Assert.Contains("\"CapStructuralTargetAtTwoR\":true", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"EnableHalfRFeeBreakEvenStopForPositiveBenchmark\":true", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"ExemptBreakoutFromPositiveBenchmarkHalfRStop\":true", StructurePolicy.Default.CanonicalJson);
+        // #245 Cycle45 운영 기본값(11개 플래그 true)의 정책 해시.
+        Assert.Equal("be8ab761d2790666981719d64452fb77f6567bc5af380f10d0a7fad77e47197b",
             StructurePolicy.Default.PolicyHash);
         Assert.NotEqual(StructurePolicy.Default.PolicyHash, ConfluencePolicy.Default.PolicyHash);
     }

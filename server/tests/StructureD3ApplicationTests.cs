@@ -10,7 +10,7 @@ using Xunit;
 /// </summary>
 public sealed class StructureD3ApplicationTests
 {
-    static readonly StructurePolicy P = StructurePolicy.Default;
+    static readonly StructurePolicy P = D3.P;
     const int Bars = 46;              // 0..44 완료, 45는 진행 중
     const int NowMinute = 45;
 

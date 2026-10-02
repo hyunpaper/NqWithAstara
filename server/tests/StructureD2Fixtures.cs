@@ -31,6 +31,21 @@ static class D2
             ImmutableArray<string>.Empty, history.ToImmutableArray(), profileOnly, retired);
     }
 
+    public static readonly StructurePolicy PreCycle45 = StructurePolicy.Default with
+    {
+        RequirePullbackNearVwap = false,
+        RequireBreakoutNearVwap = false,
+        RequireMinimumReboundEntryQuality = false,
+        RequireBreakoutAboveVwap = false,
+        RequireMaximumReboundNetR = false,
+        EnableTwoRFeeBreakEvenStop = false,
+        CapStructuralTargetAtTwoR = false,
+        EnableHalfRFeeBreakEvenStopForPositiveBenchmark = false,
+        AllowQualifiedTransitionPullback = false,
+        AllowQualifiedTransitionBreakout = false,
+        ExemptBreakoutFromPositiveBenchmarkHalfRStop = false
+    };
+
     /// <summary>#209 netR 상한 밖의 주제를 다루는 fixture용 정책. 상한 자체는 <c>StructureMaxNetRTests</c>가 고정한다.</summary>
     public static readonly StructurePolicy WideNetR = StructurePolicy.Default with { MaxNetR = 100 };
 

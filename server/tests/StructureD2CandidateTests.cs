@@ -498,9 +498,9 @@ public sealed class StructureD2CandidateTests
         var bars = BreakoutBars(101.00m, 101.10m);
 
         var invalidated = SetupDetector.Detect(Request(bars, zones, ImmutableArray<TouchEpisode>.Empty,
-            live: 100.95m), P).Candidates.Single();
+            live: 100.95m), D2.PreCycle45).Candidates.Single();
         var recovered = SetupDetector.Detect(Request(bars, zones, ImmutableArray<TouchEpisode>.Empty,
-            live: 101.20m, liquidity: D2.Quote(101.19m, 101.21m, TriggerMinute + 1)), P).Candidates.Single();
+            live: 101.20m, liquidity: D2.Quote(101.19m, 101.21m, TriggerMinute + 1)), D2.PreCycle45).Candidates.Single();
 
         Assert.Equal(invalidated.EventId, recovered.EventId);
         Assert.Equal(CandidateDisposition.Ready, recovered.Disposition);       // 계산만 보면 유효해 보인다
@@ -614,10 +614,12 @@ public sealed class StructureD2CandidateTests
     }
 
     [Fact]
-    public void PullbackNearVwapGateIsDisabledByDefault()
+    public void PullbackNearVwapGateIsEnabledByDefault()
     {
+        Assert.True(SetupDetector.RejectsPullbackTooFarFromVwap(
+            SetupKind.Pullback, TradeSide.Long, 2.11, P));
         Assert.False(SetupDetector.RejectsPullbackTooFarFromVwap(
-            SetupKind.Pullback, TradeSide.Long, 2.1, P));
+            SetupKind.Pullback, TradeSide.Long, 2.11, D2.PreCycle45));
     }
 
     [Theory]
@@ -661,10 +663,12 @@ public sealed class StructureD2CandidateTests
     }
 
     [Fact]
-    public void BreakoutNearVwapGateIsDisabledByDefault()
+    public void BreakoutNearVwapGateIsEnabledByDefault()
     {
-        Assert.False(SetupDetector.RejectsBreakoutTooFarFromVwap(
+        Assert.True(SetupDetector.RejectsBreakoutTooFarFromVwap(
             SetupKind.Breakout, TradeSide.Long, 5.1, P));
+        Assert.False(SetupDetector.RejectsBreakoutTooFarFromVwap(
+            SetupKind.Breakout, TradeSide.Long, 5.1, D2.PreCycle45));
     }
 
     [Theory]
@@ -711,9 +715,10 @@ public sealed class StructureD2CandidateTests
     }
 
     [Fact]
-    public void MinimumReboundEntryQualityGateIsDisabledByDefault()
+    public void MinimumReboundEntryQualityGateIsEnabledByDefault()
     {
-        Assert.False(SetupDetector.RejectsLowQualityRebound(SetupKind.Rebound, 49, P));
+        Assert.True(SetupDetector.RejectsLowQualityRebound(SetupKind.Rebound, 49, P));
+        Assert.False(SetupDetector.RejectsLowQualityRebound(SetupKind.Rebound, 49, D2.PreCycle45));
     }
 
     [Theory]
@@ -752,10 +757,12 @@ public sealed class StructureD2CandidateTests
     }
 
     [Fact]
-    public void BreakoutAboveVwapGateIsDisabledByDefault()
+    public void BreakoutAboveVwapGateIsEnabledByDefault()
     {
-        Assert.False(SetupDetector.RejectsBreakoutBelowVwap(
+        Assert.True(SetupDetector.RejectsBreakoutBelowVwap(
             SetupKind.Breakout, TradeSide.Long, -0.01, P));
+        Assert.False(SetupDetector.RejectsBreakoutBelowVwap(
+            SetupKind.Breakout, TradeSide.Long, -0.01, D2.PreCycle45));
     }
 
     [Theory]
@@ -802,9 +809,10 @@ public sealed class StructureD2CandidateTests
     }
 
     [Fact]
-    public void MaximumReboundNetRGateIsDisabledByDefault()
+    public void MaximumReboundNetRGateIsEnabledByDefault()
     {
-        Assert.False(SetupDetector.RejectsReboundNetR(SetupKind.Rebound, 1.91, P));
+        Assert.True(SetupDetector.RejectsReboundNetR(SetupKind.Rebound, 1.91, P));
+        Assert.False(SetupDetector.RejectsReboundNetR(SetupKind.Rebound, 1.91, D2.PreCycle45));
     }
 
     [Theory]

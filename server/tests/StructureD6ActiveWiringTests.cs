@@ -20,8 +20,8 @@ public sealed class StructureD6StructuralSimulationTests
         return evaluation.Plan!;
     }
 
-    static FrozenStructureContext ContextA(StructuralTradePlan? plan = null) =>
-        StructuralSimulation.Freeze(plan ?? PlanA(), "TEST|event-A", "UP", 41.0, 55.5, Fx.At(40), Fx.At(40));
+    static FrozenStructureContext ContextA(StructuralTradePlan? plan = null, StructurePolicy? policy = null) =>
+        StructuralSimulation.Freeze(plan ?? PlanA(), "TEST|event-A", "UP", 41.0, 55.5, Fx.At(40), Fx.At(40), policy);
 
     static StructuralEntryRequest RequestA(FrozenStructureContext? context = null) =>
         new(Fx.Symbol, Fx.At(39), Fx.At(40), Fx.SessionEnd, context ?? ContextA());
@@ -35,7 +35,7 @@ public sealed class StructureD6StructuralSimulationTests
     public void EnterCreatesTheTradeEntirelyFromTheFrozenPlan()
     {
         var plan = PlanA();
-        var result = StructuralSimulation.Enter([], RequestA(ContextA(plan)));
+        var result = StructuralSimulation.Enter([], RequestA(ContextA(plan, D2.PreCycle45)), D2.PreCycle45);
 
         Assert.Equal(StructuralEntryOutcome.Entered, result.Outcome);
         var trade = Assert.Single(result.Trades);
@@ -197,7 +197,7 @@ public sealed class StructureD6StructuralSimulationTests
         var basePlan = PlanA();
         var risk = basePlan.EntryReference - basePlan.Stop;
         var plan = basePlan with { Target = basePlan.EntryReference + risk * 4 };
-        var enabled = StructurePolicy.Default with { EnableTwoRFeeBreakEvenStop = true };
+        var enabled = D2.PreCycle45 with { EnableTwoRFeeBreakEvenStop = true };
         var context = StructuralSimulation.Freeze(plan, "TEST|two-r", "UP", 40, 60,
             Fx.At(40), Fx.At(40), enabled);
         var open = StructuralSimulation.Enter([], RequestA(context), enabled).Trade!;
@@ -216,7 +216,7 @@ public sealed class StructureD6StructuralSimulationTests
         Assert.Equal("STOP", closed.Status);
         Assert.Equal(expectedStop, closed.ExitPrice);
 
-        var unchanged = StructuralSimulation.Enter([], RequestA(ContextA(plan))).Trade!;
+        var unchanged = StructuralSimulation.Enter([], RequestA(ContextA(plan, D2.PreCycle45)), D2.PreCycle45).Trade!;
         var after = Assert.Single(SimulationEngine.ReplayBars([unchanged], Fx.Symbol,
             [Fx.Candle(41, unchanged.EntryPrice, twoR + .01, unchanged.Stop + .01, twoR)]));
         Assert.Equal((double)plan.Stop, after.Stop, 10);
@@ -227,7 +227,7 @@ public sealed class StructureD6StructuralSimulationTests
     public void TwoRTargetCapUsesConfirmedFillAndFrozenStopOnlyWhenEnabled()
     {
         var plan = PlanA() with { Target = PlanA().EntryReference + 20m };
-        var policy = StructurePolicy.Default with
+        var policy = D2.PreCycle45 with
         {
             EnableTwoRFeeBreakEvenStop = true,
             CapStructuralTargetAtTwoR = true
@@ -240,14 +240,14 @@ public sealed class StructureD6StructuralSimulationTests
         Assert.Equal(expected, trade.Target, 10);
         Assert.Equal(StructuralSimulation.TwoRTargetAndFeeBreakEvenExitPolicyVersion,
             trade.Structure!.StructuralExitPolicyVersion);
-        Assert.False(StructurePolicy.Default.CapStructuralTargetAtTwoR);
+        Assert.True(StructurePolicy.Default.CapStructuralTargetAtTwoR);
     }
 
     [Fact]
     public void PositiveBenchmarkHalfRStopIsConditionalAndArmsAfterCompletedClose()
     {
         var plan = PlanA() with { Target = PlanA().EntryReference + 20m };
-        var policy = StructurePolicy.Default with
+        var policy = D2.PreCycle45 with
         {
             EnableTwoRFeeBreakEvenStop = true,
             CapStructuralTargetAtTwoR = true,
@@ -268,14 +268,14 @@ public sealed class StructureD6StructuralSimulationTests
         Assert.True(armed.Stop > positive.Stop);
         Assert.Equal(StructuralSimulation.TwoRTargetAndFeeBreakEvenExitPolicyVersion,
             negative.Structure!.StructuralExitPolicyVersion);
-        Assert.False(StructurePolicy.Default.EnableHalfRFeeBreakEvenStopForPositiveBenchmark);
+        Assert.True(StructurePolicy.Default.EnableHalfRFeeBreakEvenStopForPositiveBenchmark);
     }
 
     [Fact]
     public void BreakoutExemptionKeepsTwoRStopUnderPositiveBenchmarkOnlyWhenEnabled()
     {
         var plan = PlanA() with { Target = PlanA().EntryReference + 20m };
-        var halfR = StructurePolicy.Default with
+        var halfR = D2.PreCycle45 with
         {
             EnableTwoRFeeBreakEvenStop = true,
             CapStructuralTargetAtTwoR = true,
@@ -299,7 +299,7 @@ public sealed class StructureD6StructuralSimulationTests
         Assert.Equal("OPEN", after.Status);
         Assert.Equal(StructuralSimulation.HalfRPositiveBenchmarkFeeBreakEvenExitPolicyVersion, pullback.Structure!.StructuralExitPolicyVersion);
         Assert.Equal(StructuralSimulation.HalfRPositiveBenchmarkFeeBreakEvenExitPolicyVersion, breakoutOff.Structure!.StructuralExitPolicyVersion);
-        Assert.False(StructurePolicy.Default.ExemptBreakoutFromPositiveBenchmarkHalfRStop);
+        Assert.True(StructurePolicy.Default.ExemptBreakoutFromPositiveBenchmarkHalfRStop);
     }
 
     /// <summary>§18: v5 OPEN이 남아 있는 동안 v4 재진입도 같은 종목에서 막힌다(기존 엔진의 OPEN 제한 재사용).</summary>
@@ -673,8 +673,9 @@ static class D6
     /// 배선 검증용 정책. 이 fixture는 signedTrend -57의 하락 국면이라 #208 REBOUND 추세 하한에 걸리고,
     /// 계획 netR이 약 3.7이라 #209 MaxNetR 상한에도 걸린다. 둘 다 이 파일들의 검증 대상이 아니므로 함께 푼다.
     /// </summary>
-    public static StructurePolicy WiringPolicy { get; } = D2.WideNetR with
+    public static StructurePolicy WiringPolicy { get; } = D2.PreCycle45 with
     {
+        MaxNetR = 100,
         TrendStateThreshold = 1000,
         RequireCompleteLiquidityCost = false
     };

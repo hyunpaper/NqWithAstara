@@ -100,7 +100,7 @@ static class Fidelity
 
 public sealed class StructureObservationTransitionTests
 {
-    static readonly StructurePolicy P = StructurePolicy.Default;
+    static readonly StructurePolicy P = D3.P;
 
     sealed record Harness(StructureAnalysisService Service, MemoryObservationStore Observations,
         MonitorRuntimeState Runtime, MovableClock Clock, RecordingStore Store, long Generation);
@@ -319,7 +319,7 @@ public sealed class StructureObservationTransitionTests
 
 public sealed class StructureUnavailableStatusTests
 {
-    static readonly StructurePolicy P = StructurePolicy.Default;
+    static readonly StructurePolicy P = D3.P;
 
     static StructureSnapshotBuild Build(Candle[] bars) =>
         StructureSnapshotFactory.Create(D3.Symbol, D3.Session, bars, D3.Daily(), 100.0, D3.At(45), D3.At(45), 7, P);
@@ -425,7 +425,7 @@ public sealed class StructureUnavailableStatusTests
 
 public sealed class StructurePullbackTrendStateTraceTests
 {
-    static readonly StructurePolicy P = StructurePolicy.Default;
+    static readonly StructurePolicy P = D3.P;
 
     [Fact]
     public void TheRealTrendPathProducesThePullbackWithoutTheTrendStateNote()
