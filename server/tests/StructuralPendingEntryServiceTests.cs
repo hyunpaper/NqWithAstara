@@ -117,6 +117,61 @@ public sealed class StructuralPendingEntryServiceTests
         Assert.Equal(1, entries.Calls);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ProductionPendingPathRecordsBenchmarkAvailabilityOnTheCommittedTrade(bool benchmarkPresent)
+    {
+        var store = new MemoryStore();
+        var pending = new StructuralPendingEntryService(store);
+        var policy = D6.WiringPolicy with
+        {
+            EnableTwoRFeeBreakEvenStop = true,
+            CapStructuralTargetAtTwoR = true,
+            EnableHalfRFeeBreakEvenStopForPositiveBenchmark = true
+        };
+        var context = StructuralSimulation.Freeze(
+            StructuralPlanner.Evaluate(D2.ExampleA(), D6.WiringPolicy).Plan!,
+            "pending-benchmark-observability", "UP", 12, 55, Start, Start, policy);
+        await pending.QueueAsync(new StoredPendingStructuralEntry(
+            new PendingEntry("pending-benchmark-observability", "SOXL", TradeSide.Long, Start,
+                Start.AddMinutes(1), Start.AddMinutes(5), (double)context.PlanSnapshot.Stop,
+                (double)context.PlanSnapshot.Target, (double)context.PlanSnapshot.EntryReference,
+                context.PlanSnapshot.PlanId, context.PlanSnapshot.PolicyHash), context, Start));
+        var entries = new CountingEntryPort(new StructuralTradeEntryService(store, policy));
+        var benchmark = benchmarkPresent ? new FakeBenchmark(BenchmarkBars(100, 100.5)) : null;
+        var service = BuildPendingService(store, pending, entries, policy, benchmark);
+        var snapshot = new StructureSnapshot("SOXL", Start, Start.AddHours(6), Start.AddMinutes(1),
+            100, Start.AddMinutes(1), ImmutableArray<Candle>.Empty, ImmutableArray<Candle>.Empty,
+            null, null, 1);
+        var request = new StructureObservationRequest("SOXL", 1, D6.Session, [], [], 100, Start.AddMinutes(1));
+
+        var result = await service.TryEnterPreferredAsync(request, [], null, snapshot, null,
+            Start.AddMinutes(2), [new Candle(Start.AddMinutes(1), 100, 101, 99, 100.5, 1)], default);
+
+        Assert.True(result!.Entered, result.Note);
+        var trade = Assert.Single(await store.Read("simtrades.json", new List<SimTrade>()));
+        Assert.Equal(trade.Id, result.Trade!.Id);
+        var tags = Assert.IsType<EntryBenchmarkTags>(trade.Structure!.Benchmark);
+        var notes = StructureAnalysisService.EntryObservabilityNotes(result.Trade).ToArray();
+        if (benchmarkPresent)
+        {
+            Assert.Equal(StructuralSimulation.BenchmarkAvailable, tags.Status);
+            Assert.Equal(.5, tags.ReturnPercent!.Value, 6);
+            Assert.Equal(StructuralSimulation.HalfRPositiveBenchmarkFeeBreakEvenExitPolicyVersion,
+                trade.Structure.StructuralExitPolicyVersion);
+            Assert.Contains(StructureAnalysisService.NoteEntryBenchmarkAvailable, notes);
+        }
+        else
+        {
+            Assert.Equal(StructuralSimulation.BenchmarkUnavailable, tags.Status);
+            Assert.Null(tags.ReturnPercent);
+            Assert.Equal(context.StructuralExitPolicyVersion, trade.Structure.StructuralExitPolicyVersion);
+            Assert.Contains(StructureAnalysisService.NoteEntryBenchmarkUnavailable, notes);
+        }
+        Assert.Contains(StructureAnalysisService.NoteExitPolicyPrefix + trade.Structure.StructuralExitPolicyVersion, notes);
+    }
+
     [Fact]
     public async Task ProductionPendingPathBlocksNegativeBenchmarkOnlyForLongRebound()
     {
