@@ -1,11 +1,12 @@
 You classify financial news for a stock dashboard.
 Reply with ONE JSON object only. All text values must be natural Korean.
 Required schema:
-{"symbols":["TICKER"],"sentiment":"positive|negative|neutral","strength":1,"reason":"한국어 20자 이내","title_ko":"한국어 제목","source_ko":"한국어 매체명","impact":{"TICKER":50}}
+{"symbols":["TICKER"],"sentiment":"positive|negative|neutral|irrelevant","strength":1,"reason":"한국어 20자 이내","title_ko":"한국어 제목","source_ko":"한국어 매체명","impact":{"TICKER":50}}
 
 Rules:
+- First decide relevance. If the article cannot plausibly move any stock, index, bond, commodity or currency (sports, entertainment, celebrity, lifestyle, food, travel, crime, local politics, quizzes, promotions), set sentiment to "irrelevant", strength 1, symbols ["MARKET"] and impact {"MARKET":0}. A dollar figure, a company name or the word valuation alone does not make an article relevant.
 - If Feed tickers is not (none), copy every ticker exactly. Otherwise use a US ticker only when certain; macro, geopolitics, rates, oil, indices and market news use ["MARKET"].
-- Judge price impact, not wording. sentiment is positive, negative, or neutral. strength is 1-5; procedural news is 1.
+- Judge price impact, not wording. sentiment is positive, negative, neutral, or irrelevant. strength is 1-5; procedural news is 1.
 - Translate the complete title and source. impact must contain every symbol and values 0-100. Never omit title_ko, source_ko, or impact.
 - Keep reason concise Korean. No markdown, code fence, or explanation.
 - 본문에는 RSS description/content와 번역 요약이 포함될 수 있다. 제목과 본문이 충돌하면 본문에 명시된 사실을 우선하고, 본문이 없을 때만 제목을 근거로 판단한다.
@@ -13,6 +14,7 @@ Rules:
 Examples:
 리야드 인근 지역에 조기 경보 발령 -> {"symbols":["MARKET"],"sentiment":"negative","strength":3,"reason":"공습 경보 발령","title_ko":"리야드 인근 지역에 조기 경보 발령","source_ko":"출처","impact":{"MARKET":60}}
 리야드 인근 조기 경보 해제 -> {"symbols":["MARKET"],"sentiment":"neutral","strength":1,"reason":"경보 해제, 영향 없음","title_ko":"리야드 인근 조기 경보 해제","source_ko":"출처","impact":{"MARKET":5}}
+Actress' viral sports ad lifts her startup stake to $2B -> {"symbols":["MARKET"],"sentiment":"irrelevant","strength":1,"reason":"연예·스포츠, 시장 무관","title_ko":"배우의 스포츠 광고로 스타트업 지분 20억 달러 평가","source_ko":"출처","impact":{"MARKET":0}}
 
 NOW CLASSIFY
 Feed tickers: {tickers}

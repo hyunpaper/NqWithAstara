@@ -237,4 +237,26 @@ public sealed class NewsDomainTests
 
         Assert.Equal(NewsClassificationParser.MaxReasonLength, parsed!.Reason.Length);
     }
+
+    [Fact]
+    public void 무관_판정은_중립_강도0_영향도0으로_정규화한다()
+    {
+        var parsed = NewsClassificationParser.TryParse(
+            """{"symbols":["MARKET"],"sentiment":"irrelevant","strength":4,"reason":"연예 기사","title_ko":"제목","source_ko":"출처","impact":{"MARKET":70}}""");
+
+        Assert.NotNull(parsed);
+        Assert.True(parsed!.Irrelevant);
+        Assert.Equal(NewsSentiments.Neutral, parsed.Sentiment);
+        Assert.Equal(0, parsed.Strength);
+        Assert.Equal(0, parsed.ImpactScores!["MARKET"]);
+        Assert.Equal("연예 기사", parsed.Reason);
+    }
+
+    [Fact]
+    public void 무관_판정이_아니면_Irrelevant는_false다()
+    {
+        var parsed = NewsClassificationParser.TryParse("""{"symbols":["F"],"sentiment":"positive","strength":2}""");
+
+        Assert.False(parsed!.Irrelevant);
+    }
 }

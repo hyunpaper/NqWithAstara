@@ -5,18 +5,18 @@ using Xunit;
 
 namespace Astra.Server.Tests;
 
-/// <summary>v2c 프롬프트 리소스 로드·치환 (#171)</summary>
+/// <summary>v2d 프롬프트 리소스 로드·치환 (#171)</summary>
 public sealed class OllamaNewsClassifierTests
 {
     [Fact]
-    public void PromptVersionIsV2c()
+    public void PromptVersionIsV2d()
     {
-        Assert.Equal("v2c", OllamaNewsClassifier.PromptVersion);
-        Assert.Equal(NewsPromptVersions.V2c, OllamaNewsClassifier.PromptVersion);
+        Assert.Equal("v2d", OllamaNewsClassifier.PromptVersion);
+        Assert.Equal(NewsPromptVersions.V2d, OllamaNewsClassifier.PromptVersion);
     }
 
     [Fact]
-    public void BuildPromptLoadsTheV2cResourceAndFillsPlaceholders()
+    public void BuildPromptLoadsTheV2dResourceAndFillsPlaceholders()
     {
         var request = new NewsClassificationRequest("리야드 조기 경보 발령", "본문 내용", ["NVDA", "F"]);
 
@@ -69,4 +69,14 @@ public sealed class OllamaNewsClassifierTests
         Assert.Contains("본문은 인수가 무산됐다고 명시", prompt);
     }
 
+    [Fact]
+    public void 프롬프트는_시장_무관_라벨과_예시를_허용한다()
+    {
+        var prompt = OllamaNewsClassifier.BuildPrompt(new NewsClassificationRequest("", "", []));
+
+        Assert.Contains("positive|negative|neutral|irrelevant", prompt);
+        Assert.Contains("set sentiment to \"irrelevant\"", prompt);
+        Assert.Contains("\"sentiment\":\"irrelevant\"", prompt);
+        Assert.Contains("\"impact\":{\"MARKET\":0}", prompt);
+    }
 }
