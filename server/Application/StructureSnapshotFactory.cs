@@ -212,14 +212,27 @@ public static class StructureSnapshotFactory
             liquidity is null ? [WarningMissingLiquidity] : ImmutableArray<string>.Empty));
 
         // §16B: 잘못된 OHLCV·분봉 공백/충돌은 신규 분석 차단이므로 추세에도 동일하게 적용한다.
+        // 공백은 최근 BarGapBlockWindowBars 봉 창 안에 있을 때만 차단한다(#315). 창 밖 공백은 Gaps·Approximate로만 남는다.
         var barBlockers = new SortedSet<string>(StringComparer.Ordinal);
         if (bars.DroppedInvalid > 0) barBlockers.Add(BlockerInvalidBars);
-        if (bars.Gaps.Length > 0) barBlockers.Add(BlockerBarGap);
+        if (HasRecentGap(bars, policy.BarGapBlockWindowBars, sourceDuration)) barBlockers.Add(BlockerBarGap);
         if (bars.Conflicts.Length > 0) barBlockers.Add(BlockerBarConflict);
         var blockers = barBlockers.ToImmutableArray();
 
         return new DataQuality(sources.ToImmutable(), warnings.ToImmutableArray(),
             blockers, blockers, blockers, blockers);
+    }
+
+    /// <summary>공백 뒤 완료 봉이 windowBars개 미만인 공백이 하나라도 있으면 true. windowBars가 0 이하면 세션 전체 공백을 본다(#315).</summary>
+    static bool HasRecentGap(NormalizedBars bars, int windowBars, TimeSpan duration)
+    {
+        if (bars.Gaps.Length == 0) return false;
+        if (windowBars <= 0) return true;
+        var all = bars.Bars;
+        var firstAfterGap = Math.Max(1, all.Length - windowBars + 1);
+        for (var i = firstAfterGap; i < all.Length; i++)
+            if (all[i].Start != all[i - 1].Start + duration) return true;
+        return false;
     }
 
     /// <summary>

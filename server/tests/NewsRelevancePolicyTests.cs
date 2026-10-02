@@ -95,10 +95,9 @@ public sealed class NewsRelevancePolicyTests
     }
 
     [Theory]
-    [InlineData("Market reaction remains unclear")]
     [InlineData("Fed official gives a general interview")]
     [InlineData("ACME Inc considers its options")]
-    public void 사건_동사나_시장경로가_불충분하면_review로_보류한다(string title)
+    public void 대상은_있으나_사건_동사가_없으면_review로_보류한다(string title)
     {
         var result = Evaluate(Item(title));
 
@@ -187,11 +186,12 @@ public sealed class NewsRelevancePolicyTests
     }
 
     [Fact]
-    public void 한국은행은_회사대상이_아니며_통화정책_시장대상으로_남긴다()
+    public void 한국은행_금리_사건은_비미국_통화정책으로_review에_남긴다()
     {
         var result = Evaluate(Item("한국은행 금리 인상 발표"));
 
-        Assert.Equal(NewsRelevanceDecisions.Include, result.Decision);
+        Assert.Equal(NewsRelevanceDecisions.Review, result.Decision);
+        Assert.Equal("non_us_macro", result.Reason);
         Assert.Equal("한국은행", result.Actor);
         var target = Assert.Single(result.Targets);
         Assert.Equal(NewsSymbols.Market, target.Id);

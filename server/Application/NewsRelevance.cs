@@ -13,24 +13,34 @@ public interface INewsRelevancePolicy
     NewsRelevanceAssessment Evaluate(NewsFeedItem item, NewsRelevanceContext context);
 }
 
-/// <summary>관심종목 symbol·이름·한글 별칭으로 만든 알려진 엔티티 사전(§A R5, #310).</summary>
+/// <summary>관심종목 symbol·이름·한글 별칭에 전역 별칭 사전을 더한 알려진 엔티티 사전(§A R5, #310, #320).</summary>
 public sealed class NewsRelevanceContext
 {
     const int MinimumSymbolLength = 2;
     const int MinimumNameLength = 3;
     const int MinimumAliasLength = 2;
+    const int MinimumGlobalAliasLength = 3;
 
     NewsRelevanceContext(IReadOnlyList<NewsKnownEntity> entities, string version)
     {
         Entities = entities;
         Version = version;
+        KnownSymbols = entities.Select(x => x.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
-    public static NewsRelevanceContext Empty { get; } = Create([]);
+    public static NewsRelevanceContext Empty { get; } = Create([], includeGlobalAliases: false);
     public IReadOnlyList<NewsKnownEntity> Entities { get; }
+    public IReadOnlySet<string> KnownSymbols { get; }
     public string Version { get; }
 
-    public static NewsRelevanceContext Create(IEnumerable<NewsWatchSymbol> watchlist)
+    /// <summary>괄호 티커 <c>알파벳(GOOGL)</c>은 사전에 있는 심볼만 인정한다(#320).</summary>
+    public IEnumerable<Match> ParenTickers(string text)
+        => ParenTicker.Matches(text).Cast<Match>().Where(x => KnownSymbols.Contains(x.Groups[1].Value));
+
+    public static NewsRelevanceContext Create(IEnumerable<NewsWatchSymbol> watchlist) => Create(watchlist, includeGlobalAliases: true);
+
+    /// <summary>전역 별칭은 한글만 싣고(2자는 주어 표지 동반 시만) ASCII 심볼은 관심종목에만 허용한다(#320).</summary>
+    public static NewsRelevanceContext Create(IEnumerable<NewsWatchSymbol> watchlist, bool includeGlobalAliases)
     {
         var entities = new List<NewsKnownEntity>();
         foreach (var watch in watchlist.Where(x => !string.IsNullOrWhiteSpace(x.Symbol)))
@@ -42,7 +52,13 @@ public sealed class NewsRelevanceContext
             foreach (var alias in SymbolAliases.AliasesFor(id).Where(x => x.Length >= MinimumAliasLength))
                 entities.Add(NewsKnownEntity.Create(id, alias, caseSensitive: true));
         }
-        var distinct = entities.DistinctBy(x => (x.Id, x.Surface, x.CaseSensitive))
+        if (includeGlobalAliases)
+        {
+            foreach (var (alias, symbol) in SymbolAliases.All.Where(x => x.Alias.Length >= MinimumAliasLength))
+                entities.Add(NewsKnownEntity.Create(symbol.ToUpperInvariant(), alias, caseSensitive: true,
+                    requireSubjectContext: alias.Length < MinimumGlobalAliasLength));
+        }
+        var distinct = entities.DistinctBy(x => (x.Id, x.Surface, x.CaseSensitive, x.RequireSubjectContext))
             .OrderBy(x => x.Id, StringComparer.Ordinal).ThenBy(x => x.Surface, StringComparer.Ordinal).ToArray();
         var canonical = string.Join('\n', distinct.Select(x => x.Id + "|" + x.Surface + "|" + (x.CaseSensitive ? "cs" : "ci")));
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))[..8].ToLowerInvariant();
@@ -53,27 +69,32 @@ public sealed class NewsRelevanceContext
 public sealed class NewsKnownEntity
 {
     const string KoreanParticles = "은는이가을를의와과도로에측서";
+    const string SubjectContext = @"(?=[은는이가의도,]|\s?\(|\s?(?:주가|주식|실적|매출|시총))";
     readonly Regex _pattern;
 
-    NewsKnownEntity(string id, string surface, bool caseSensitive)
+    NewsKnownEntity(string id, string surface, bool caseSensitive, bool requireSubjectContext)
     {
         Id = id;
         Surface = surface;
         CaseSensitive = caseSensitive;
+        RequireSubjectContext = requireSubjectContext;
         var ascii = surface.Any(char.IsAsciiLetterOrDigit);
         var pattern = ascii
             ? @"(?<![A-Za-z0-9])" + Regex.Escape(surface) + @"(?![A-Za-z0-9])"
-            : @"(?<![가-힣A-Za-z0-9])" + Regex.Escape(surface) + @"(?=$|[^가-힣]|[" + KoreanParticles + "])";
+            : @"(?<![가-힣A-Za-z0-9])" + Regex.Escape(surface)
+                + (requireSubjectContext ? SubjectContext : @"(?=$|[^가-힣]|[" + KoreanParticles + "])");
         _pattern = new Regex(pattern, (caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase) | RegexOptions.CultureInvariant);
     }
 
     public string Id { get; }
     public string Surface { get; }
     public bool CaseSensitive { get; }
+    public bool RequireSubjectContext { get; }
 
-    public static NewsKnownEntity Create(string id, string surface, bool caseSensitive) => new(id, surface, caseSensitive);
+    public static NewsKnownEntity Create(string id, string surface, bool caseSensitive, bool requireSubjectContext = false)
+        => new(id, surface, caseSensitive, requireSubjectContext);
 
-    /// <summary>영숫자 경계 안의 언급만 찾는다. 한글 별칭은 뒤에 조사만 허용한다.</summary>
+    /// <summary>영숫자 경계 안의 언급만 찾는다. 한글 별칭은 뒤에 조사만, 2자 전역 별칭은 주어 표지·종목 문맥만 허용한다.</summary>
     public IEnumerable<Match> Find(string text) => _pattern.Matches(text);
 }
 
@@ -95,7 +116,7 @@ public sealed class WatchlistNewsRelevanceContextSource(ILocalStore store) : INe
 
 public sealed class NewsRelevancePolicy : INewsRelevancePolicy
 {
-    public const string CurrentVersion = "sbh-relevance-v2";
+    public const string CurrentVersion = "sbh-relevance-v3";
     const int MaxEventDistance = 80;
 
     public string Version => CurrentVersion;
@@ -110,36 +131,58 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
         if (text.Length == 0) return Result(version, NewsRelevanceDecisions.Exclude, "unknown", "", "", [], "", "empty_text");
 
         var macroEvent = MacroEvent(text);
-        var macroTarget = macroEvent?.Target ?? Hit.From(FirstMatch(text, MacroTarget, MacroAcronym));
+        var macroTarget = macroEvent?.Target ?? FirstMacroTarget(text);
         var macroAction = macroEvent?.Action ?? Hit.From(MacroAction.Match(text));
         var companyActions = CompanyAction.Matches(text).Cast<Match>().ToArray();
         var explicitTargets = Targets(item, text, context);
+        var titleHasCue = TitleHasEventCue(item, context);
 
         if (macroEvent is not null)
         {
             var (target, action, clauseStart, clauseLength) = macroEvent.Value;
-            return Result(version, NewsRelevanceDecisions.Include, MacroKind(target.Value, text),
+            var reason = IsNonUsMacro(target.Value, text.Substring(clauseStart, clauseLength), text) ? "non_us_macro"
+                : !titleHasCue ? "title_lacks_event" : "macro_event_confirmed";
+            return Result(version, Decision(reason), MacroKind(target.Value, text),
                 ActorInSpan(text, clauseStart, clauseLength, target.Value, action.Index), action.Value,
-                MacroTargets(target.Value), Span(text, target.Index, action.Index), "macro_event_confirmed");
+                MacroTargets(target.Value), Span(text, target.Index, action.Index), reason);
         }
 
         foreach (var action in companyActions)
         {
             var company = CompanyTargetsNearAction(item, text, action, context);
             if (company.Targets.Count == 0) continue;
-            return Result(version, NewsRelevanceDecisions.Include, CompanyKind(action.Value), company.Actor,
-                action.Value, company.Targets, Span(text, action.Index, action.Index), "company_event_confirmed");
+            var reason = titleHasCue ? "company_event_confirmed" : "title_lacks_event";
+            return Result(version, Decision(reason), CompanyKind(action.Value), company.Actor,
+                action.Value, company.Targets, Span(text, action.Index, action.Index), reason);
         }
 
         if (NonMarket.IsMatch(text))
             return Result(version, NewsRelevanceDecisions.Exclude, "non_market", "", "", [], Evidence(text), "non_market_context");
 
-        if (macroTarget is not null || companyActions.Length > 0 || explicitTargets.Count > 0 || AmbiguousWord.IsMatch(text))
+        if (macroTarget is not null || explicitTargets.Count > 0)
             return Result(version, NewsRelevanceDecisions.Review, "unknown", Actor(text, macroTarget?.Value ?? ""),
                 companyActions.Length > 0 ? companyActions[0].Value : macroAction?.Value ?? "", explicitTargets,
                 Evidence(text), "insufficient_actor_action_target_context");
 
+        if (companyActions.Length > 0 || macroAction is not null || AmbiguousWord.IsMatch(text))
+            return Result(version, NewsRelevanceDecisions.Exclude, "unknown", "",
+                companyActions.Length > 0 ? companyActions[0].Value : macroAction?.Value ?? "", [], Evidence(text), "action_without_target");
+
         return Result(version, NewsRelevanceDecisions.Exclude, "unknown", "", "", [], Evidence(text), "no_market_event");
+    }
+
+    static string Decision(string reason)
+        => reason.EndsWith("_confirmed", StringComparison.Ordinal) ? NewsRelevanceDecisions.Include : NewsRelevanceDecisions.Review;
+
+    /// <summary>제목에 대상·동작·엔티티 단서가 하나도 없으면 본문 부수 절만으로 확정하지 않는다(#320).</summary>
+    static bool TitleHasEventCue(NewsFeedItem item, NewsRelevanceContext context)
+    {
+        var title = Normalize(item.Title ?? "");
+        if (title.Length == 0) return true;
+        return MacroTargetsIn(title).Length > 0 || MacroAction.IsMatch(title) || CompanyAction.IsMatch(title)
+            || CompanySuffix.IsMatch(title) || context.ParenTickers(title).Any()
+            || context.Entities.Any(entity => entity.Find(title).Any())
+            || item.Tickers.Any(ticker => !string.IsNullOrWhiteSpace(ticker) && title.Contains(ticker, StringComparison.OrdinalIgnoreCase));
     }
 
     static NewsRelevanceAssessment Result(string version, string decision, string kind, string actor, string action,
@@ -155,6 +198,8 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
             if (value.Length < 2) continue;
             targets.Add(new NewsEventTarget(value.ToUpperInvariant(), "company", "direct", value));
         }
+        foreach (var match in context.ParenTickers(text))
+            targets.Add(new NewsEventTarget(match.Groups[1].Value, "company", "unresolved", "ticker:" + match.Value));
         foreach (var entity in context.Entities)
         {
             if (entity.Find(text).Any())
@@ -186,6 +231,8 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
 
         var candidates = context.Entities
             .SelectMany(entity => entity.Find(text).Select(match => (Match: match, Id: entity.Id, Evidence: "entity:" + entity.Surface)))
+            .Concat(context.ParenTickers(text)
+                .Select(match => (Match: match, Id: match.Groups[1].Value, Evidence: "ticker:" + match.Value)))
             .Concat(CompanySuffix.Matches(text).Cast<Match>().Where(match => match.Index <= action.Index)
                 .Select(match => (Match: match, Id: match.Value.Trim().ToUpperInvariant(), Evidence: match.Value.Trim())))
             .Where(x => !Overlaps(x.Match.Index, x.Match.Length, action.Index, action.Length))
@@ -221,18 +268,42 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
     {
         foreach (Match clause in Clause.Matches(text))
         {
-            if (NonMarket.IsMatch(clause.Value) && !IsFinancial(clause.Value)) continue;
-            var targets = AllMatches(clause.Value, MacroTarget, MacroAcronym);
+            if (NonMarket.IsMatch(text) && !IsFinancial(clause.Value)) continue;
+            var targets = MacroTargetsIn(clause.Value);
             var actions = MacroAction.Matches(clause.Value).Cast<Match>().ToArray();
             var pair = targets.SelectMany(target => actions.Select(action => (Target: target, Action: action)))
                 .Where(x => Math.Abs(x.Action.Index - x.Target.Index) <= MaxEventDistance
                     && !Overlaps(x.Target.Index, x.Target.Length, x.Action.Index, x.Action.Length)
+                    && !string.Equals(x.Target.Value, x.Action.Value, StringComparison.OrdinalIgnoreCase)
                     && Compatible(x.Target.Value, x.Action.Value))
                 .OrderBy(x => Math.Abs(x.Action.Index - x.Target.Index)).FirstOrDefault();
             if (pair.Target is not null && pair.Action is not null)
                 return (Hit.At(pair.Target, clause.Index), Hit.At(pair.Action, clause.Index), clause.Index, clause.Length);
         }
         return null;
+    }
+
+    /// <summary>트럼프는 정책·시장 문맥어가 같은 절에 있을 때만 거시 대상이다(#320).</summary>
+    static Match[] MacroTargetsIn(string clause)
+        => AllMatches(clause, MacroTarget, MacroAcronym)
+            .Where(x => !TrumpTarget.IsMatch(x.Value) || TrumpContext.IsMatch(clause)).ToArray();
+
+    static Hit? FirstMacroTarget(string text)
+    {
+        foreach (Match clause in Clause.Matches(text))
+        {
+            var target = MacroTargetsIn(clause.Value).FirstOrDefault();
+            if (target is not null) return Hit.At(target, clause.Index);
+        }
+        return null;
+    }
+
+    /// <summary>금리·지표 사건은 한국어면 미국 표식이 있어야 하고, 영문은 비미국 표식만 있으면 review로 강등한다(#320).</summary>
+    static bool IsNonUsMacro(string target, string clause, string text)
+    {
+        if (!MonetaryKind.IsMatch(target) && !MacroReleaseKind.IsMatch(target)) return false;
+        if (target.Any(x => x is >= '가' and <= '힣')) return !UsMarker.IsMatch(text);
+        return NonUsMarker.IsMatch(clause) && !UsMarker.IsMatch(clause);
     }
 
     static bool Compatible(string target, string action)
@@ -253,7 +324,7 @@ public sealed class NewsRelevancePolicy : INewsRelevancePolicy
         => firstIndex <= secondIndex ? secondIndex - (firstIndex + firstLength) : firstIndex - (secondIndex + secondLength);
 
     static bool SameClause(string text, int first, int second)
-        => !text[Math.Min(first, second)..Math.Max(first, second)].Any(x => x is '.' or ';' or '!' or '?' or '。' or '！' or '？');
+        => !SentenceBreak.IsMatch(text[Math.Min(first, second)..Math.Max(first, second)]);
 
     static IReadOnlyList<NewsEventTarget> MacroTargets(string evidence)
     {

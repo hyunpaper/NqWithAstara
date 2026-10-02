@@ -38,6 +38,9 @@ public static class SymbolAliases
         ("반도체이티에프", "SMH"), ("아크", "ARKK"), ("금이티에프", "GLD"), ("비트코인이티에프", "IBIT"),
     ];
 
+    /// <summary>전체 별칭 목록(읽기 전용). 뉴스 관련성 전역 엔티티 사전 로드에 쓴다(#320).</summary>
+    public static IReadOnlyList<(string Alias, string Symbol)> All => Entries;
+
     /// <summary>심볼 → 한글 별칭 역방향 조회. 뉴스 본문의 한글 종목명 매칭에 쓴다(#151).</summary>
     public static IReadOnlyList<string> AliasesFor(string symbol)
         => Entries.Where(e => string.Equals(e.Symbol, symbol, StringComparison.OrdinalIgnoreCase))

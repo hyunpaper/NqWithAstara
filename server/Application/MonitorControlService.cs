@@ -75,11 +75,11 @@ public sealed class MonitorControlService(
         }
     }
 
-    public async Task StartAsync(CancellationToken requestCt)
+    public async Task StartAsync(CancellationToken requestCt, string startedBy = "manual")
     {
         using (await runtime.EnterControlAsync(requestCt))
         {
-            runtime.CommitStart();
+            runtime.CommitStart(startedBy);
             await ApplyLatestSubscriptionsAsync();
         }
         // 이슈 #130: 기동 시 1회 실계좌 US 왕복 수수료와 정책 값 정합을 확인한다. 실패해도 진입을 막지 않는다.
