@@ -22,7 +22,8 @@ public sealed class ScoreCoreSnapshotService(
         var status = assembly.Status == "unavailable" ? "unavailable" : score.Status;
         var captureId = CaptureId(score, assembly.Evidence, assembly.Coverage, assembly.Exclusions, status);
         var snapshot = new ScoreCoreShadowSnapshot(captureId, score, assembly.Coverage,
-            assembly.Exclusions, status);
+            assembly.Exclusions, status, assembly.Evidence.Length,
+            assembly.Evidence.Select(x => x.EventGroupId).Distinct(StringComparer.Ordinal).Count());
         await store.AppendAsync(snapshot, ct);
         return snapshot;
     }
