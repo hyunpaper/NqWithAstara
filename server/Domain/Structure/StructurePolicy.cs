@@ -165,6 +165,8 @@ public sealed record StructurePolicy
     /// <summary>최초 구조 위험의 2R보다 먼 목표만 2R로 제한하는 replay 실험 정책. 기본 비활성.</summary>
     public bool CapStructuralTargetAtTwoR { get; init; }
     public bool EnableHalfRFeeBreakEvenStopForPositiveBenchmark { get; init; }
+    /// <summary>양의 벤치마크 0.5R 비용회수 손절에서 BREAKOUT만 제외하는 replay 실험 정책. 기본 비활성(§10, #245).</summary>
+    public bool ExemptBreakoutFromPositiveBenchmarkHalfRStop { get; init; }
     public bool EnableHalfRFeeBreakEvenStopForQualifiedTransition { get; init; }
 
     /// <summary>§7 UP/DOWN 진입·이탈에 요구하는 연속 완료 봉 수. TRANSITION은 여기서 제외된다(§7, #148).</summary>

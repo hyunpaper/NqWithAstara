@@ -147,8 +147,9 @@ public sealed class ConfluencePolicyTests
         Assert.Contains("\"RejectHighVolatilityRangeEntries\":false", StructurePolicy.Default.CanonicalJson);
         Assert.Contains("\"CapStructuralTargetAtTwoR\":false", StructurePolicy.Default.CanonicalJson);
         Assert.Contains("\"EnableHalfRFeeBreakEvenStopForPositiveBenchmark\":false", StructurePolicy.Default.CanonicalJson);
+        Assert.Contains("\"ExemptBreakoutFromPositiveBenchmarkHalfRStop\":false", StructurePolicy.Default.CanonicalJson);
         // 기본 비활성이어도 실험 정책 필드는 직렬화된 정책 정체성의 일부이므로 hash가 바뀐다.
-        Assert.Equal("185416067284c183f22ecc8baa0abb582209c73a6e4d88de619d7197e0d072d9",
+        Assert.Equal("87033212656a5747958eb5994c6d49d3fa469acfd79466028d3f7a4c10a56f8d",
             StructurePolicy.Default.PolicyHash);
         Assert.NotEqual(StructurePolicy.Default.PolicyHash, ConfluencePolicy.Default.PolicyHash);
     }

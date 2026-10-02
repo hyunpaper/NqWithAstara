@@ -143,7 +143,8 @@ public static class StructuralSimulation
         var exitPolicyVersion = selectedPolicy.EnableHalfRFeeBreakEvenStopForQualifiedTransition &&
                                 string.Equals(request.Context.TrendAtEntry, "Transition", StringComparison.OrdinalIgnoreCase)
             ? HalfRQualifiedTransitionFeeBreakEvenExitPolicyVersion
-            : selectedPolicy.EnableHalfRFeeBreakEvenStopForPositiveBenchmark && request.BenchmarkReturnPercent > 0
+            : selectedPolicy.EnableHalfRFeeBreakEvenStopForPositiveBenchmark && request.BenchmarkReturnPercent > 0 &&
+              !(selectedPolicy.ExemptBreakoutFromPositiveBenchmarkHalfRStop && string.Equals(plan.Kind, "BREAKOUT", StringComparison.Ordinal))
                 ? HalfRPositiveBenchmarkFeeBreakEvenExitPolicyVersion
                 : request.Context.StructuralExitPolicyVersion;
         var context = request.Context with { PlanSnapshot = plan, Reentry = Reentry(trades, request), StructuralExitPolicyVersion = exitPolicyVersion };

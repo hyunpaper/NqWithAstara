@@ -47,7 +47,8 @@ public sealed class StructurePolicyTests
             StructurePolicy.Default with { MinimumReboundEntryQuality = 49.9 },
             StructurePolicy.Default with { RequireBreakoutAboveVwap = true },
             StructurePolicy.Default with { RequireMaximumReboundNetR = true },
-            StructurePolicy.Default with { MaximumReboundNetR = 1.8 }
+            StructurePolicy.Default with { MaximumReboundNetR = 1.8 },
+            StructurePolicy.Default with { ExemptBreakoutFromPositiveBenchmarkHalfRStop = true }
         };
         var hashes = variants.Select(x => x.PolicyHash).ToArray();
         Assert.DoesNotContain(baseline, hashes);

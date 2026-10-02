@@ -271,6 +271,37 @@ public sealed class StructureD6StructuralSimulationTests
         Assert.False(StructurePolicy.Default.EnableHalfRFeeBreakEvenStopForPositiveBenchmark);
     }
 
+    [Fact]
+    public void BreakoutExemptionKeepsTwoRStopUnderPositiveBenchmarkOnlyWhenEnabled()
+    {
+        var plan = PlanA() with { Target = PlanA().EntryReference + 20m };
+        var halfR = StructurePolicy.Default with
+        {
+            EnableTwoRFeeBreakEvenStop = true,
+            CapStructuralTargetAtTwoR = true,
+            EnableHalfRFeeBreakEvenStopForPositiveBenchmark = true
+        };
+        var exempt = halfR with { ExemptBreakoutFromPositiveBenchmarkHalfRStop = true };
+        StructuralTradePlan As(string kind) => plan with { Kind = kind };
+        SimTrade Open(string kind, StructurePolicy policy, string id) => StructuralSimulation.Enter([],
+            RequestA(StructuralSimulation.Freeze(As(kind), id, "UP", 40, 60, Fx.At(40), Fx.At(40), policy)) with
+            { BenchmarkReturnPercent = .01 }, policy).Trade!;
+
+        var breakout = Open("BREAKOUT", exempt, "TEST|breakout-exempt");
+        var pullback = Open("PULLBACK", exempt, "TEST|pullback-exempt");
+        var breakoutOff = Open("BREAKOUT", halfR, "TEST|breakout-off");
+        var halfRPrice = breakout.EntryPrice + .5 * (breakout.EntryPrice - breakout.Stop);
+        var after = Assert.Single(SimulationEngine.ReplayBars([breakout], Fx.Symbol,
+            [Fx.Candle(41, breakout.EntryPrice, halfRPrice + .01, breakout.Stop + .01, halfRPrice)]));
+
+        Assert.Equal(StructuralSimulation.TwoRTargetAndFeeBreakEvenExitPolicyVersion, breakout.Structure!.StructuralExitPolicyVersion);
+        Assert.Equal(breakout.Stop, after.Stop, 10);
+        Assert.Equal("OPEN", after.Status);
+        Assert.Equal(StructuralSimulation.HalfRPositiveBenchmarkFeeBreakEvenExitPolicyVersion, pullback.Structure!.StructuralExitPolicyVersion);
+        Assert.Equal(StructuralSimulation.HalfRPositiveBenchmarkFeeBreakEvenExitPolicyVersion, breakoutOff.Structure!.StructuralExitPolicyVersion);
+        Assert.False(StructurePolicy.Default.ExemptBreakoutFromPositiveBenchmarkHalfRStop);
+    }
+
     /// <summary>§18: v5 OPEN이 남아 있는 동안 v4 재진입도 같은 종목에서 막힌다(기존 엔진의 OPEN 제한 재사용).</summary>
     [Fact]
     public void AV5OpenTradeBlocksV4ReEntryThroughTheSharedEngine()
