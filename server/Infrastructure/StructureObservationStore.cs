@@ -29,6 +29,22 @@ public sealed class StructureObservationStore(IWebHostEnvironment env) : IStruct
         finally { _gate.Release(); }
     }
 
+    public async Task<IReadOnlyList<string>> ReadLinesAsync(string file, int skip, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var path = Path.Combine(_root, file);
+            if (!File.Exists(path)) return [];
+            var result = new List<string>();
+            var index = 0;
+            await foreach (var line in File.ReadLinesAsync(path, ct))
+                if (index++ >= skip) result.Add(line);
+            return result;
+        }
+        finally { _gate.Release(); }
+    }
+
     public async Task AppendAsync(string file, string line, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);

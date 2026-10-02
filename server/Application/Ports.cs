@@ -47,6 +47,12 @@ public interface IStructureObservationStore
     Task<long> SizeAsync(string file, CancellationToken ct);
     /// <summary>append 중복 방지를 위한 기존 줄 읽기. 없으면 빈 목록이다.</summary>
     Task<IReadOnlyList<string>> ReadLinesAsync(string file, CancellationToken ct);
+    /// <summary>앞 <paramref name="skip"/>줄을 건너뛴 증분 읽기. 기본 구현은 전체를 읽고 잘라낸다.</summary>
+    async Task<IReadOnlyList<string>> ReadLinesAsync(string file, int skip, CancellationToken ct)
+    {
+        var lines = await ReadLinesAsync(file, ct);
+        return skip <= 0 ? lines : lines.Skip(skip).ToArray();
+    }
     Task AppendAsync(string file, string line, CancellationToken ct);
     Task<string?> ReadTextAsync(string file, CancellationToken ct);
     Task WriteTextAsync(string file, string content, CancellationToken ct);

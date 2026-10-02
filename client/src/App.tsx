@@ -79,7 +79,7 @@ import type { WatchListItem } from "./WatchRowContent";
 import { WATCH_ORDER_URL, watchOrderRequest } from "./watchReorder";
 import { normalizeChartBars, type ChartBar as Bar } from "./chartData";
 import EntryObservabilityPanel from "./EntryObservabilityPanel";
-import type { EntryObservabilityReport } from "./entryObservability";
+import type { EntryObservabilityReport, EntryObservationHistoryReport } from "./entryObservability";
 type Indicators = {
   rsi: number | null;
   emaFast: number | null;
@@ -237,6 +237,17 @@ type SimData = {
   /** 이슈 #27: v5 동결 근거 기준 코호트 집계(additive). 구버전 서버에는 없을 수 있다. */
   structure?: StructureCohortReport | null;
   entryObservability?: EntryObservabilityReport | null;
+  /** 현재 StructurePolicy 해시 구간 성과(additive). 해시 없는 거래는 정책 미상으로 분리된다. */
+  currentPolicy?: SimPolicyReport | null;
+  /** 관측 jsonl 기반 누적(additive). 서버 재기동·화면 전환과 무관하다. */
+  entryObservationHistory?: EntryObservationHistoryReport | null;
+};
+type SimPolicyReport = {
+  policyHash: string;
+  stats: SimStats;
+  otherPolicyCount: number;
+  unknownPolicyCount: number;
+  firstEnteredAt: string | null;
 };
 type Metrics = {
   symbol: string;
@@ -1557,6 +1568,34 @@ function Dashboard() {
             />
             {!!s.estimatedExits && <MetricTile label="추정 청산" value={`${s.estimatedExits}건`} />}
           </div>
+          {data.currentPolicy && (
+            <>
+              <p className="muted" style={{ margin: "10px 0 6px" }}>
+                현재 정책 구간 · 해시 {data.currentPolicy.policyHash.slice(0, 8) || "—"}
+                {data.currentPolicy.firstEnteredAt ? ` · 첫 진입 ${dt(data.currentPolicy.firstEnteredAt)}` : ""}
+                {` · 다른 정책 ${data.currentPolicy.otherPolicyCount}건 · 정책 미상 ${data.currentPolicy.unknownPolicyCount}건`}
+              </p>
+              <div className="metrics-grid">
+                <MetricTile label="현재 정책 매매" value={String(data.currentPolicy.stats.total)} />
+                <MetricTile label="현재 정책 진행 중" value={String(data.currentPolicy.stats.open)} />
+                <MetricTile
+                  label="현재 정책 승률"
+                  value={data.currentPolicy.stats.winRate == null ? "—" : `${data.currentPolicy.stats.winRate}%`}
+                  tone={data.currentPolicy.stats.winRate == null ? undefined : data.currentPolicy.stats.winRate >= 50 ? "up" : "down"}
+                />
+                <MetricTile
+                  label="현재 정책 평균 손익"
+                  value={percent(data.currentPolicy.stats.avgPnl)}
+                  tone={data.currentPolicy.stats.avgPnl == null ? undefined : data.currentPolicy.stats.avgPnl >= 0 ? "up" : "down"}
+                />
+                <MetricTile
+                  label="현재 정책 수익률 합계"
+                  value={percent(data.currentPolicy.stats.totalPnl)}
+                  tone={data.currentPolicy.stats.totalPnl == null ? undefined : data.currentPolicy.stats.totalPnl >= 0 ? "up" : "down"}
+                />
+              </div>
+            </>
+          )}
         </div>
       </section>
       {resetMessage && <div className="sample-warning">{resetMessage}</div>}
@@ -1580,7 +1619,7 @@ function Dashboard() {
         </div>
       )}
       {!!s.missingPnl && <div className="sample-warning">청산 {s.closed}건 중 손익이 없는 {s.missingPnl}건은 승률·평균·합계 계산에서 제외했습니다.</div>}
-      <EntryObservabilityPanel report={data.entryObservability} />
+      <EntryObservabilityPanel report={data.entryObservability} history={data.entryObservationHistory} />
       {analysis?.sampleWarning && <div className="sample-warning">{analysis.sampleWarning}</div>}
       {analysis && (
         <section className="panel metrics-panel">

@@ -22,11 +22,53 @@ export type EntryObservabilityReport = {
   symbols: EntryObservationRow[];
 };
 
+export type EntryObservationReasonCount = { code: string; count: number };
+
+export type EntryObservationCandidateRow = {
+  symbol: string;
+  eventId: string;
+  kind: string;
+  state: string;
+  triggerBarStart: string | null;
+  firstObservedAt: string;
+  lastObservedAt: string;
+  rejectionCodes: string[];
+  policyHash: string;
+};
+
+export type EntryObservationHistoryWindow = {
+  label: string;
+  from: string;
+  to: string;
+  files: number;
+  observations: number;
+  symbols: number;
+  candidates: number;
+  ready: number;
+  entered: number;
+  rejected: number;
+  topReasons: EntryObservationReasonCount[];
+  corruptLines: number;
+};
+
+/** 관측 jsonl 기반 누적. 서버가 파일에서 집계하므로 화면 전환·새로고침·재기동과 무관하게 같은 값이다. */
+export type EntryObservationHistoryReport = {
+  generatedAt: string;
+  policyHash: string;
+  today: EntryObservationHistoryWindow;
+  currentPolicy: EntryObservationHistoryWindow;
+  recentCandidates: EntryObservationCandidateRow[];
+  warning: string | null;
+};
+
 const labels: Record<string, string> = {
   NO_CANDIDATE: "후보 없음",
   REJECTED: "최종 거절",
   READY: "진입 대기",
   ENTERED: "진입 완료",
+  WAIT: "대기",
+  INVALIDATED: "무효화",
+  EXPIRED: "만료",
   STALE_LATEST_BAR: "완료 봉 지연",
   STALE_QUOTE: "시세 지연",
   MISSING_QUOTE: "시세 없음",

@@ -1,4 +1,4 @@
-﻿using Astra.Server.Application;
+using Astra.Server.Application;
 using Astra.Server.Application.Backtest;
 using Astra.Server.Application.Rates;
 using Astra.Server.Application.ScoreCore;
@@ -39,7 +39,7 @@ public static class ApiEndpoints
         app.MapPut("/api/watchlist/order", ReorderWatchAsync);
         app.MapPost("/api/start", async (MonitorControlService c, CancellationToken ct) => { await c.StartAsync(ct); return Results.Ok(); });
         app.MapPost("/api/stop", async (MonitorControlService c, CancellationToken ct) => { await c.StopAsync(ct); return Results.Ok(); });
-        app.MapGet("/api/sim", async (SimulationReportQueryService q) => Results.Ok(await q.GetAsync()));
+        app.MapGet("/api/sim", async (SimulationReportQueryService q, CancellationToken ct) => Results.Ok(await q.GetAsync(ct)));
         app.MapPost("/api/sim/reset", SimResetAsync);
         app.MapGet("/api/validation", ValidationAsync);
         app.MapGet("/api/validation/real-vs-v5", RealVsV5Async);
@@ -104,9 +104,10 @@ public static class ApiEndpoints
         return result.Status == WatchlistChangeStatus.Ok ? Results.NoContent() : Results.BadRequest(new { message = result.Message });
     }
     /// <summary>시뮬 거래 이력 초기화(#228). 백업이 실패하면 삭제하지 않고 500을 돌려준다.</summary>
-    static async Task<IResult> SimResetAsync(SimResetRequest? body, SimulationResetService service)
+    static async Task<IResult> SimResetAsync(SimResetRequest? body, SimulationResetService service, HttpContext http)
     {
-        try { return Results.Ok(await service.ResetAsync(body?.IncludeOpen ?? false)); }
+        var requester = new SimulationResetRequester(http.Connection.RemoteIpAddress?.ToString(), http.Request.Headers.UserAgent.ToString());
+        try { return Results.Ok(await service.ResetAsync(body?.IncludeOpen ?? false, requester)); }
         catch (IOException) { return Results.Problem("백업 생성에 실패해 시뮬 이력을 삭제하지 않았습니다.", statusCode: 500); }
         catch (UnauthorizedAccessException) { return Results.Problem("백업 생성에 실패해 시뮬 이력을 삭제하지 않았습니다.", statusCode: 500); }
     }
