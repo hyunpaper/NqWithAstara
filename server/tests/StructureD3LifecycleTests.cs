@@ -9,7 +9,7 @@ using Xunit;
 /// </summary>
 public sealed class StructureD3LifecycleTests
 {
-    static readonly StructurePolicy P = D2.AllLongKinds;
+    static readonly StructurePolicy P = StructurePolicy.Default;
     const int TriggerMinute = 30;
 
     static StructureBar Bar(int minute, decimal low, decimal high, decimal open, decimal close, double volume = 1000)
