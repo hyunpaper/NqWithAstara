@@ -21,6 +21,20 @@ public static class SetupKinds
         SetupKind.Rebound => "REBOUND",
         _ => throw new ArgumentOutOfRangeException(nameof(kind))
     };
+
+    public const string ShortSuffix = "_SHORT";
+
+    /// <summary>후보 종류 문자열이 숏 후보인지(§8).</summary>
+    public static bool IsShort(string? kindName) => kindName?.EndsWith(ShortSuffix, StringComparison.Ordinal) == true;
+
+    /// <summary>현재 정책에서 신규 진입이 가능한 방향의 후보인지. 숏은 차입비용이 정의된 정책에서만 진입 가능하다(§9.1).</summary>
+    public static bool CanEnter(string? kindName, StructurePolicy policy) =>
+        kindName switch
+        {
+            "PULLBACK" or "BREAKOUT" or "REBOUND" => true,
+            "PULLBACK_SHORT" or "BREAKOUT_SHORT" or "REBOUND_SHORT" => policy.ShortBorrowCostPercent is not null,
+            _ => false
+        };
 }
 
 /// <summary>
@@ -480,7 +494,7 @@ public static class SetupDetector
     {
         var kindName = hypothesis.Side == TradeSide.Long
             ? SetupKinds.Name(hypothesis.Kind)
-            : $"{SetupKinds.Name(hypothesis.Kind)}_SHORT";
+            : SetupKinds.Name(hypothesis.Kind) + SetupKinds.ShortSuffix;
         var eventId = EventId(request.Symbol, request.SessionStart, kindName, hypothesis.Zone.Id, structureCutoff);
         var guardKey = DuplicateGuardKey(request.Symbol, request.SessionStart, kindName, structureCutoff);
         var side = hypothesis.Side;

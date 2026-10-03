@@ -12,7 +12,11 @@ public sealed record EntryObservationCandidateRow(string Symbol, string EventId,
 
 public sealed record EntryObservationHistoryWindow(string Label, DateOnly From, DateOnly To, int Files,
     int Observations, int Symbols, int Candidates, int Ready, int Entered, int Rejected,
-    EntryObservationReasonCount[] TopReasons, int CorruptLines);
+    EntryObservationReasonCount[] TopReasons, int CorruptLines)
+{
+    public int NonEntrySideCandidates { get; init; }
+    public EntryObservationReasonCount[] NonEntrySideTopReasons { get; init; } = [];
+}
 
 /// <summary>관측 jsonl 기반 누적(오늘·현재 정책). 재기동·화면 전환과 무관하게 같은 값을 돌려준다.</summary>
 public sealed record EntryObservationHistoryReport(DateTimeOffset GeneratedAt, string PolicyHash,
@@ -62,8 +66,8 @@ public sealed class EntryObservationHistoryQueryService(IStructureObservationSto
 
             var todayAggregate = _files.TryGetValue(StructureObservationWriter.FileName(today), out var t) ? [t] : Array.Empty<FileAggregate>();
             var all = _files.Values.Where(x => x.Day >= from).OrderBy(x => x.Day).ToArray();
-            var todayWindow = Window("오늘", today, today, todayAggregate, null);
-            var policyWindow = Window("현재 정책", from, today, all, PolicyHash);
+            var todayWindow = Window("오늘", today, today, todayAggregate, null, _policy);
+            var policyWindow = Window("현재 정책", from, today, all, PolicyHash, _policy);
             var recent = all.SelectMany(x => x.Candidates.Values)
                 .OrderByDescending(x => x.LastObservedAt).ThenBy(x => x.Symbol, StringComparer.Ordinal)
                 .Take(RecentCandidateLimit)
@@ -90,28 +94,43 @@ public sealed class EntryObservationHistoryQueryService(IStructureObservationSto
         _files[file] = aggregate;
     }
 
+    /// <summary>후보 수·사유 Top은 진입 가능한 방향 후보만 센다. 정책상 진입 불가 방향(숏)은 별도 필드로 둔다(§9.1).</summary>
     static EntryObservationHistoryWindow Window(string label, DateOnly from, DateOnly to,
-        IReadOnlyCollection<FileAggregate> files, string? policyHash)
+        IReadOnlyCollection<FileAggregate> files, string? policyHash, StructurePolicy policy)
     {
         bool Match(string hash) => policyHash is null || string.Equals(hash, policyHash, StringComparison.Ordinal);
-        var candidates = files.SelectMany(x => x.Candidates.Values).Where(x => Match(x.PolicyHash)).ToArray();
-        var reasons = new Dictionary<string, int>(StringComparer.Ordinal);
-        foreach (var candidate in candidates)
-            foreach (var code in candidate.RejectionCodes) reasons[code] = reasons.GetValueOrDefault(code) + 1;
+        var all = files.SelectMany(x => x.Candidates.Values).Where(x => Match(x.PolicyHash)).ToArray();
+        var candidates = all.Where(x => SetupKinds.CanEnter(x.Kind, policy)).ToArray();
+        var nonEntrySide = all.Where(x => !SetupKinds.CanEnter(x.Kind, policy)).ToArray();
+        var reasons = CountCodes(candidates);
         foreach (var file in files)
             foreach (var blocker in file.Blockers.Where(x => Match(x.PolicyHash)))
                 reasons[blocker.Code] = reasons.GetValueOrDefault(blocker.Code) + 1;
-        var top = reasons.OrderByDescending(x => x.Value).ThenBy(x => x.Key, StringComparer.Ordinal)
-            .Take(TopReasonLimit).Select(x => new EntryObservationReasonCount(x.Key, x.Value)).ToArray();
         var symbols = files.SelectMany(x => x.Symbols.Where(s => Match(s.PolicyHash)).Select(s => s.Symbol))
             .Distinct(StringComparer.OrdinalIgnoreCase).Count();
-        return new(label, from, to, files.Count,
+        return new EntryObservationHistoryWindow(label, from, to, files.Count,
             files.Sum(x => policyHash is null ? x.Observations : x.ObservationsByPolicy.GetValueOrDefault(policyHash)),
             symbols, candidates.Length,
             candidates.Count(x => x.SeenReady), candidates.Count(x => x.SeenEntered),
             candidates.Count(x => RejectedStates.Contains(x.State, StringComparer.Ordinal)),
-            top, files.Sum(x => x.CorruptLines));
+            Top(reasons), files.Sum(x => x.CorruptLines))
+        {
+            NonEntrySideCandidates = nonEntrySide.Length,
+            NonEntrySideTopReasons = Top(CountCodes(nonEntrySide))
+        };
     }
+
+    static Dictionary<string, int> CountCodes(IEnumerable<CandidateAggregate> candidates)
+    {
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var candidate in candidates)
+            foreach (var code in candidate.RejectionCodes) counts[code] = counts.GetValueOrDefault(code) + 1;
+        return counts;
+    }
+
+    static EntryObservationReasonCount[] Top(Dictionary<string, int> reasons) =>
+        reasons.OrderByDescending(x => x.Value).ThenBy(x => x.Key, StringComparer.Ordinal)
+            .Take(TopReasonLimit).Select(x => new EntryObservationReasonCount(x.Key, x.Value)).ToArray();
 
     sealed class CandidateAggregate(string symbol, string eventId, string kind, string policyHash,
         DateTimeOffset? triggerBarStart, DateTimeOffset firstObservedAt)
