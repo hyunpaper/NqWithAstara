@@ -4,6 +4,7 @@ using Astra.Server.Infrastructure.Rates;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Xunit;
 
 namespace Astra.Server.Tests;
@@ -15,7 +16,7 @@ public sealed class RatesApiTests
     [Fact]
     public async Task 비활성이면_rates는_disabled_스냅샷을_돌려주고_health에도_블록이_있다()
     {
-        using var host = new Host(enabled: false);
+        using var host = new Host(enabled: false, now: Now);
         using var client = host.Factory.CreateClient();
 
         using var rates = JsonDocument.Parse(await client.GetStringAsync("/api/rates"));
@@ -32,7 +33,7 @@ public sealed class RatesApiTests
     [Fact]
     public async Task 활성_상태의_DTO_모양과_health_블록을_확인한다()
     {
-        using var host = new Host(enabled: true);
+        using var host = new Host(enabled: true, now: Now);
         var state = host.Factory.Services.GetRequiredService<RatesRuntimeState>();
         state.MarkSupport(TreasuryTenor.Y2, false);
         state.MarkSupport(TreasuryTenor.Y10, true);
@@ -99,12 +100,30 @@ public sealed class RatesApiTests
         Assert.Equal("intraday:30Y: HTTP 429", block.GetProperty("failedSources")[0].GetString());
     }
 
+    [Fact]
+    public async Task 실제_시각이_스냅샷보다_미래여도_주입된_시계로_세션상태를_판정한다()
+    {
+        var past = new DateTimeOffset(2020, 1, 2, 14, 0, 0, TimeSpan.Zero);
+        using var host = new Host(enabled: true, now: past);
+        var state = host.Factory.Services.GetRequiredService<RatesRuntimeState>();
+        state.MarkSupport(TreasuryTenor.Y10, true);
+        state.IntradaySucceeded(TreasuryTenor.Y10, new IntradayRateQuote(TreasuryTenor.Y10, "^TNX", 1.9, 1.91, past.AddSeconds(-30), "yahoo:^TNX"), past);
+        using var client = host.Factory.CreateClient();
+
+        using var rates = JsonDocument.Parse(await client.GetStringAsync("/api/rates"));
+
+        var tenor = rates.RootElement.GetProperty("tenors").EnumerateArray()
+            .Single(x => x.GetProperty("tenor").GetString() == "10Y");
+        Assert.Equal("intraday", tenor.GetProperty("mode").GetString());
+        Assert.Equal("open", tenor.GetProperty("sessionStatus").GetString());
+    }
+
     sealed class Host : IDisposable
     {
         readonly string _root = Directory.CreateTempSubdirectory("astra-rates-api-").FullName;
         public WebApplicationFactory<Program> Factory { get; }
 
-        public Host(bool enabled)
+        public Host(bool enabled, DateTimeOffset now)
         {
             Factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
             {
@@ -113,7 +132,11 @@ public sealed class RatesApiTests
                 builder.UseSetting("Rates:YahooChartUrl", "http://127.0.0.1:9/chart/");
                 builder.UseSetting("Rates:FredCsvUrl", "http://127.0.0.1:9/fredgraph.csv");
                 builder.ConfigureServices(services =>
-                    services.Remove(services.Single(x => x.ImplementationType == typeof(RatesCollectorService))));
+                {
+                    services.Remove(services.Single(x => x.ImplementationType == typeof(RatesCollectorService)));
+                    services.RemoveAll<TimeProvider>();
+                    services.AddSingleton<TimeProvider>(new FixedClock(now));
+                });
             });
         }
 
@@ -122,5 +145,10 @@ public sealed class RatesApiTests
             Factory.Dispose();
             try { Directory.Delete(_root, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
+    }
+
+    sealed class FixedClock(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now.ToUniversalTime();
     }
 }
