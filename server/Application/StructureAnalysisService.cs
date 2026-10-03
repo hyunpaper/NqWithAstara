@@ -1037,10 +1037,14 @@ public sealed class StructureAnalysisService(
                     symbol,
                     readinessReason = ReadinessReason(view, failed, status),
                     lastEvaluatedAt = view?.AnalysisAsOf,
-                    candidateCount = view?.Candidates.Length ?? 0,
-                    readyCount = view?.Candidates.Count(x => x.State == "READY") ?? 0,
-                    enteredCount = view?.Candidates.Count(x => x.State == "ENTERED") ?? 0,
-                    rejectionCodes = view?.Candidates.SelectMany(x => x.RejectionCodes).Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToArray() ?? [],
+                    candidateCount = view?.Candidates.Count(x => SetupKinds.CanEnter(x.Kind, _policy)) ?? 0,
+                    readyCount = view?.Candidates.Count(x => SetupKinds.CanEnter(x.Kind, _policy) && x.State == "READY") ?? 0,
+                    enteredCount = view?.Candidates.Count(x => SetupKinds.CanEnter(x.Kind, _policy) && x.State == "ENTERED") ?? 0,
+                    rejectionCodes = RejectionCodes(view, entrySide: true),
+                    nonEntrySideCandidateCount = view?.Candidates.Count(x => !SetupKinds.CanEnter(x.Kind, _policy)) ?? 0,
+                    nonEntrySideRejectionCodes = RejectionCodes(view, entrySide: false),
+                    nonEntrySideReadyCount = view?.Candidates.Count(x => !SetupKinds.CanEnter(x.Kind, _policy) && x.State == "READY") ?? 0,
+                    nonEntrySideEnteredCount = view?.Candidates.Count(x => !SetupKinds.CanEnter(x.Kind, _policy) && x.State == "ENTERED") ?? 0,
                     status,
                     trendState = view?.Trend?.State,
                     signedTrend = view?.Trend?.SignedTrend,
@@ -1099,6 +1103,12 @@ public sealed class StructureAnalysisService(
                 _ => "evaluated_waiting"
             }
         };
+
+    /// <summary>진입 가능한 방향(정책상 숏 불가면 롱만) 후보와 그 밖의 후보 사유를 나눈다. 진입 판정은 바꾸지 않는다(§9.1).</summary>
+    string[] RejectionCodes(StructureAnalysisView? view, bool entrySide) =>
+        view?.Candidates.Where(x => SetupKinds.CanEnter(x.Kind, _policy) == entrySide)
+            .SelectMany(x => x.RejectionCodes).Distinct(StringComparer.Ordinal)
+            .OrderBy(x => x, StringComparer.Ordinal).ToArray() ?? [];
 
     static string ReadinessReason(StructureAnalysisView? view, bool failed, string status) =>
         ReadinessReasonForContract(status, failed, view?.CandidateSummary);
