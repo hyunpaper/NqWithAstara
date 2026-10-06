@@ -51,12 +51,36 @@ public sealed class OpeningSnapshotEvaluatorTests
     }
 
     [Fact]
-    public void InsufficientSamplesCannotBeStrong()
+    public void FewerThanThreeSessionsCannotBeStrong()
     {
-        var s = OpeningSnapshotEvaluator.Evaluate(Input(FlatBars(5), Prev(3, 10), 102));
+        var s = OpeningSnapshotEvaluator.Evaluate(Input(FlatBars(5), Prev(2, 10), 102));
         Assert.Equal("insufficient", s.VolumeStatus);
         Assert.Null(s.RvolNow);
+        Assert.Null(s.Rvol3.Ratio);
+        Assert.Equal(2, s.Rvol3.SampleCount);
         Assert.Equal("PRICE_ONLY", s.Grade);
+    }
+
+    [Fact]
+    public void ThreeSessionsGradeOnShortWindow()
+    {
+        var s = OpeningSnapshotEvaluator.Evaluate(Input(FlatBars(5), Prev(3, 200), 102));
+        Assert.Equal("partial", s.VolumeStatus);
+        Assert.NotNull(s.Rvol3.Ratio);
+        Assert.NotNull(s.Rvol5.Ratio);
+        Assert.Equal(s.Rvol5.Ratio, s.RvolNow);
+        Assert.Equal("STRONG", s.Grade);
+    }
+
+    [Fact]
+    public void ThreeWindowsAllComputedWithTwentySessions()
+    {
+        var s = OpeningSnapshotEvaluator.Evaluate(Input(FlatBars(5), Prev(20, 200), 102));
+        Assert.Equal(3, s.Rvol3.SampleCount);
+        Assert.Equal(5, s.Rvol5.SampleCount);
+        Assert.Equal(20, s.Rvol20.SampleCount);
+        Assert.Equal(200, s.Rvol5.BaselineVolume);
+        Assert.Equal(s.Rvol5.Ratio, s.RvolNow);
     }
 
     [Fact]
@@ -161,7 +185,7 @@ public sealed class OpeningSnapshotEvaluatorTests
     [Fact]
     public void ScoreIsZeroWhenInputsMissing()
     {
-        var s = OpeningSnapshotEvaluator.Evaluate(Input(FlatBars(5), Prev(3, 10), 100, quoteStatus: "stale"));
+        var s = OpeningSnapshotEvaluator.Evaluate(Input(FlatBars(5), Prev(2, 10), 100, quoteStatus: "stale"));
         Assert.Equal(0, s.Score);
     }
 }

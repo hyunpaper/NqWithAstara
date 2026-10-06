@@ -38,7 +38,9 @@ public sealed record OpeningScanSnapshot(
     string QuoteStatus,
     double CumulativeVolume,
     double? RvolNow,
-    double? Rvol5,
+    OpeningRvolWindow Rvol3,
+    OpeningRvolWindow Rvol5,
+    OpeningRvolWindow Rvol20,
     double? BaselineMean,
     double? BaselineMedian,
     int SampleCount,
@@ -91,14 +93,18 @@ public static class OpeningSnapshotEvaluator
         var last = bars[^1];
         var k = Math.Clamp((int)Math.Round((last.Timestamp.AddMinutes(1) - open).TotalMinutes, MidpointRounding.AwayFromZero), 1, policy.WindowMinutes);
         var cumulative = bars.Sum(x => (decimal)x.Volume);
-        var cum5 = bars.Where(x => x.Timestamp < open.AddMinutes(5)).Sum(x => (decimal)x.Volume);
 
-        var rvol = OpeningRvol.Compute(cumulative, k, input.Previous, policy.LookbackSessions, policy.MinimumSessions);
-        var rvol5 = k >= 5 ? OpeningRvol.Compute(cum5, 5, input.Previous, policy.LookbackSessions, policy.MinimumSessions) : null;
-        var sampleCount = input.Previous.TakeLast(policy.LookbackSessions).Count(x => x.At(k) is { } v && v > 0);
-        var volumeStatus = sampleCount >= policy.SampleCountForFull ? VolumeFull
-            : sampleCount >= policy.MinimumSessions ? VolumePartial
-            : VolumeInsufficient;
+        // #375: 같은 경과 분 k를 최근 3·5·20세션 평균과 각각 비교한다. 등급 기준은 5세션(없으면 3세션), 최소 GradeMinimumSessions.
+        var window3 = OpeningRvol.Window(cumulative, k, input.Previous, policy.RvolShortSessions, policy.GradeMinimumSessions);
+        var window5 = OpeningRvol.Window(cumulative, k, input.Previous, policy.RvolMediumSessions, policy.GradeMinimumSessions);
+        var window20 = OpeningRvol.Window(cumulative, k, input.Previous, policy.LookbackSessions, policy.GradeMinimumSessions);
+        var grade5 = OpeningRvol.Compute(cumulative, k, input.Previous, policy.RvolMediumSessions, policy.GradeMinimumSessions);
+        var grade3 = OpeningRvol.Compute(cumulative, k, input.Previous, policy.RvolShortSessions, policy.GradeMinimumSessions);
+        var rvol = grade5 ?? grade3;
+        var sampleCount = window20.SampleCount;
+        var volumeStatus = rvol is null ? VolumeInsufficient
+            : sampleCount >= policy.SampleCountForFull ? VolumeFull
+            : VolumePartial;
 
         var priceValid = !string.Equals(input.QuoteStatus, QuoteStale, StringComparison.Ordinal);
         var price = input.QuotePrice;
@@ -134,12 +140,21 @@ public static class OpeningSnapshotEvaluator
             : GradeWeak;
 
         var score = Score(rvol, changeOpen, aboveVwap, first5);
-        var reasons = Reasons(policy, rvol, sampleCount, volumeStatus, k, changeOpen, aboveVwap, first5, gap, prevCloseSource, orh5, brokeOr, premarket, priceValid);
+        var gradeBasisSessions = grade5 is not null ? policy.RvolMediumSessions : policy.RvolShortSessions;
+        var reasons = Reasons(policy, rvol, gradeBasisSessions, window3, window5, window20, sampleCount, k,
+            changeOpen, aboveVwap, first5, gap, prevCloseSource, orh5, brokeOr, premarket, priceValid);
+
+        static OpeningRvolWindow Rounded(OpeningRvolWindow w) => w with
+        {
+            Ratio = w.Ratio is { } r ? Round2(r) : null,
+            BaselineVolume = w.BaselineVolume is { } b ? Round2(b) : null,
+        };
 
         return new OpeningScanSnapshot(
             input.Symbol, input.Name, input.SessionDate, open, input.ObservedAt, k,
             last.Timestamp, Round4(last.Close), Round4(price), input.QuoteAt, input.QuoteStatus,
-            (double)cumulative, rvol is null ? null : Round2(rvol.Ratio), rvol5 is null ? null : Round2(rvol5.Ratio),
+            (double)cumulative, rvol is null ? null : Round2(rvol.Ratio),
+            Rounded(window3), Rounded(window5), Rounded(window20),
             rvol is null ? null : Round2(rvol.BaselineMean), rvol is null ? null : Round2(rvol.BaselineMedian),
             sampleCount, volumeStatus,
             prevClose is null ? null : Round4(prevClose.Value), prevCloseSource,
@@ -197,13 +212,14 @@ public static class OpeningSnapshotEvaluator
         return Math.Clamp(volume + move + vwap + highs, 0, 100);
     }
 
-    static List<string> Reasons(OpeningScanPolicy policy, OpeningRvolResult? rvol, int sampleCount, string volumeStatus,
+    static List<string> Reasons(OpeningScanPolicy policy, OpeningRvolResult? rvol, int gradeBasisSessions,
+        OpeningRvolWindow window3, OpeningRvolWindow window5, OpeningRvolWindow window20, int sampleCount,
         int k, double? changeOpen, bool? aboveVwap, OpeningFirst5? first5, double? gap, string? prevCloseSource,
         double? orh5, bool? brokeOr, OpeningPremarket? premarket, bool priceValid)
     {
         var reasons = new List<string>();
         if (rvol is { } r)
-            reasons.Add($"거래량 {r.Ratio.ToString("0.0", CultureInfo.InvariantCulture)}× ({sampleCount}세션 {(volumeStatus == VolumeFull ? "평균 대비" : "· 표본 부족 아님")} · {k}분 경과)");
+            reasons.Add($"거래량 {r.Ratio.ToString("0.0", CultureInfo.InvariantCulture)}× ({gradeBasisSessions}세션 기준 · {k}분 경과 · {WindowDetail(window3, window5, window20)})");
         else
             reasons.Add($"거래량 기준 없음 ({sampleCount}/{policy.LookbackSessions}세션)");
 
@@ -233,6 +249,11 @@ public static class OpeningSnapshotEvaluator
 
         return reasons;
     }
+
+    static string WindowDetail(params OpeningRvolWindow[] windows) =>
+        string.Join(" · ", windows.Select(w => w.Ratio is { } r
+            ? $"{w.LookbackSessions}일 {r.ToString("0.0", CultureInfo.InvariantCulture)}×"
+            : $"{w.LookbackSessions}일 {w.SampleCount}세션"));
 
     static string Signed(double value) => (value >= 0 ? "+" : "") + value.ToString("0.0", CultureInfo.InvariantCulture);
 

@@ -92,9 +92,13 @@ builder.Services.AddSingleton<BarStoreService>(); builder.Services.AddSingleton<
 builder.Services.AddSingleton<IBenchmarkBarSource>(x => x.GetRequiredService<BenchmarkPollingService>());
 // #371: 개장 초반 스캔. StructurePolicy와 분리된 자체 정책이며 PolicyHash에 영향을 주지 않는다. 임계값은 appsettings "OpeningScan"에서만 덮어쓴다.
 builder.Services.AddSingleton(_ => { var p = Astra.Server.Domain.Opening.OpeningScanPolicy.Default with { }; builder.Configuration.GetSection("OpeningScan").Bind(p); return p; });
+// #375: 거래량 프로파일 원천에 Toss 과거 1분봉을 추가한다(서버 자기 토큰, #332 정규화). 저장 봉은 폴백이다.
+builder.Services.AddSingleton<Astra.Server.Application.Opening.OpeningTossProfileSource>();
 builder.Services.AddSingleton<Astra.Server.Application.Opening.OpeningVolumeProfileSource>();
 builder.Services.AddSingleton<Astra.Server.Application.Opening.OpeningScanObservationWriter>();
 builder.Services.AddSingleton<Astra.Server.Application.Opening.OpeningScanService>();
+builder.Services.AddSingleton<Astra.Server.Application.Opening.OpeningProfileWarmup>();
+builder.Services.AddHostedService<OpeningProfileWarmupService>();
 // 이슈 #167: 컨플루언스 기법 신호·합산. 가중치는 전부 1.0(미검증)에서 시작하고 K4가 파일로 채운다.
 builder.Services.AddSingleton(_ => ConfluencePolicy.Default);
 // 이슈 #169: 측정 결과 가중치 파일을 기동 시 1회만 읽는다. 없거나 깨졌으면 전부 1.0으로 남는다.
