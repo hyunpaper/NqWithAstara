@@ -1,11 +1,82 @@
 using Astra.Server;
 using Astra.Server.Application;
+using Astra.Server.Application.Opening;
+using Astra.Server.Domain.Opening;
 using Xunit;
 
 public sealed class MonitorPollingTests
 {
     static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-09-09T18:00:00Z");
     static readonly MarketSession OpenSession = new(true, "open", null, Now.AddHours(-1), Now.AddHours(3));
+
+    static readonly DateTimeOffset OpeningOpen = DateTimeOffset.Parse("2026-09-09T13:30:00Z");
+
+    static OpeningScanService OpeningScan(TimeProvider clock, out MemoryObservationStore obs)
+    {
+        obs = new MemoryObservationStore();
+        return new OpeningScanService(OpeningScanPolicy.Default, new OpeningVolumeProfileSource(new RecordingBarStore()),
+            new OpeningScanObservationWriter(obs), clock, new FakeDiagnostics());
+    }
+
+    [Fact]
+    public async Task WarmupWatchedSymbolIsObservedByOpeningScan()
+    {
+        var session = new MarketSession(true, "open", null, OpeningOpen, OpeningOpen.AddHours(6.5));
+        var store = new FakeStore();
+        store.Watch.Add(new("NVDA", "NVIDIA"));
+        var market = new FakeMarket(session, [new Candle(OpeningOpen, 100, 101, 99, 100, 1000)], (100, OpeningOpen.AddMinutes(1).AddSeconds(30)));
+        var clock = new FixedTimeProvider(OpeningOpen.AddMinutes(2));
+        var svc = OpeningScan(clock, out var obs);
+        var runtime = new MonitorRuntimeState();
+        var poller = new MonitorPollingService(store, market, new FakeStream(), runtime, clock, new FakeDiagnostics(), openingScan: svc);
+        runtime.CommitStart();
+
+        await poller.PollAsync(default);
+
+        Assert.NotEmpty(obs.AllLines);
+        Assert.Equal("scanning", svc.Query().Phase);
+    }
+
+    [Fact]
+    public async Task UnwatchedSymbolIsNotObservedByOpeningScan()
+    {
+        var session = new MarketSession(true, "open", null, OpeningOpen, OpeningOpen.AddHours(6.5));
+        var store = new FakeStore();
+        store.Trades.Add(OpenTrade("NVDA", OpeningOpen.AddMinutes(-5), session.End!.Value));
+        var market = new FakeMarket(session, [new Candle(OpeningOpen, 100, 101, 99, 100, 1000)], (100, OpeningOpen.AddMinutes(1).AddSeconds(30)));
+        var clock = new FixedTimeProvider(OpeningOpen.AddMinutes(2));
+        var svc = OpeningScan(clock, out var obs);
+        var runtime = new MonitorRuntimeState();
+        var poller = new MonitorPollingService(store, market, new FakeStream(), runtime, clock, new FakeDiagnostics(), openingScan: svc);
+        runtime.CommitStart();
+
+        await poller.PollAsync(default);
+
+        Assert.Empty(obs.AllLines);
+    }
+
+    [Fact]
+    public async Task SessionEndBranchFinalizesOpeningScan()
+    {
+        var store = new FakeStore();
+        store.Watch.Add(new("NVDA", "NVIDIA"));
+        var openMarket = new FakeMarket(new MarketSession(true, "open", null, OpeningOpen, OpeningOpen.AddHours(6.5)),
+            [new Candle(OpeningOpen, 100, 101, 99, 100, 1000)], (100, OpeningOpen.AddMinutes(1).AddSeconds(30)));
+        var openClock = new FixedTimeProvider(OpeningOpen.AddMinutes(2));
+        var svc = OpeningScan(openClock, out var obs);
+        var runtime = new MonitorRuntimeState();
+        var opener = new MonitorPollingService(store, openMarket, new FakeStream(), runtime, openClock, new FakeDiagnostics(), openingScan: svc);
+        runtime.CommitStart();
+        await opener.PollAsync(default);
+
+        var closedMarket = new FakeMarket(new MarketSession(false, "closed", null, OpeningOpen, OpeningOpen.AddHours(6.5)),
+            [], (100, OpeningOpen.AddHours(7)));
+        var closeClock = new FixedTimeProvider(OpeningOpen.AddHours(7));
+        var closer = new MonitorPollingService(store, closedMarket, new FakeStream(), runtime, closeClock, new FakeDiagnostics(), openingScan: svc);
+        await closer.PollAsync(default);
+
+        Assert.Contains(obs.AllLines, x => x.Contains("\"kind\":\"close\""));
+    }
 
     [Fact]
     public async Task RemovedWatchSymbolWithOpenTradeStillExits()
