@@ -1906,6 +1906,7 @@ footer {
 .opening-scan-table { width:100%; border-collapse:collapse; margin:4px 0; }
 .opening-scan-table th { text-align:left; color:var(--muted); font-weight:600; padding:3px 6px; border-bottom:1px solid var(--line); }
 .opening-scan-table td { padding:3px 6px; border-top:1px solid var(--line); white-space:nowrap; }
+.opening-scan-table td.opening-rvol-cell { cursor:help; font-variant-numeric:tabular-nums; }
 .opening-scan-table tr.opening-grade-strong td { color:var(--accent-vivid, var(--text)); }
 .opening-scan-weak { margin-top:8px; }
 .opening-scan-weak > summary { cursor:pointer; color:var(--muted); }
