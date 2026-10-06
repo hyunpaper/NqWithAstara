@@ -11,6 +11,9 @@ public sealed record OpeningScanPolicy
     public int LookbackSessions { get; set; } = 20;
     public int MinimumSessions { get; set; } = 5;
     public int WindowMinutes { get; set; } = 30;
+    public int RvolShortSessions { get; set; } = 3;
+    public int RvolMediumSessions { get; set; } = 5;
+    public int GradeMinimumSessions { get; set; } = 3;
     public double VolumeStrongRatio { get; set; } = 2.0;
     public double PriceUpPercent { get; set; } = 0.5;
     public bool RequireAboveVwap { get; set; } = true;
@@ -25,10 +28,13 @@ public sealed record OpeningScanPolicy
         get
         {
             var builder = new StringBuilder("{");
+            builder.Append("\"GradeMinimumSessions\":").Append(Number(GradeMinimumSessions)).Append(',');
             builder.Append("\"LookbackSessions\":").Append(Number(LookbackSessions)).Append(',');
             builder.Append("\"MinimumSessions\":").Append(Number(MinimumSessions)).Append(',');
             builder.Append("\"PriceUpPercent\":").Append(Number(PriceUpPercent)).Append(',');
             builder.Append("\"RequireAboveVwap\":").Append(RequireAboveVwap ? "true" : "false").Append(',');
+            builder.Append("\"RvolMediumSessions\":").Append(Number(RvolMediumSessions)).Append(',');
+            builder.Append("\"RvolShortSessions\":").Append(Number(RvolShortSessions)).Append(',');
             builder.Append("\"SampleCountForFull\":").Append(Number(SampleCountForFull)).Append(',');
             builder.Append("\"Version\":").Append('"').Append(Version).Append('"').Append(',');
             builder.Append("\"VolumeStrongRatio\":").Append(Number(VolumeStrongRatio)).Append(',');

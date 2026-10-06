@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  openingRvolCell,
   openingScanTriggerLabel,
   type OpeningScanResponse,
   type OpeningScanRow,
@@ -12,37 +13,34 @@ const gradeLabel = (grade: OpeningGrade): string =>
 
 const pct = (value: number | null): string => value == null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
 
-const rvolCell = (row: OpeningScanRow, lookback: number): string => {
-  if (row.volumeStatus === "insufficient" || row.rvolNow == null) return `기준 없음 (${row.sampleCount}/${lookback})`;
-  if (row.volumeStatus === "partial") return `${row.rvolNow.toFixed(1)}× (${row.sampleCount}세션)`;
-  return `${row.rvolNow.toFixed(1)}×`;
-};
-
 const first5Cell = (row: OpeningScanRow): string => {
   if (!row.first5) return "—";
   return row.first5.barsSeen >= 5 ? `양봉 ${row.first5.upBars}·신고 ${row.first5.newHighs}` : `양봉 ${row.first5.upBars}`;
 };
 
-function ScanTable({ rows, lookback }: { rows: OpeningScanRow[]; lookback: number }) {
+function ScanTable({ rows }: { rows: OpeningScanRow[] }) {
   return (
     <table className="opening-scan-table">
       <thead>
         <tr>
-          <th>종목</th><th>등급</th><th>RVOL(표본)</th><th>시가대비</th><th>전일대비</th><th>VWAP</th><th>첫5봉</th>
+          <th>종목</th><th>등급</th><th title="최근 3일 / 5일 / 20일 같은 시각 누적 대비">RVOL 3/5/20일</th><th>시가대비</th><th>전일대비</th><th>VWAP</th><th>첫5봉</th>
         </tr>
       </thead>
       <tbody>
-        {rows.map((row) => (
+        {rows.map((row) => {
+          const rvol = openingRvolCell(row);
+          return (
           <tr key={row.symbol} title={row.reasons.join("\n")} className={`opening-grade-${row.grade.toLowerCase()}`}>
             <td><b>{row.symbol}</b></td>
             <td>{gradeLabel(row.grade)}</td>
-            <td>{rvolCell(row, lookback)}</td>
+            <td className="opening-rvol-cell" title={rvol.title}>{rvol.text}</td>
             <td>{pct(row.changeFromOpenPercent)}</td>
             <td>{pct(row.changeFromPrevClosePercent)}</td>
             <td>{row.aboveVwap == null ? "—" : row.aboveVwap ? "위" : "아래"}</td>
             <td>{first5Cell(row)}</td>
           </tr>
-        ))}
+          );
+        })}
       </tbody>
     </table>
   );
@@ -133,12 +131,12 @@ export default function OpeningScanPopover({ scan }: { scan: OpeningScanResponse
       {scan.phase === "scanning" && (
         <>
           <strong>개장 09:30~10:00 · {scan.elapsedMinutes}분 경과</strong>
-          {strong.length > 0 ? <ScanTable rows={strong} lookback={scan.lookbackSessions} />
+          {strong.length > 0 ? <ScanTable rows={strong} />
             : <span className="opening-scan-empty">아직 강세 종목이 없습니다.</span>}
           {weak.length > 0 && (
             <details className="opening-scan-weak">
               <summary>약함 {weak.length}종목</summary>
-              <ScanTable rows={weak} lookback={scan.lookbackSessions} />
+              <ScanTable rows={weak} />
             </details>
           )}
         </>
@@ -148,10 +146,10 @@ export default function OpeningScanPopover({ scan }: { scan: OpeningScanResponse
           ? <>
               <strong>09:30~10:00 기록</strong>
               <span className="opening-scan-sub">5분 시점 상위</span>
-              <ScanTable rows={summary.at5} lookback={scan.lookbackSessions} />
+              <ScanTable rows={summary.at5} />
               {summary.at30.length > 0 && <>
                 <span className="opening-scan-sub">30분 시점 상위</span>
-                <ScanTable rows={summary.at30} lookback={scan.lookbackSessions} />
+                <ScanTable rows={summary.at30} />
               </>}
               {summary.followup30.length > 0 && <>
                 <span className="opening-scan-sub">+30분 수익률</span>

@@ -4,12 +4,16 @@ using Astra.Server.Domain.Opening;
 
 namespace Astra.Server.Application.Opening;
 
-public sealed record OpeningProfileStats(int Sessions, int LegacyShifted, int Rejected, int Incomplete);
+public sealed record OpeningProfileStats(int Sessions, int LegacyShifted, int Rejected, int Incomplete,
+    int TossSessions = 0, int TossFailures = 0, string Source = "bars", DateTimeOffset? LoadedAt = null);
 
 public sealed record OpeningProfiles(IReadOnlyList<SessionVolumeProfile> Profiles, OpeningProfileStats Stats);
 
-/// <summary>운영 저장 봉(<see cref="IBarStore"/>)에서 심볼별 개장 프로파일을 적재·캐시한다(#371 §1.2). Toss 호출은 하지 않는다.</summary>
-public sealed class OpeningVolumeProfileSource(IBarStore store)
+/// <summary>
+/// 심볼별 개장 프로파일을 적재·캐시한다(#371 §1.2, #375). Toss 과거 분봉(<see cref="OpeningTossProfileSource"/>)을 1순위로,
+/// 저장 봉(<see cref="IBarStore"/>)을 폴백으로 쓰며 더 많은 세션을 확보한 쪽을 고른다. 세션당 1회 적재한다.
+/// </summary>
+public sealed class OpeningVolumeProfileSource(IBarStore store, OpeningTossProfileSource? toss = null)
 {
     static readonly TimeZoneInfo NewYork = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
 
@@ -26,6 +30,35 @@ public sealed class OpeningVolumeProfileSource(IBarStore store)
         var key = $"{symbol.ToUpperInvariant()}|{sessionDate:yyyy-MM-dd}";
         if (_cache.TryGetValue(key, out var cached)) return cached;
 
+        OpeningTossLoad? tossLoad = null;
+        if (toss is not null)
+        {
+            try { tossLoad = await toss.GetAsync(symbol, sessionDate, lookbackSessions, ct); }
+            catch (OperationCanceledException) { throw; }
+            catch { tossLoad = null; }
+        }
+
+        var bars = await LoadFromBarsAsync(symbol, sessionDate, lookbackSessions, ct);
+
+        OpeningProfiles result;
+        if (tossLoad is { } t && t.Sessions > 0 && t.Sessions >= bars.Profiles.Count)
+            result = new OpeningProfiles(t.Profiles, new OpeningProfileStats(t.Sessions, t.LegacyShifted, t.Rejected,
+                t.Incomplete, t.Sessions, t.Failures, "toss", t.LoadedAt));
+        else
+            result = new OpeningProfiles(bars.Profiles, bars.Stats with
+            {
+                TossSessions = tossLoad?.Sessions ?? 0,
+                TossFailures = tossLoad?.Failures ?? 0,
+                Source = "bars",
+                LoadedAt = tossLoad?.LoadedAt,
+            });
+
+        _cache[key] = result;
+        return result;
+    }
+
+    async Task<OpeningProfiles> LoadFromBarsAsync(string symbol, DateOnly sessionDate, int lookbackSessions, CancellationToken ct)
+    {
         var days = (await store.ListDaysAsync(ct))
             .Where(x => DateOnly.TryParseExact(x, "yyyy-MM-dd", out var d) && d < sessionDate)
             .OrderByDescending(x => x, StringComparer.Ordinal)
@@ -53,14 +86,13 @@ public sealed class OpeningVolumeProfileSource(IBarStore store)
         }
 
         collected.Reverse();
-        var result = new OpeningProfiles(collected, new OpeningProfileStats(collected.Count, legacy, rejected, incomplete));
-        _cache[key] = result;
-        return result;
+        return new OpeningProfiles(collected, new OpeningProfileStats(collected.Count, legacy, rejected, incomplete));
     }
 
     /// <summary>세션이 바뀌면 이전 세션 키를 비운다 — 다음 세션 첫 폴링에서 다시 적재한다.</summary>
     public void ResetBefore(DateOnly sessionDate)
     {
+        toss?.ResetBefore(sessionDate);
         foreach (var key in _cache.Keys)
         {
             var parts = key.Split('|');

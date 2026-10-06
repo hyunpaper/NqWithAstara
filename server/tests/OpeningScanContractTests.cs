@@ -1,5 +1,8 @@
 using System.Reflection;
 using System.Text.Json;
+using Astra.Server;
+using Astra.Server.Application.Opening;
+using Astra.Server.Domain;
 using Astra.Server.Domain.Opening;
 using Astra.Server.Domain.Structure;
 using Astra.Server.Tests;
@@ -11,7 +14,7 @@ public sealed class OpeningScanInvariantTests
     [Fact]
     public void OpeningScanPolicyHashIsPinned()
     {
-        Assert.Equal("26e6f895035819e2d221e2417e744422bcf1e1c363576dc8b750c87b1371252a",
+        Assert.Equal("4c891eee8dac984450177e6fa0aa900c755a28291ef479766b983d106df66884",
             OpeningScanPolicy.Default.PolicyHash);
     }
 
@@ -32,6 +35,30 @@ public sealed class OpeningScanInvariantTests
             foreach (var referenced in ReferencedTypes(type))
                 Assert.False(referenced.Namespace?.StartsWith("Astra.Server.Domain.Structure", StringComparison.Ordinal) == true,
                     $"{type.Name} references {referenced.FullName}");
+    }
+
+    [Fact]
+    public void RowSerializesThreeRvolWindowsCamelCase()
+    {
+        var open = DateTimeOffset.Parse("2026-10-02T13:30:00Z");
+        var date = new DateOnly(2026, 10, 2);
+        var bars = Enumerable.Range(0, 5).Select(i => new Candle(open.AddMinutes(i), 100, 100, 100, 100, 200)).ToArray();
+        var previous = Enumerable.Range(0, 20)
+            .Select(_ => new Astra.Server.Domain.Indicators.SessionVolumeProfile(date, [10, 20, 30, 40, 100m]))
+            .ToArray();
+        var input = new OpeningScanInput("NVDA", "엔비디아", date, open, open.AddMinutes(5), bars, [], null,
+            previous, 103, open.AddMinutes(5), OpeningSnapshotEvaluator.QuoteFresh, OpeningScanPolicy.Default);
+        var row = OpeningScanDtoMapper.Row(OpeningSnapshotEvaluator.Evaluate(input));
+
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(row, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        foreach (var window in new[] { "rvol3", "rvol5", "rvol20" })
+        {
+            var w = doc.RootElement.GetProperty(window);
+            foreach (var key in new[] { "lookbackSessions", "ratio", "baselineVolume", "sampleCount" })
+                Assert.True(w.TryGetProperty(key, out _), $"{window}.{key} 누락");
+        }
+        Assert.Equal(3, doc.RootElement.GetProperty("rvol3").GetProperty("lookbackSessions").GetInt32());
+        Assert.Equal(20, doc.RootElement.GetProperty("rvol20").GetProperty("lookbackSessions").GetInt32());
     }
 
     static IEnumerable<Type> ReferencedTypes(Type type)
@@ -75,6 +102,8 @@ public sealed class OpeningScanContractTests(AstraHostFixture host) : IClassFixt
     {
         Assert.NotNull(host.Factory.Services.GetRequiredService<Astra.Server.Application.Opening.OpeningScanService>());
         Assert.NotNull(host.Factory.Services.GetRequiredService<Astra.Server.Application.Opening.OpeningVolumeProfileSource>());
+        Assert.NotNull(host.Factory.Services.GetRequiredService<Astra.Server.Application.Opening.OpeningTossProfileSource>());
+        Assert.NotNull(host.Factory.Services.GetRequiredService<Astra.Server.Application.Opening.OpeningProfileWarmup>());
         Assert.NotNull(host.Factory.Services.GetRequiredService<OpeningScanPolicy>());
     }
 
@@ -110,6 +139,10 @@ public sealed class OpeningScanContractTests(AstraHostFixture host) : IClassFixt
         Assert.Equal("opening-scan.1", block.GetProperty("policyVersion").GetString());
         foreach (var name in new[] { "enabled", "status", "symbols", "profiles", "records", "lastObservedAt", "lastError" })
             Assert.True(block.TryGetProperty(name, out _), $"missing property: {name}");
+        var profiles = block.GetProperty("profiles");
+        foreach (var name in new[] { "loadedSymbols", "tossSymbols", "tossFailures", "lastRefresh", "bySymbol" })
+            Assert.True(profiles.TryGetProperty(name, out _), $"missing profiles property: {name}");
+        Assert.Equal(JsonValueKind.Array, profiles.GetProperty("bySymbol").ValueKind);
         var records = block.GetProperty("records");
         foreach (var name in new[] { "snapshots", "followup30", "close", "duplicatesSuppressed" })
             Assert.Equal(JsonValueKind.Number, records.GetProperty(name).ValueKind);
