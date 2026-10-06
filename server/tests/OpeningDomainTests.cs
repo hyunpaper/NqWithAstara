@@ -82,6 +82,33 @@ public sealed class OpeningRvolTests
         var result = OpeningRvol.Compute(100, 5, profiles, minimumSessions: 5)!;
         Assert.Equal(30, result.BaselineMedian, 3);
     }
+
+    [Fact]
+    public void WindowReturnsRatioBaselineAndCountWhenEnough()
+    {
+        var window = OpeningRvol.Window(100, 5, Flat(8, 50), lookbackSessions: 5, minimumSessions: 3);
+        Assert.Equal(5, window.LookbackSessions);
+        Assert.Equal(5, window.SampleCount);
+        Assert.Equal(2.0, window.Ratio!.Value, 3);
+        Assert.Equal(50, window.BaselineVolume!.Value, 3);
+    }
+
+    [Fact]
+    public void WindowBelowMinimumKeepsCountButNullRatio()
+    {
+        var window = OpeningRvol.Window(100, 5, Flat(2, 50), lookbackSessions: 3, minimumSessions: 3);
+        Assert.Equal(2, window.SampleCount);
+        Assert.Null(window.Ratio);
+        Assert.Null(window.BaselineVolume);
+    }
+
+    [Fact]
+    public void WindowCapsSampleCountToLookback()
+    {
+        var window = OpeningRvol.Window(100, 5, Flat(20, 50), lookbackSessions: 3, minimumSessions: 3);
+        Assert.Equal(3, window.SampleCount);
+        Assert.Equal(2.0, window.Ratio!.Value, 3);
+    }
 }
 
 public sealed class OpeningSessionProfileTests

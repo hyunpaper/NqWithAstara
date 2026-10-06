@@ -7,7 +7,8 @@ public sealed record OpeningFirst5Dto(int BarsSeen, int UpBars, int NewHighs);
 public sealed record OpeningPremarketDto(double High, double Volume, bool AbovePremarketHigh);
 
 public sealed record OpeningScanRowDto(string Symbol, string Name, string Grade, double Score, string VolumeStatus,
-    double? RvolNow, double? Rvol5, int SampleCount, double? ChangeFromOpenPercent, double? ChangeFromPrevClosePercent,
+    double? RvolNow, OpeningRvolWindow Rvol3, OpeningRvolWindow Rvol5, OpeningRvolWindow Rvol20, int SampleCount,
+    double? ChangeFromOpenPercent, double? ChangeFromPrevClosePercent,
     double? GapPercent, string? PrevCloseSource, bool? AboveVwap, OpeningFirst5Dto? First5, bool? BrokeOpeningRange,
     OpeningPremarketDto? Premarket, string QuoteStatus, string[] Reasons, DateTimeOffset ObservedAt, int ElapsedMinutes);
 
@@ -27,7 +28,8 @@ public sealed record OpeningScanResponse(string? SessionDate, string Phase, Date
 public sealed record OpeningSnapshotRecord(string ObservationId, string Kind, string RecordVersion, string PolicyVersion,
     string PolicyHash, string Symbol, string Name, DateOnly SessionDate, DateTimeOffset SessionOpen, DateTimeOffset ObservedAt,
     int ElapsedMinutes, DateTimeOffset LastBarStart, double LastBarClose, double QuotePrice, DateTimeOffset QuoteAt,
-    string QuoteStatus, double CumulativeVolume, double? RvolNow, double? Rvol5, double? BaselineMean, double? BaselineMedian,
+    string QuoteStatus, double CumulativeVolume, double? RvolNow, OpeningRvolWindow Rvol3, OpeningRvolWindow Rvol5,
+    OpeningRvolWindow Rvol20, double? BaselineMean, double? BaselineMedian,
     int SampleCount, string VolumeStatus, double? PrevClose, string? PrevCloseSource, double? Open, bool OpenBarMissing,
     double? GapPercent, double? ChangeFromPrevClosePercent, double? ChangeFromOpenPercent, double? Vwap, bool? AboveVwap,
     OpeningFirst5Dto? First5, double? OpeningRangeHigh5, bool? BrokeOpeningRange, OpeningPremarketDto? Premarket,
@@ -44,7 +46,7 @@ public sealed record OpeningCloseRecord(string ObservationId, string Kind, strin
 public static class OpeningScanDtoMapper
 {
     public static OpeningScanRowDto Row(OpeningScanSnapshot s) => new(
-        s.Symbol, s.Name, s.Grade, s.Score, s.VolumeStatus, s.RvolNow, s.Rvol5, s.SampleCount,
+        s.Symbol, s.Name, s.Grade, s.Score, s.VolumeStatus, s.RvolNow, s.Rvol3, s.Rvol5, s.Rvol20, s.SampleCount,
         s.ChangeFromOpenPercent, s.ChangeFromPrevClosePercent, s.GapPercent, s.PrevCloseSource, s.AboveVwap,
         s.First5 is null ? null : new OpeningFirst5Dto(s.First5.BarsSeen, s.First5.UpBars, s.First5.NewHighs),
         s.BrokeOpeningRange,

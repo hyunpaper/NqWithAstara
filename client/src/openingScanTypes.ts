@@ -4,6 +4,12 @@ export type OpeningVolumeStatus = "full" | "partial" | "insufficient" | "pending
 
 export type OpeningFirst5 = { barsSeen: number; upBars: number; newHighs: number };
 export type OpeningPremarket = { high: number; volume: number; abovePremarketHigh: boolean };
+export type OpeningRvolWindow = {
+  lookbackSessions: number;
+  ratio: number | null;
+  baselineVolume: number | null;
+  sampleCount: number;
+};
 
 export type OpeningScanRow = {
   symbol: string;
@@ -12,7 +18,9 @@ export type OpeningScanRow = {
   score: number;
   volumeStatus: OpeningVolumeStatus;
   rvolNow: number | null;
-  rvol5: number | null;
+  rvol3: OpeningRvolWindow;
+  rvol5: OpeningRvolWindow;
+  rvol20: OpeningRvolWindow;
   sampleCount: number;
   changeFromOpenPercent: number | null;
   changeFromPrevClosePercent: number | null;
@@ -92,6 +100,16 @@ const premarket = (value: unknown): OpeningPremarket | null => {
   return { high: finite(r.high) ?? 0, volume: finite(r.volume) ?? 0, abovePremarketHigh: r.abovePremarketHigh === true };
 };
 
+const rvolWindow = (value: unknown, lookback: number): OpeningRvolWindow => {
+  const r = record(value);
+  return {
+    lookbackSessions: finite(r?.lookbackSessions) ?? lookback,
+    ratio: finite(r?.ratio),
+    baselineVolume: finite(r?.baselineVolume),
+    sampleCount: finite(r?.sampleCount) ?? 0,
+  };
+};
+
 const row = (raw: unknown): OpeningScanRow | null => {
   const r = record(raw);
   const symbol = text(r?.symbol);
@@ -103,7 +121,9 @@ const row = (raw: unknown): OpeningScanRow | null => {
     score: finite(r.score) ?? 0,
     volumeStatus: volumeStatus(r.volumeStatus),
     rvolNow: finite(r.rvolNow),
-    rvol5: finite(r.rvol5),
+    rvol3: rvolWindow(r.rvol3, 3),
+    rvol5: rvolWindow(r.rvol5, 5),
+    rvol20: rvolWindow(r.rvol20, 20),
     sampleCount: finite(r.sampleCount) ?? 0,
     changeFromOpenPercent: finite(r.changeFromOpenPercent),
     changeFromPrevClosePercent: finite(r.changeFromPrevClosePercent),
@@ -177,6 +197,20 @@ export const normalizeOpeningScan = (value: unknown): OpeningScanResponse | null
     summary,
     warnings: Array.isArray(root.warnings) ? root.warnings.flatMap((x) => text(x) ?? []) : [],
   };
+};
+
+/// 3·5·20일 RVOL을 나란히 보여 주는 셀 텍스트와, 각 기준 평균 거래량 툴팁(#375).
+export const openingRvolCell = (row: OpeningScanRow): { text: string; title: string } => {
+  const ratio = (w: OpeningRvolWindow): string => w.ratio == null ? `${w.sampleCount}/${w.lookbackSessions}` : `${w.ratio.toFixed(1)}×`;
+  const mean = (w: OpeningRvolWindow): string =>
+    w.baselineVolume == null ? "표본 부족" : `${Math.round(w.baselineVolume).toLocaleString("en-US")}주`;
+  const text = `${ratio(row.rvol3)} / ${ratio(row.rvol5)} / ${ratio(row.rvol20)}`;
+  const title = [
+    `3일 평균 ${mean(row.rvol3)}`,
+    `5일 평균 ${mean(row.rvol5)}`,
+    `20일 평균 ${mean(row.rvol20)}`,
+  ].join("\n");
+  return { text, title };
 };
 
 const rvolText = (value: number | null): string | null => value == null ? null : `${value.toFixed(1)}×`;

@@ -5,6 +5,9 @@ namespace Astra.Server.Domain.Opening;
 /// <summary>시간대 정규화 RVOL 결과(#371 §1.3). 전부 유한수이며 결측은 null로 반환한다.</summary>
 public sealed record OpeningRvolResult(double Ratio, double BaselineMean, double BaselineMedian, int SampleCount);
 
+/// <summary>한 룩백 창(3·5·20세션)의 RVOL 표시값(#375). 표본 부족이면 Ratio·BaselineVolume은 null이고 SampleCount는 유효 세션 수다.</summary>
+public sealed record OpeningRvolWindow(int LookbackSessions, double? Ratio, double? BaselineVolume, int SampleCount);
+
 /// <summary>개장 후 같은 경과 분의 과거 누적 대비 당일 누적 비율(#371 §1.3). DailyRelativeVolume은 건드리지 않는다.</summary>
 public static class OpeningRvol
 {
@@ -29,6 +32,17 @@ public static class OpeningRvol
         var ratio = (double)todayCumulative / mean;
         if (!double.IsFinite(ratio)) return null;
         return new OpeningRvolResult(ratio, mean, Median(samples), samples.Length);
+    }
+
+    /// <summary>표시용 창 1개. 표본이 최소 세션 미만이면 Ratio·BaselineVolume은 null이고 유효 세션 수만 돌려준다(#375).</summary>
+    public static OpeningRvolWindow Window(decimal todayCumulative, int elapsedMinutes,
+        IReadOnlyList<SessionVolumeProfile> previous, int lookbackSessions, int minimumSessions)
+    {
+        ArgumentNullException.ThrowIfNull(previous);
+        var k = Math.Clamp(elapsedMinutes, 1, 30);
+        var count = previous.TakeLast(Math.Max(1, lookbackSessions)).Count(x => x.At(k) is { } v && v > 0);
+        var result = Compute(todayCumulative, elapsedMinutes, previous, lookbackSessions, minimumSessions);
+        return new OpeningRvolWindow(lookbackSessions, result?.Ratio, result?.BaselineMean, count);
     }
 
     static double Median(double[] values)

@@ -72,7 +72,8 @@ public static class OpeningScanMeasureCommand
                 double? mae30 = followWindow.Length == 0 ? null : (followWindow.Min(x => x.Low) / anchor.Close - 1) * 100;
                 var retClose = (last.Close / anchor.Close - 1) * 100;
 
-                rows.Add(new Row(date, symbol, snapshot.Grade, snapshot.Score, snapshot.Rvol5, snapshot.SampleCount,
+                rows.Add(new Row(date, symbol, snapshot.Grade, snapshot.Score, snapshot.Rvol3.Ratio, snapshot.RvolNow,
+                    snapshot.Rvol20.Ratio, snapshot.SampleCount,
                     snapshot.ChangeFromOpenPercent, snapshot.GapPercent, snapshot.AboveVwap,
                     snapshot.First5?.UpBars ?? 0, snapshot.First5?.NewHighs ?? 0, ret30, mfe30, mae30, retClose));
             }
@@ -93,8 +94,8 @@ public static class OpeningScanMeasureCommand
         return 0;
     }
 
-    sealed record Row(DateOnly Date, string Symbol, string Grade, double Score, double? Rvol5, int SampleCount,
-        double? ChangeFromOpen, double? Gap, bool? AboveVwap, int UpBars, int NewHighs,
+    sealed record Row(DateOnly Date, string Symbol, string Grade, double Score, double? Rvol3, double? Rvol5,
+        double? Rvol20, int SampleCount, double? ChangeFromOpen, double? Gap, bool? AboveVwap, int UpBars, int NewHighs,
         double? Ret30, double? Mfe30, double? Mae30, double RetClose);
 
     static IEnumerable<string> SymbolsOf(string root, DateOnly date) =>
@@ -175,10 +176,10 @@ public static class OpeningScanMeasureCommand
 
     static string Csv(List<Row> rows)
     {
-        var sb = new StringBuilder("date,symbol,grade,score,rvol5,sampleCount,changeFromOpen,gap,aboveVwap,upBars,newHighs,ret30,mfe30,mae30,retClose\n");
+        var sb = new StringBuilder("date,symbol,grade,score,rvol3,rvol5,rvol20,sampleCount,changeFromOpen,gap,aboveVwap,upBars,newHighs,ret30,mfe30,mae30,retClose\n");
         foreach (var r in rows)
             sb.Append(string.Create(CultureInfo.InvariantCulture,
-                $"{r.Date:yyyy-MM-dd},{r.Symbol},{r.Grade},{r.Score:0.##},{N(r.Rvol5)},{r.SampleCount},{N(r.ChangeFromOpen)},{N(r.Gap)},{(r.AboveVwap == true ? 1 : 0)},{r.UpBars},{r.NewHighs},{N(r.Ret30)},{N(r.Mfe30)},{N(r.Mae30)},{r.RetClose:0.####}\n"));
+                $"{r.Date:yyyy-MM-dd},{r.Symbol},{r.Grade},{r.Score:0.##},{N(r.Rvol3)},{N(r.Rvol5)},{N(r.Rvol20)},{r.SampleCount},{N(r.ChangeFromOpen)},{N(r.Gap)},{(r.AboveVwap == true ? 1 : 0)},{r.UpBars},{r.NewHighs},{N(r.Ret30)},{N(r.Mfe30)},{N(r.Mae30)},{r.RetClose:0.####}\n"));
         return sb.ToString();
     }
 

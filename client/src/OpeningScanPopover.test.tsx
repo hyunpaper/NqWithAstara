@@ -3,9 +3,12 @@ import { describe, expect, it } from "vitest";
 import OpeningScanPopover from "./OpeningScanPopover";
 import type { OpeningScanResponse, OpeningScanRow } from "./openingScanTypes";
 
+const win = (lookback: number, ratio: number | null = null, baselineVolume: number | null = null, sampleCount = 0) =>
+  ({ lookbackSessions: lookback, ratio, baselineVolume, sampleCount });
+
 const row = (over: Partial<OpeningScanRow>): OpeningScanRow => ({
   symbol: "NVDA", name: "엔비디아", grade: "WEAK", score: 0, volumeStatus: "pending",
-  rvolNow: null, rvol5: null, sampleCount: 0, changeFromOpenPercent: null, changeFromPrevClosePercent: null,
+  rvolNow: null, rvol3: win(3), rvol5: win(5), rvol20: win(20), sampleCount: 0, changeFromOpenPercent: null, changeFromPrevClosePercent: null,
   gapPercent: null, prevCloseSource: null, aboveVwap: null, first5: null, brokeOpeningRange: null,
   premarket: null, quoteStatus: "fresh", reasons: [], observedAt: "", elapsedMinutes: 7, ...over,
 });
@@ -21,7 +24,7 @@ describe("OpeningScanPopover", () => {
     const scan = base({
       phase: "scanning",
       rows: [
-        row({ symbol: "NVDA", grade: "STRONG", rvolNow: 2.8, sampleCount: 20, volumeStatus: "full", changeFromOpenPercent: 0.9, aboveVwap: true, reasons: ["거래량 강함", "시가 대비 상승"] }),
+        row({ symbol: "NVDA", grade: "STRONG", rvolNow: 2.8, rvol3: win(3, 3.1, 401000, 3), rvol5: win(5, 2.8, 439000, 5), rvol20: win(20, 2.5, 470000, 20), sampleCount: 20, volumeStatus: "full", changeFromOpenPercent: 0.9, aboveVwap: true, reasons: ["거래량 강함", "시가 대비 상승"] }),
         row({ symbol: "AMD", grade: "WEAK" }),
       ],
     });
@@ -31,18 +34,19 @@ describe("OpeningScanPopover", () => {
     expect(screen.getByRole("dialog")).toBeTruthy();
     expect(screen.getByText("NVDA")).toBeTruthy();
     expect(screen.getByText("약함 1종목")).toBeTruthy();
+    expect(screen.getByText("3.1× / 2.8× / 2.5×")).toBeTruthy();
     const nvdaRow = screen.getByText("NVDA").closest("tr")!;
     expect(nvdaRow.getAttribute("title")).toContain("거래량 강함");
   });
 
-  it("표본 부족은 기준 없음으로 표시한다", () => {
+  it("표본 부족은 창마다 표본 수를 보여준다", () => {
     const scan = base({
       phase: "scanning",
-      rows: [row({ symbol: "NVDA", grade: "PRICE_ONLY", volumeStatus: "insufficient", sampleCount: 3, changeFromOpenPercent: 1.1 })],
+      rows: [row({ symbol: "NVDA", grade: "PRICE_ONLY", volumeStatus: "insufficient", rvol3: win(3, null, null, 2), rvol5: win(5, null, null, 2), rvol20: win(20, null, null, 2), sampleCount: 2, changeFromOpenPercent: 1.1 })],
     });
     render(<OpeningScanPopover scan={scan} />);
     fireEvent.click(screen.getByRole("button", { name: /개장 초반 강세/ }));
-    expect(screen.getByText("기준 없음 (3/20)")).toBeTruthy();
+    expect(screen.getByText("2/3 / 2/5 / 2/20")).toBeTruthy();
   });
 
   it("summary 모드는 기록 컬럼을 보여준다", () => {

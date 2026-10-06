@@ -99,7 +99,7 @@ public sealed class OpeningScanService(OpeningScanPolicy policy, OpeningVolumePr
                     sym.At5Row = OpeningScanDtoMapper.Row(snapshot);
                     sym.GradeAt5 = snapshot.Grade;
                     sym.ScoreAt5 = snapshot.Score;
-                    sym.Rvol5 = snapshot.Rvol5;
+                    sym.Rvol5 = snapshot.RvolNow;
                 }
                 if (snapshot.ElapsedMinutes >= AnchorMinute) sym.At30Row = OpeningScanDtoMapper.Row(snapshot);
                 if (snapshot.ElapsedMinutes > sym.LastRecordedMinute)
@@ -213,7 +213,7 @@ public sealed class OpeningScanService(OpeningScanPolicy policy, OpeningVolumePr
                 sym.At5Row = row;
                 sym.GradeAt5 = record.Grade;
                 sym.ScoreAt5 = record.Score;
-                sym.Rvol5 = record.Rvol5;
+                sym.Rvol5 = record.RvolNow;
                 sym.AnchorClose = record.LastBarClose;
             }
             sym.At30Row = row;
@@ -297,7 +297,9 @@ public sealed class OpeningScanService(OpeningScanPolicy policy, OpeningVolumePr
         var counts = writer.Counts;
         var now = clock.GetUtcNow();
         var phase = Query().Phase;
-        var loaded = session?.Symbols.Values.Where(x => x.ProfilesLoaded).ToArray() ?? [];
+        var loadedEntries = session?.Symbols.Where(x => x.Value.ProfilesLoaded)
+            .OrderBy(x => x.Key, StringComparer.Ordinal).ToArray() ?? [];
+        var loaded = loadedEntries.Select(x => x.Value).ToArray();
         return new
         {
             enabled = policy.Enabled,
@@ -310,10 +312,21 @@ public sealed class OpeningScanService(OpeningScanPolicy policy, OpeningVolumePr
                 loadedSymbols = loaded.Length,
                 sessionsMin = loaded.Length == 0 ? 0 : loaded.Min(x => x.Stats.Sessions),
                 sessionsMax = loaded.Length == 0 ? 0 : loaded.Max(x => x.Stats.Sessions),
-                insufficientSymbols = loaded.Count(x => x.SampleCount < policy.MinimumSessions),
+                insufficientSymbols = loaded.Count(x => x.SampleCount < policy.GradeMinimumSessions),
+                tossSymbols = loaded.Count(x => x.Stats.Source == "toss"),
+                tossFailures = loaded.Sum(x => x.Stats.TossFailures),
+                lastRefresh = loaded.Select(x => x.Stats.LoadedAt).Where(x => x is not null).DefaultIfEmpty(null).Max(),
                 legacyShiftedSessions = loaded.Sum(x => x.Stats.LegacyShifted),
                 rejectedSessions = loaded.Sum(x => x.Stats.Rejected),
                 incompleteSessions = loaded.Sum(x => x.Stats.Incomplete),
+                bySymbol = loadedEntries.Select(x => new
+                {
+                    symbol = x.Key,
+                    sessions = x.Value.Stats.Sessions,
+                    source = x.Value.Stats.Source,
+                    tossFailures = x.Value.Stats.TossFailures,
+                    loadedAt = x.Value.Stats.LoadedAt,
+                }).ToArray(),
             },
             records = new
             {
@@ -328,14 +341,14 @@ public sealed class OpeningScanService(OpeningScanPolicy policy, OpeningVolumePr
     }
 
     static OpeningScanRowDto SnapshotRowFrom(OpeningSnapshotRecord r) => new(r.Symbol, r.Name, r.Grade, r.Score,
-        r.VolumeStatus, r.RvolNow, r.Rvol5, r.SampleCount, r.ChangeFromOpenPercent, r.ChangeFromPrevClosePercent,
+        r.VolumeStatus, r.RvolNow, r.Rvol3, r.Rvol5, r.Rvol20, r.SampleCount, r.ChangeFromOpenPercent, r.ChangeFromPrevClosePercent,
         r.GapPercent, r.PrevCloseSource, r.AboveVwap, r.First5, r.BrokeOpeningRange, r.Premarket, r.QuoteStatus,
         r.Reasons, r.ObservedAt, r.ElapsedMinutes);
 
     OpeningSnapshotRecord SnapshotRecord(OpeningScanSnapshot s) => new(
         SnapshotId(s.Symbol, s.SessionDate, s.ElapsedMinutes), OpeningScanObservationWriter.KindSnapshot, RecordVersion,
         policy.Version, policy.PolicyHash, s.Symbol, s.Name, s.SessionDate, s.SessionOpen, s.ObservedAt, s.ElapsedMinutes,
-        s.LastBarStart, s.LastBarClose, s.QuotePrice, s.QuoteAt, s.QuoteStatus, s.CumulativeVolume, s.RvolNow, s.Rvol5,
+        s.LastBarStart, s.LastBarClose, s.QuotePrice, s.QuoteAt, s.QuoteStatus, s.CumulativeVolume, s.RvolNow, s.Rvol3, s.Rvol5, s.Rvol20,
         s.BaselineMean, s.BaselineMedian, s.SampleCount, s.VolumeStatus, s.PrevClose, s.PrevCloseSource, s.Open,
         s.OpenBarMissing, s.GapPercent, s.ChangeFromPrevClosePercent, s.ChangeFromOpenPercent, s.Vwap, s.AboveVwap,
         s.First5 is null ? null : new OpeningFirst5Dto(s.First5.BarsSeen, s.First5.UpBars, s.First5.NewHighs),
