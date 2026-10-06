@@ -82,30 +82,25 @@ public sealed class StructurePolicyTests
     }
 
     [Fact]
-    public void PullbackLongIsDisabledByDefaultAndClearingItStartsANewPolicyLineage()
+    public void EmptyDisabledLongKindsKeepsTheExistingCanonicalJsonAndHash()
     {
         var policy = StructurePolicy.Default;
-        var cleared = policy with { DisabledLongKinds = [] };
 
-        Assert.Equal("PULLBACK", Assert.Single(policy.DisabledLongKinds));
-        Assert.Contains("\"DisabledLongKinds\":[\"PULLBACK\"]", policy.CanonicalJson, StringComparison.Ordinal);
-        Assert.True(policy.IsLongKindDisabled("PULLBACK"));
-        Assert.False(policy.IsLongKindDisabled("BREAKOUT"));
-        Assert.False(policy.IsLongKindDisabled("REBOUND"));
-        Assert.DoesNotContain("DisabledLongKinds", cleared.CanonicalJson, StringComparison.Ordinal);
-        Assert.NotEqual(policy.PolicyHash, cleared.PolicyHash);
-        Assert.Equal(cleared.PolicyHash, (policy with { DisabledLongKinds = default }).PolicyHash);
-        Assert.False(cleared.IsLongKindDisabled("PULLBACK"));
+        Assert.True(policy.DisabledLongKinds.IsEmpty);
+        Assert.DoesNotContain("DisabledLongKinds", policy.CanonicalJson, StringComparison.Ordinal);
+        Assert.Equal(policy.PolicyHash, (policy with { DisabledLongKinds = [] }).PolicyHash);
+        Assert.Equal(policy.PolicyHash, (policy with { DisabledLongKinds = default }).PolicyHash);
+        Assert.False(policy.IsLongKindDisabled("PULLBACK"));
     }
 
     [Fact]
-    public void EachDisabledLongKindSetIsItsOwnPolicyLineage()
+    public void NonEmptyDisabledLongKindsStartsANewPolicyLineage()
     {
         var pullback = StructurePolicy.Default with { DisabledLongKinds = ["PULLBACK"] };
         var rebound = StructurePolicy.Default with { DisabledLongKinds = ["REBOUND"] };
 
-        Assert.Equal(StructurePolicy.Default.PolicyHash, pullback.PolicyHash);
-        Assert.Contains("\"DisabledLongKinds\":[\"REBOUND\"]", rebound.CanonicalJson, StringComparison.Ordinal);
+        Assert.Contains("\"DisabledLongKinds\":[\"PULLBACK\"]", pullback.CanonicalJson, StringComparison.Ordinal);
+        Assert.NotEqual(StructurePolicy.Default.PolicyHash, pullback.PolicyHash);
         Assert.NotEqual(pullback.PolicyHash, rebound.PolicyHash);
         Assert.True(pullback.IsLongKindDisabled("PULLBACK"));
         Assert.True(pullback.IsLongKindDisabled("pullback"));
