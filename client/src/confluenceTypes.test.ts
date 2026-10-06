@@ -76,12 +76,14 @@ describe("normalizeTechnique", () => {
 });
 
 describe("normalizeConfluenceSummary", () => {
-  it("score·warmupCount·weightsVersion·barEnd만 남긴다", () => {
+  it("알려진 필드만 남기고 top·bottom 기여를 정규화한다", () => {
     const s = normalizeConfluenceSummary({
       score: -0.1,
       warmupCount: 3,
       weightsVersion: "uniform.1",
       barEnd: "2026-09-12T00:31:00Z",
+      top: [{ name: "VWAP_DEVIATION", score: 0.8, contribution: 0.3, evidence: { deviation: 1.2 } }],
+      bottom: [{ name: "RSI", score: -0.5, contribution: -0.2, evidence: { rsi: 74 } }],
       extra: 1,
     });
     expect(s).toEqual({
@@ -89,7 +91,21 @@ describe("normalizeConfluenceSummary", () => {
       warmupCount: 3,
       weightsVersion: "uniform.1",
       barEnd: "2026-09-12T00:31:00Z",
+      top: [{ name: "VWAP_DEVIATION", score: 0.8, contribution: 0.3, evidence: { deviation: 1.2 } }],
+      bottom: [{ name: "RSI", score: -0.5, contribution: -0.2, evidence: { rsi: 74 } }],
     });
+  });
+
+  it("top·bottom이 없으면 빈 배열이고 이름 없는 기여는 버린다", () => {
+    const s = normalizeConfluenceSummary({
+      score: 0.2,
+      warmupCount: 0,
+      weightsVersion: "uniform.1",
+      barEnd: null,
+      top: [{ score: 0.5, contribution: 0.5, evidence: {} }],
+    });
+    expect(s?.top).toEqual([]);
+    expect(s?.bottom).toEqual([]);
   });
 
   it("결측이면 null이다", () => {

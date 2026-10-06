@@ -24,15 +24,26 @@ export type ConfluenceResponse = {
   updatedAt: string | null;
 };
 
+/** 이슈 #379: 총점에 가장 크게 기여한 요소 한 개(상위/하위 요약용). */
+export type ConfluenceContributor = {
+  name: string;
+  score: number | null;
+  contribution: number | null;
+  evidence: Record<string, number | null>;
+};
+
 /**
  * `/api/structure/{symbol}`·`/api/state`의 `structureSummary` 행에 additive로 실리는 요약.
  * barEnd는 이슈 #181에서 `structureSummary` 쪽에 추가됐다 — 캐시가 없으면 전체가 null이다.
+ * top/bottom은 이슈 #379에서 추가된 기여 상위(+)·하위(−) 요소이며 없으면 빈 배열이다.
  */
 export type ConfluenceSummary = {
   score: number | null;
   warmupCount: number;
   weightsVersion: string | null;
   barEnd: string | null;
+  top: ConfluenceContributor[];
+  bottom: ConfluenceContributor[];
 };
 
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
@@ -82,6 +93,24 @@ export const normalizeConfluenceResponse = (raw: unknown): ConfluenceResponse =>
   };
 };
 
+const normalizeContributor = (raw: unknown): ConfluenceContributor | null => {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const name = str(r.name);
+  if (!name) return null;
+  return {
+    name,
+    score: num(r.score),
+    contribution: num(r.contribution),
+    evidence: normalizeEvidence(r.evidence),
+  };
+};
+
+const normalizeContributors = (raw: unknown): ConfluenceContributor[] =>
+  Array.isArray(raw)
+    ? raw.map(normalizeContributor).filter((x): x is ConfluenceContributor => x !== null)
+    : [];
+
 export const normalizeConfluenceSummary = (raw: unknown): ConfluenceSummary | null => {
   if (typeof raw !== "object" || raw === null) return null;
   const r = raw as Record<string, unknown>;
@@ -90,5 +119,7 @@ export const normalizeConfluenceSummary = (raw: unknown): ConfluenceSummary | nu
     warmupCount: num(r.warmupCount) ?? 0,
     weightsVersion: str(r.weightsVersion),
     barEnd: str(r.barEnd),
+    top: normalizeContributors(r.top),
+    bottom: normalizeContributors(r.bottom),
   };
 };

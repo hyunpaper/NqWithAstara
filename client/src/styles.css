@@ -1740,6 +1740,22 @@ footer {
 }
 .confluence-mini-badge.bullish { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .confluence-mini-badge.bearish { color: var(--red); border-color: var(--red); background: color-mix(in srgb, var(--red) 14%, transparent); }
+.confluence-badge-popover { position: relative; display: inline-flex; overflow: visible; }
+.confluence-badge-popover > button { cursor: pointer; }
+.confluence-tip { position: fixed; z-index: 60; max-height: min(60vh, 380px); overflow: auto; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 8px 24px #0007; color: var(--text); font-size: 11px; }
+.confluence-tip.above { transform: translateY(-100%); }
+.confluence-tip > strong { display: block; margin-bottom: 2px; font-size: 12px; }
+.confluence-tip > strong.bullish { color: var(--accent); }
+.confluence-tip > strong.bearish { color: var(--red); }
+.confluence-tip-note { display: block; color: var(--muted); font-size: 10px; }
+.confluence-tip-group { margin-top: 8px; }
+.confluence-tip-head { display: block; margin-bottom: 3px; color: var(--muted); font-weight: 600; }
+.confluence-tip-row { display: flex; align-items: baseline; gap: 6px; padding: 2px 0; }
+.confluence-tip-name { flex: 0 0 auto; font-weight: 600; }
+.confluence-tip-detail { flex: 1 1 auto; color: var(--muted); }
+.confluence-tip-score { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.confluence-tip-score.bullish { color: var(--accent); }
+.confluence-tip-score.bearish { color: var(--red); }
 .confluence-panel { margin-top: 14px; }
 .confluence-state { padding: 20px 18px; color: var(--muted); font-size: 11px; }
 .confluence-gauge {

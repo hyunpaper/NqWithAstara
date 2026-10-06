@@ -367,7 +367,7 @@ describe("missingComponentTexts", () => {
 describe("sidebarConfluenceScore", () => {
   const rowWithConfluence = (score: number | null): StructureSummaryRow => ({
     symbol: "AAPL",
-    confluence: { score, warmupCount: 0, weightsVersion: "uniform.1", barEnd: "2026-09-12T00:31:00Z" },
+    confluence: { score, warmupCount: 0, weightsVersion: "uniform.1", barEnd: "2026-09-12T00:31:00Z", top: [], bottom: [] },
   });
 
   it("선택 종목이고 pin 값이 있으면 pin을 우선한다", () => {

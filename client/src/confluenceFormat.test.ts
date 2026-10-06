@@ -3,12 +3,13 @@ import {
   allWarmup,
   barOpacity,
   barWidthPercent,
+  describeContributor,
   gaugeTone,
   isTechniqueWarmup,
   scoreText2,
   techniqueLabel,
 } from "./confluenceFormat";
-import type { ConfluenceTechnique } from "./confluenceTypes";
+import type { ConfluenceContributor, ConfluenceTechnique } from "./confluenceTypes";
 
 const technique = (over: Partial<ConfluenceTechnique> = {}): ConfluenceTechnique => ({
   name: "MACD",
@@ -124,5 +125,38 @@ describe("scoreText2", () => {
   it("결측은 —다", () => {
     expect(scoreText2(null)).toBe("—");
     expect(scoreText2(undefined)).toBe("—");
+  });
+});
+
+describe("describeContributor", () => {
+  const base = (over: Partial<ConfluenceContributor> = {}): ConfluenceContributor => ({
+    name: "RSI",
+    score: 0.5,
+    contribution: 0.3,
+    evidence: {},
+    ...over,
+  });
+
+  it("양수 기여를 지표 이름·현재 값·기여 점수로 푼다", () => {
+    const d = describeContributor(base({ name: "VWAP_DEVIATION", score: 0.8, contribution: 0.42, evidence: { deviation: 1.2 } }));
+    expect(d.label).toBe("VWAP 이격");
+    expect(d.detail).toBe("VWAP 위 1.2σ");
+    expect(d.contribution).toBe("+0.42");
+  });
+
+  it("음수 기여는 과열·기여 부호를 드러낸다", () => {
+    const d = describeContributor(base({ name: "RSI", score: -0.5, contribution: -0.3, evidence: { rsi: 74 } }));
+    expect(d.detail).toBe("RSI 74 과열");
+    expect(d.contribution).toBe("-0.30");
+  });
+
+  it("evidence 결측은 데이터 없음으로 적는다", () => {
+    expect(describeContributor(base({ name: "RSI", evidence: {} })).detail).toBe("데이터 없음");
+    expect(describeContributor(base({ name: "RSI", evidence: { rsi: null } })).detail).toBe("데이터 없음");
+  });
+
+  it("미등록 기법은 점수 부호로 방향을 적는다", () => {
+    expect(describeContributor(base({ name: "FOO", score: 0.2 })).detail).toBe("상승 쪽");
+    expect(describeContributor(base({ name: "FOO", score: -0.2 })).detail).toBe("하락 쪽");
   });
 });
