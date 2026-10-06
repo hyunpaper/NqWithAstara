@@ -32,6 +32,12 @@ if (args is [ConfluenceBackfillCommand.Name, ..])
     return;
 }
 
+if (args is [OpeningScanMeasureCommand.Name, ..])
+{
+    Environment.ExitCode = await OpeningScanMeasureCommand.RunAsync(args, Console.Out, CancellationToken.None);
+    return;
+}
+
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseUrls(Environment.GetEnvironmentVariable("ASTRA_URLS") ?? "http://127.0.0.1:5188");
 builder.Services.AddSingleton<LocalStore>();
@@ -84,6 +90,11 @@ builder.Services.AddSingleton<HistoricalReplayService>();
 builder.Services.AddHostedService<HistoricalReplayLifetime>();
 builder.Services.AddSingleton<BarStoreService>(); builder.Services.AddSingleton<BenchmarkPollingService>();
 builder.Services.AddSingleton<IBenchmarkBarSource>(x => x.GetRequiredService<BenchmarkPollingService>());
+// #371: 개장 초반 스캔. StructurePolicy와 분리된 자체 정책이며 PolicyHash에 영향을 주지 않는다. 임계값은 appsettings "OpeningScan"에서만 덮어쓴다.
+builder.Services.AddSingleton(_ => { var p = Astra.Server.Domain.Opening.OpeningScanPolicy.Default with { }; builder.Configuration.GetSection("OpeningScan").Bind(p); return p; });
+builder.Services.AddSingleton<Astra.Server.Application.Opening.OpeningVolumeProfileSource>();
+builder.Services.AddSingleton<Astra.Server.Application.Opening.OpeningScanObservationWriter>();
+builder.Services.AddSingleton<Astra.Server.Application.Opening.OpeningScanService>();
 // 이슈 #167: 컨플루언스 기법 신호·합산. 가중치는 전부 1.0(미검증)에서 시작하고 K4가 파일로 채운다.
 builder.Services.AddSingleton(_ => ConfluencePolicy.Default);
 // 이슈 #169: 측정 결과 가중치 파일을 기동 시 1회만 읽는다. 없거나 깨졌으면 전부 1.0으로 남는다.
