@@ -23,9 +23,13 @@ public sealed record ConfluenceTechniqueDto(string Name, double Score, double Co
 public sealed record ConfluenceDto(DateTimeOffset BarEnd, double? Score, int WarmupCount, string PolicyHash,
     string WeightsVersion, ConfluenceTechniqueDto[] Techniques);
 
-/// <summary>`/api/structure/{symbol}`·`structureSummary` 행에 additive로 붙는 요약 (C4, #167 / #181).</summary>
+/// <summary>총점에 대한 기여 요소 한 개 (#379). Contribution은 총점에 더해지는 부호 있는 기여 몫이다.</summary>
+public sealed record ConfluenceContributorDto(string Name, double Score, double Contribution,
+    IReadOnlyDictionary<string, double?> Evidence);
+
+/// <summary>`/api/structure/{symbol}`·`structureSummary` 행에 additive로 붙는 요약 (C4, #167 / #181 / #379).</summary>
 public sealed record ConfluenceSummaryDto(double? Score, int WarmupCount, string WeightsVersion,
-    DateTimeOffset? BarEnd = null);
+    DateTimeOffset? BarEnd = null, ConfluenceContributorDto[]? Top = null, ConfluenceContributorDto[]? Bottom = null);
 
 /// <summary>`GET /api/confluence/{symbol}` 응답 (#167). 조회가 계산을 유발하지 않는다.</summary>
 public sealed record ConfluenceResponse(string Symbol, string Status, string PolicyHash, string WeightsVersion,
@@ -67,9 +71,24 @@ public sealed class ConfluenceService(
     public bool TryGet(string symbol, out ConfluenceScore score) => _scores.TryGetValue(symbol, out score!);
 
     public ConfluenceSummaryDto? Summary(string symbol) =>
-        _scores.TryGetValue(symbol, out var score)
-            ? new ConfluenceSummaryDto(score.Score, score.WarmupCount, score.WeightsVersion, score.BarEnd)
-            : null;
+        _scores.TryGetValue(symbol, out var score) ? BuildSummary(score) : null;
+
+    /// <summary>캐시된 점수에서 상위 3(+)·하위 3(−) 기여 요소를 뽑는다 (#379). 새 계산 없이 기여 몫만 정렬한다.</summary>
+    static ConfluenceSummaryDto BuildSummary(ConfluenceScore score)
+    {
+        var included = score.Contributing.Where(x => x.Contributing).ToArray();
+        var denominator = included.Sum(x => x.Weight * x.Confidence);
+        var ranked = included
+            .Select(x => new ConfluenceContributorDto(x.Name, x.Score,
+                denominator > 0 ? IndicatorRounding.Ratio(x.Weight * x.Confidence * x.Score / denominator) : 0,
+                x.Evidence.ToDictionary(e => e.Key, e => e.Value, StringComparer.Ordinal)))
+            .Where(x => x.Contribution != 0)
+            .ToArray();
+        var top = ranked.Where(x => x.Contribution > 0).OrderByDescending(x => x.Contribution).Take(3).ToArray();
+        var bottom = ranked.Where(x => x.Contribution < 0).OrderBy(x => x.Contribution).Take(3).ToArray();
+        return new ConfluenceSummaryDto(score.Score, score.WarmupCount, score.WeightsVersion, score.BarEnd,
+            top.Length > 0 ? top : null, bottom.Length > 0 ? bottom : null);
+    }
 
     /// <summary>매 poll의 호가 스냅샷을 링버퍼에 남긴다. 세션이 바뀌면 이전 세션 스냅샷은 버린다.</summary>
     public void ObserveQuote(string symbol, DateTimeOffset? sessionStart, StructureLiquidity? liquidity)
