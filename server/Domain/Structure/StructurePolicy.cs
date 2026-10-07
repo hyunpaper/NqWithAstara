@@ -43,6 +43,26 @@ public sealed record StructurePolicy
     /// <summary>REBOUND 계획 전용 최소 netR. null이면 <see cref="MinimumNetR"/>를 쓰고 hash에 넣지 않는다(§9.3, #245).</summary>
     [OmitFromPolicyHashWhenEmpty]
     public double? ReboundMinimumNetR { get; init; }
+    /// <summary>
+    /// §9.3 REBOUND 전용 추세정렬 상한(#245 U6). REBOUND 계획의 EntryEvidence.TrendAlignment가 이 값 이상이면 거절한다.
+    /// 추세가 이미 진입 방향으로 정렬된 뒤의 반등 진입은 늦다는 해부 근거(네 셀 모두 음수)에 따른 거절이며,
+    /// 목표·손절을 조작하지 않는다. null이면 거절 없음이고 hash에 넣지 않는다.
+    /// </summary>
+    [OmitFromPolicyHashWhenEmpty]
+    public double? ReboundMaxTrendAlignment { get; init; }
+    /// <summary>
+    /// §9.3 REBOUND 전용 무효화 거리 하한(ATR 배수, #245 U6). REBOUND 계획의 무효화(손절)까지 거리가 이 ATR 배수 미만이면 거절한다.
+    /// 무효화 지점에 너무 붙은 반등은 노이즈 진입이라는 해부 근거(네 셀 모두 음수)에 따른 거절이다.
+    /// null이면 거절 없음이고 hash에 넣지 않는다.
+    /// </summary>
+    [OmitFromPolicyHashWhenEmpty]
+    public double? ReboundMinInvalidationAtr { get; init; }
+    /// <summary>§9.3 신규 진입 차단 창 시작(개장 후 경과 분, 포함). null이면 차단 없음이고 hash에 넣지 않는다(#245 U2/T1).</summary>
+    [OmitFromPolicyHashWhenEmpty]
+    public int? WindowBlockStartMinutesFromOpen { get; init; }
+    /// <summary>§9.3 신규 진입 차단 창 끝(개장 후 경과 분, 제외). null이면 차단 없음이고 hash에 넣지 않는다(#245 U2/T1).</summary>
+    [OmitFromPolicyHashWhenEmpty]
+    public int? WindowBlockEndMinutesFromOpen { get; init; }
 
     /// <summary>
     /// §9.3 비용 반영 손익비 상한(#209). netR이 이 값을 넘으면 계획을 거절한다. 목표·손절을 조작하지 않는다(§19-5).
@@ -97,6 +117,11 @@ public sealed record StructurePolicy
     /// </summary>
     [OmitFromPolicyHashWhenEmpty]
     public ImmutableArray<string> DisabledLongKinds { get; init; } = ImmutableArray<string>.Empty;
+
+    /// <summary>개장 후 <paramref name="sinceOpen"/> 시점의 신규 진입이 차단 창 [시작, 끝)에 드는지 판정한다(#245 U2/T1).</summary>
+    public bool IsInsideEntryBlockWindow(TimeSpan sinceOpen) =>
+        WindowBlockStartMinutesFromOpen is { } start && WindowBlockEndMinutesFromOpen is { } end &&
+        sinceOpen >= TimeSpan.FromMinutes(start) && sinceOpen < TimeSpan.FromMinutes(end);
 
     /// <summary>롱 <paramref name="kindName"/>이 정책으로 비활성인지 판정한다(#245 Cycle77).</summary>
     public bool IsLongKindDisabled(string kindName) =>
