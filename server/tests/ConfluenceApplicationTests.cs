@@ -118,6 +118,55 @@ public sealed class ConfluenceApplicationTests
     }
 
     [Fact]
+    public async Task StateSummaryRowCarriesSortedTopAndBottomContributors()
+    {
+        var clock = new MovableClock(D3.At(NowMinute));
+        var runtime = new MonitorRuntimeState();
+        var observations = new MemoryObservationStore();
+        var store = Watched();
+        var confluence = Service(store, clock, new FakeBenchmark(D3.Candles(Bars)));
+        var service = D3.Service(StructureEngineMode.Shadow, observations, runtime, clock, store, confluence);
+        await service.ObserveAsync(D3.Request(D3.StartedRuntime(runtime), Bars), default);
+
+        var block = JsonDocument.Parse(JsonSerializer.Serialize(service.Summary([D3.Symbol]),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))).RootElement
+            .GetProperty("symbols")[0].GetProperty("confluence");
+
+        var top = block.GetProperty("top");
+        var bottom = block.GetProperty("bottom");
+        Assert.True(top.ValueKind == JsonValueKind.Array || top.ValueKind == JsonValueKind.Null);
+        Assert.True(bottom.ValueKind == JsonValueKind.Array || bottom.ValueKind == JsonValueKind.Null);
+
+        if (top.ValueKind == JsonValueKind.Array)
+        {
+            Assert.True(top.GetArrayLength() <= 3);
+            double previous = double.PositiveInfinity;
+            foreach (var item in top.EnumerateArray())
+            {
+                Assert.False(string.IsNullOrEmpty(item.GetProperty("name").GetString()));
+                Assert.Equal(JsonValueKind.Object, item.GetProperty("evidence").ValueKind);
+                var contribution = item.GetProperty("contribution").GetDouble();
+                Assert.True(contribution > 0);
+                Assert.True(contribution <= previous);
+                previous = contribution;
+            }
+        }
+
+        if (bottom.ValueKind == JsonValueKind.Array)
+        {
+            Assert.True(bottom.GetArrayLength() <= 3);
+            double previous = double.NegativeInfinity;
+            foreach (var item in bottom.EnumerateArray())
+            {
+                var contribution = item.GetProperty("contribution").GetDouble();
+                Assert.True(contribution < 0);
+                Assert.True(contribution >= previous);
+                previous = contribution;
+            }
+        }
+    }
+
+    [Fact]
     public void StateSummaryRowConfluenceIsNullWithoutACachedScore()
     {
         var clock = new MovableClock(D3.At(NowMinute));

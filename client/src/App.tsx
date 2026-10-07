@@ -68,7 +68,8 @@ import {
 import { useNewsDetail } from "./useNewsDetail";
 import { scoreBadge } from "./newsFormat";
 import type { Badge } from "./newsFormat";
-import { gaugeTone, scoreText2 } from "./confluenceFormat";
+import { ConfluenceBadgePopover } from "./ConfluenceTooltip";
+import type { ConfluenceSummary } from "./confluenceTypes";
 import HistoricalReplayPanel from "./HistoricalReplayPanel";
 import MarketMoodPopover from "./MarketMoodPopover";
 import OpeningScanPopover from "./OpeningScanPopover";
@@ -295,9 +296,11 @@ const money = (v: number | null | undefined) =>
         minimumFractionDigits: 2,
       }).format(v);
 const watchBadges = (
+  symbol: string,
   newsBadge: Badge | null,
   newsScore: NewsSymbolScore | null,
   confluence: number | null,
+  confluenceSummary: ConfluenceSummary | null | undefined,
   onSelectEvidence: (evidence: NewsEvidenceItem, trigger: HTMLElement) => void,
 ): ReactNode[] => {
   const badges: ReactNode[] = [];
@@ -313,13 +316,12 @@ const watchBadges = (
     );
   if (confluence != null)
     badges.push(
-      <span
+      <ConfluenceBadgePopover
         key="confluence"
-        className={`confluence-mini-badge ${gaugeTone(confluence)}`}
-        title="컨플루언스 점수(관측 전용)"
-      >
-        {scoreText2(confluence)}
-      </span>,
+        symbol={symbol}
+        score={confluence}
+        summary={confluenceSummary}
+      />,
     );
   return badges;
 };
@@ -856,11 +858,14 @@ export default function App() {
       ? findSymbolScore(newsSentiment?.symbols ?? [], w.symbol)
       : null;
     // 이슈 #181: K3 폴링 최신값(선택 종목)이 없으면 structureSummary 캐시로 전 종목 배지를 채운다.
-    const confluence = sidebarConfluenceScore(confluenceScore, w.symbol, rowOf(w.symbol));
+    const summaryRow = rowOf(w.symbol);
+    const confluence = sidebarConfluenceScore(confluenceScore, w.symbol, summaryRow);
     const badges = watchBadges(
+      w.symbol,
       scoreBadge(newsScore?.score),
       newsScore,
       confluence,
+      summaryRow?.confluence,
       (evidence, trigger) => newsDetail.open(articleFromEvidence(evidence), trigger, w.symbol),
     );
     const openingRow = openingRows.get(w.symbol);
