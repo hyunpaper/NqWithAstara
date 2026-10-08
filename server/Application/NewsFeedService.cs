@@ -644,17 +644,9 @@ public sealed class NewsFeedService(
         }
     }
 
-    void Requeue(QueuedArticle entry)
-    {
-        lock (_queued)
-        {
-            if (!_queued.Add(entry.Article.Id)) return;
-            if (entry.MatchedSymbols.Count > 0) _matched.AddFirst(entry); else _other.AddFirst(entry);
-        }
-    }
-
     async Task DrainAsync(int feedBudget, CancellationToken ct)
     {
+        var classifierDown = false;
         while (!ct.IsCancellationRequested && Allowed())
         {
             var entry = Dequeue();
@@ -668,7 +660,8 @@ public sealed class NewsFeedService(
             var classificationSource = !string.IsNullOrWhiteSpace(article.Content) ? "feed_body"
                 : !string.IsNullOrWhiteSpace(article.Summary) ? "feed_excerpt" : "headline";
             // 상세는 관심종목 매칭 기사에만, 남은 피드 요청 예산 안에서 받는다(#151 §1).
-            if (entry.MatchedSymbols.Count > 0 && feedBudget > 0)
+            // 분류기가 닿지 않는 동안은 상세로 피드 쿼터를 더 쓰지 않는다.
+            if (entry.MatchedSymbols.Count > 0 && feedBudget > 0 && !classifierDown)
             {
                 feedBudget--;
                 try
@@ -705,31 +698,42 @@ public sealed class NewsFeedService(
                 : article.Title + "\n" + article.Headline;
 
             NewsClassificationResult result;
-            try
+            if (classifierDown)
             {
-                result = await classifier.ClassifyAsync(
-                    new NewsClassificationRequest(title, body, article.Tickers), ct);
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            {
-                result = new NewsClassificationResult(null, options.Model, 0, true);
-            }
-            catch (Exception exception)
-            {
-                diagnostics.PollFailed("news-classify", exception);
                 result = new NewsClassificationResult(null, options.Model, 0, false);
+            }
+            else
+            {
+                try
+                {
+                    result = await classifier.ClassifyAsync(
+                        new NewsClassificationRequest(title, body, article.Tickers), ct);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    result = new NewsClassificationResult(null, options.Model, 0, true);
+                }
+                catch (Exception exception)
+                {
+                    diagnostics.PollFailed("news-classify", exception);
+                    result = new NewsClassificationResult(null, options.Model, 0, false);
+                }
             }
 
             if (!result.Available)
             {
-                // Ollama에 닿지 못했다. 기사를 소비하지 않고 다음 주기로 미룬다.
+                // 로컬 LLM(Ollama)에 닿지 못했다. 어휘 필터를 통과한 신규 기사는 미분류로 저장해
+                // 조회에 노출하고, 이번 주기의 남은 분류 호출은 생략한다.
                 state.Ollama(false);
-                Requeue(entry);
-                break;
+                classifierDown = true;
+                // 이미 저장된 기사의 재분류 실패는 다시 저장하지 않는다(중복 방지). 복구 후 재개된다.
+                if (entry.Prior is not null) continue;
             }
-
-            state.Ollama(true);
-            _classifications.Enqueue(clock.GetUtcNow());
+            else
+            {
+                state.Ollama(true);
+                _classifications.Enqueue(clock.GetUtcNow());
+            }
             var classifiedEntry = entry with { Article = article };
             var classificationText = string.IsNullOrWhiteSpace(body) ? title : title + "\n" + body;
             var record = Compose(classifiedEntry, result, inputKind, classificationText, classificationSource);
