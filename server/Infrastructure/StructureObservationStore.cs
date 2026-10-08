@@ -75,9 +75,7 @@ public sealed class StructureObservationStore(IWebHostEnvironment env) : IStruct
         {
             Directory.CreateDirectory(_root);
             var path = Path.Combine(_root, file);
-            var temporary = path + ".tmp";
-            await File.WriteAllTextAsync(temporary, content, ct);
-            File.Move(temporary, path, true);
+            await AtomicFile.WriteReplaceAsync(path, content, ct);
         }
         finally { _gate.Release(); }
     }

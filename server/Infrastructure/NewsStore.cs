@@ -9,7 +9,7 @@ public sealed class NewsStore : INewsStore
     readonly SemaphoreSlim _gate = new(1, 1);
     readonly Action<string, string, bool> _move;
 
-    public NewsStore(IWebHostEnvironment env) : this(env, File.Move) { }
+    public NewsStore(IWebHostEnvironment env) : this(env, (s, d, o) => AtomicFile.Move(s, d, o)) { }
 
     internal NewsStore(IWebHostEnvironment env, Action<string, string, bool> move)
     {
@@ -47,10 +47,8 @@ public sealed class NewsStore : INewsStore
             var removed = lines.Length - retained.Length;
             if (removed == 0) return 0;
             Directory.CreateDirectory(_root);
-            var temporary = path + ".tmp";
-            await File.WriteAllTextAsync(temporary,
+            await AtomicFile.WriteReplaceAsync(path,
                 string.Join("\n", retained) + (retained.Length > 0 ? "\n" : ""), ct);
-            File.Move(temporary, path, true);
             return removed;
         }
         finally { _gate.Release(); }
@@ -138,9 +136,7 @@ public sealed class NewsStore : INewsStore
         {
             Directory.CreateDirectory(_root);
             var path = Path.Combine(_root, file);
-            var temporary = path + ".tmp";
-            await File.WriteAllTextAsync(temporary, content, ct);
-            File.Move(temporary, path, true);
+            await AtomicFile.WriteReplaceAsync(path, content, ct);
         }
         finally { _gate.Release(); }
     }

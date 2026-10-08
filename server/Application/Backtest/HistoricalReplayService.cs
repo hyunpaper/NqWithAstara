@@ -516,14 +516,12 @@ public sealed class HistoricalReplayService
     {
         Directory.CreateDirectory(replayRoot);
         var path = Path.Combine(replayRoot, "conditional-model-evaluation.json");
-        var temporary = path + ".tmp";
         var json = System.Text.Json.JsonSerializer.Serialize(evaluation,
             new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)
             {
                 WriteIndented = true
             });
-        await File.WriteAllTextAsync(temporary, json, ct);
-        File.Move(temporary, path, true);
+        await AtomicFile.WriteReplaceAsync(path, json, ct);
     }
 
     static double Gross(SimTrade trade) => trade.Side == TradeSide.Long
