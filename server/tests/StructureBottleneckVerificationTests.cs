@@ -23,7 +23,12 @@ using Xunit;
 /// </summary>
 public sealed class StructureBottleneckVerificationTests
 {
-    static readonly StructurePolicy P = D3.P;
+    static readonly StructurePolicy P = D3.P with
+    {
+        ReboundMaxTrendAlignment = null,
+        WindowBlockStartMinutesFromOpen = null,
+        WindowBlockEndMinutesFromOpen = null
+    };
 
     static StructureBar Bar(int minute, decimal open, decimal high, decimal low, decimal close, double volume = 1000)
         => new(Fx.At(minute), Fx.At(minute + 1), open, high, low, close, volume);

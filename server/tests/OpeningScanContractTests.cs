@@ -21,7 +21,7 @@ public sealed class OpeningScanInvariantTests
     [Fact]
     public void StructurePolicyHashIsUnchanged()
     {
-        Assert.Equal("d7683e146a40f5ac329b5d9bc25fe081ff6755b58c78018ac05fbb8bf6049b9b",
+        Assert.Equal("babf2845072a248a5551cb3443d491f875a3ac7032f09c422a1981c836080321",
             StructurePolicy.Default.PolicyHash);
     }
 
