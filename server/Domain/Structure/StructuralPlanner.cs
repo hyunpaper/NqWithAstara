@@ -114,6 +114,12 @@ public static class StructuralPlanner
     /// <summary>#209 §9.3: netR이 <see cref="StructurePolicy.MaxNetR"/>를 넘었다. 진입가가 무효화 지점에 붙어 있다는 신호다.</summary>
     public const string ExcessiveRewardToRisk = "EXCESSIVE_REWARD_TO_RISK";
     public const string RiskTooWide = "RISK_TOO_WIDE";
+
+    /// <summary>#245 A1: 실효 목표 gross %가 <see cref="StructurePolicy.AdaptiveMinimumTargetFeeMultiple"/>×왕복 수수료 미만이다.</summary>
+    public const string TargetBelowFeeMultiple = "TARGET_BELOW_FEE_MULTIPLE";
+
+    /// <summary>#245 §9.1 U1: (왕복 수수료 + 유효 스프레드)가 손절폭(1R)의 <see cref="StructurePolicy.MaxFeeToRiskRatio"/>배를 넘었다. 고정 비용이 위험을 잠식하는 작은 구조다.</summary>
+    public const string FeeToRiskTooHigh = "FEE_TO_RISK_TOO_HIGH";
     public const string StopNotBelowEntry = "STOP_NOT_BELOW_ENTRY";
     public const string StopNotAboveEntry = "STOP_NOT_ABOVE_ENTRY";
     public const string StopNotPositive = "STOP_NOT_POSITIVE";
@@ -225,6 +231,14 @@ public static class StructuralPlanner
                     : null);
             var minimumStop = noiseFloor is { } floor && floor > fee ? floor : fee;
             if (stopDistance < minimumStop) reasons.Add(StopInsideCost);
+
+            // ── #245 U1 비용 대비 손절폭 하한. StopInsideCost(fee/risk>1 등가)보다 이른 거절 선이다 ──
+            // 고정 수수료 + 유효 스프레드가 1R(손절폭)의 r배를 넘으면 구조가 비용에 비해 너무 작다는 뜻이라 거절한다.
+            // 비용 off에서는 variableCost=0이라 fee만, tiered에서는 spread가 더해져 실제 왕복 비용으로 판정한다.
+            // StopInsideCost와 달리 ATR이 아니라 "비용/위험" 비율만 보며 손절을 넓히지 않는다(§19-5).
+            if (policy.MaxFeeToRiskRatio is { } maxFeeToRisk && stopDistance > 0 &&
+                (double)((fee + variableCost) / stopDistance) > maxFeeToRisk)
+                reasons.Add(FeeToRiskTooHigh);
         }
 
         // ── §9.2 목표: side에 맞는 가장 가까운 구조 앞 ──
@@ -259,6 +273,11 @@ public static class StructuralPlanner
                 netR = netReward.Value / netRisk.Value;
                 if (netReward > 0 && netR < (decimal)MinimumNetRFor(request.Kind, policy)) reasons.Add(InsufficientRewardToRisk);
                 if (netReward > 0 && netR > (decimal)policy.MaxNetR) reasons.Add(ExcessiveRewardToRisk);
+
+                // #245 A1: 손절·목표는 그대로 두고 진입 여부만 본다. 실효 목표는 체결 시 2R 상한(StructuralSimulation.Enter)과 같은 규칙이다.
+                if (policy.AdaptiveMinimumTargetFeeMultiple is { } feeMultiple &&
+                    EffectiveTargetPercent(entry, s2, t2, policy) < feeMultiple * policy.RoundTripFeePercent)
+                    reasons.Add(TargetBelowFeeMultiple);
             }
         }
 
@@ -287,6 +306,15 @@ public static class StructuralPlanner
     /// <summary>REBOUND 전용 상한이 있으면 그 값, 없으면 공통 <see cref="StructurePolicy.MaxRiskPercent"/>(§9.1, #245).</summary>
     static double MaxRiskPercentFor(string kind, StructurePolicy policy) =>
         kind == ReboundKind && policy.ReboundMaxRiskPercent is { } rebound ? rebound : policy.MaxRiskPercent;
+
+    /// <summary>체결 시 2R 상한을 반영한 목표의 진입 대비 gross %(#245 A1).</summary>
+    static double EffectiveTargetPercent(decimal entry, decimal stop, decimal target, StructurePolicy policy)
+    {
+        var reward = Math.Abs(target - entry);
+        if (policy.EnableTwoRFeeBreakEvenStop && policy.CapStructuralTargetAtTwoR)
+            reward = Math.Min(reward, 2 * Math.Abs(entry - stop));
+        return (double)(reward / entry) * 100;
+    }
 
     /// <summary>REBOUND 전용 최소 netR이 있으면 그 값, 없으면 공통 <see cref="StructurePolicy.MinimumNetR"/>(§9.3, #245).</summary>
     static double MinimumNetRFor(string kind, StructurePolicy policy) =>

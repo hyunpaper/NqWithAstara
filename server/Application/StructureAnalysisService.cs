@@ -571,6 +571,14 @@ public sealed class StructureAnalysisService(
                     await pendingEntries.RemoveAsync(snapshot.Symbol);
                     return new ActiveEntryResult(candidates, false, benchmarkDecision.Reason);
                 }
+                var chartTaDecision = ChartTaEntryGate.Evaluate(_policy, stored.Context.PlanSnapshot.Kind,
+                    stored.Pending.Side, completedBars, benchmark?.Bars,
+                    stored.Pending.ConfirmationBarStart.AddMinutes(1));
+                if (!chartTaDecision.Allowed)
+                {
+                    await pendingEntries.RemoveAsync(snapshot.Symbol);
+                    return new ActiveEntryResult(candidates, false, chartTaDecision.Reason);
+                }
                 var claimed = await pendingEntries.ClaimAndPersistConfirmationAsync(snapshot.Symbol, confirmation, now);
                 if (claimed is null) return new ActiveEntryResult(candidates, false, "V5_PENDING_ALREADY_CLAIMED");
                 var pendingContext = claimed.Context;
@@ -643,6 +651,14 @@ public sealed class StructureAnalysisService(
                 {
                     await pendingEntries.RemoveAsync(snapshot.Symbol);
                     return Blocked(candidates, chosen, benchmarkDecision.Reason);
+                }
+                var chartTaDecision = ChartTaEntryGate.Evaluate(_policy, stored.Context.PlanSnapshot.Kind,
+                    stored.Pending.Side, completedBars, benchmark?.Bars,
+                    stored.Pending.ConfirmationBarStart.AddMinutes(1));
+                if (!chartTaDecision.Allowed)
+                {
+                    await pendingEntries.RemoveAsync(snapshot.Symbol);
+                    return Blocked(candidates, chosen, chartTaDecision.Reason);
                 }
                 var claimed = await pendingEntries.ClaimAndPersistConfirmationAsync(snapshot.Symbol, confirmation, now);
                 if (claimed is null) return Blocked(candidates, chosen, "V5_PENDING_ALREADY_CLAIMED");

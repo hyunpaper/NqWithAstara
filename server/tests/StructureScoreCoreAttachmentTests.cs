@@ -188,7 +188,13 @@ public sealed class StructureScoreCoreAttachmentTests
     public async Task replay_거래는_모두_unavailable_참조를_달고_진입_수는_체결_진단과_일치한다()
     {
         var run = await new HistoricalStructureTradeReplay(new RandomWalkBars(6),
-                StructurePolicy.Default with { RequireCompleteLiquidityCost = false })
+                StructurePolicy.Default with
+                {
+                    RequireCompleteLiquidityCost = false,
+                    ReboundMaxTrendAlignment = null,
+                    WindowBlockStartMinutesFromOpen = null,
+                    WindowBlockEndMinutesFromOpen = null
+                })
             .RunDetailedAsync(new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 9), ["TSLA"], default);
 
         var trades = run.Trades["TSLA"];

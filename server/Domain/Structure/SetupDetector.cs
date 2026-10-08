@@ -141,6 +141,8 @@ public static class SetupDetector
     public const string CodePullbackTooFarFromVwap = "PULLBACK_TOO_FAR_FROM_VWAP";
     public const string CodeBreakoutTooFarFromVwap = "BREAKOUT_TOO_FAR_FROM_VWAP";
     public const string CodeReboundEntryQualityTooLow = "REBOUND_ENTRY_QUALITY_TOO_LOW";
+    /// <summary>REBOUND 신규 진입이 개장 후 허용 상한(ReboundMaxMinutesAfterOpen)을 지난 거절 사유(§9.3, #245 G1).</summary>
+    public const string CodeReboundAfterMaxMinutes = "REBOUND_AFTER_MAX_MINUTES";
     public const string CodeBreakoutBelowVwap = "BREAKOUT_BELOW_VWAP";
     public const string CodeReboundNetRTooHigh = "REBOUND_NET_R_TOO_HIGH";
 
@@ -549,6 +551,9 @@ public static class SetupDetector
         foreach (var reason in quality.Reasons) rejections.Add(reason);
         if (RejectsLowQualityRebound(hypothesis.Kind, quality.Score, policy))
             rejections.Add(CodeReboundEntryQualityTooLow);
+        if (hypothesis.Kind == SetupKind.Rebound && policy.ReboundMaxMinutesAfterOpen is { } reboundCap &&
+            (triggerConfirmedAt - request.SessionStart).TotalMinutes >= reboundCap)
+            rejections.Add(CodeReboundAfterMaxMinutes);
 
         var vwapDistance = request.Trend.Vwap is { } vwap && request.Trend.Atr1m is > 0 &&
                            double.IsFinite(vwap) && double.IsFinite(request.Trend.Atr1m.Value)

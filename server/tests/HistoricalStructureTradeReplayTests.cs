@@ -209,7 +209,13 @@ public sealed class HistoricalStructureTradeReplayTests
 
     static Task<HistoricalStructureTradeReplay.ReplayRun> RunRandomWalk(IBarStore bars,
         IReadOnlyDictionary<string, StockInfo>? metadata) =>
-        new HistoricalStructureTradeReplay(bars, StructurePolicy.Default with { RequireCompleteLiquidityCost = false },
+        new HistoricalStructureTradeReplay(bars, StructurePolicy.Default with
+                {
+                    RequireCompleteLiquidityCost = false,
+                    ReboundMaxTrendAlignment = null,
+                    WindowBlockStartMinutesFromOpen = null,
+                    WindowBlockEndMinutesFromOpen = null
+                },
                 symbolMetadata: metadata)
             .RunDetailedAsync(new DateOnly(2026, 9, 8), new DateOnly(2026, 9, 9), ["TSLA"], default);
 

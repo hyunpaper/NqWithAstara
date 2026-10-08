@@ -7,7 +7,7 @@ using Xunit;
 /// <summary>이슈 #65 — 코호트 오염·저장 계약 회귀.</summary>
 public sealed class StructureCohortContractTests
 {
-    static readonly StructurePolicy P = StructurePolicy.Default;
+    static readonly StructurePolicy P = StructurePolicy.Default with { ReboundMaxTrendAlignment = null, WindowBlockStartMinutesFromOpen = null, WindowBlockEndMinutesFromOpen = null };
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     const int TriggerMinute = 30;
 

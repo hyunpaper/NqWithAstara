@@ -10,7 +10,10 @@ public sealed class StructureTrendDirectionGateTests
     static readonly StructurePolicy P = D2.WideNetR with
     {
         AllowTransitionPullback = true,
-        AllowTransitionBreakout = true
+        AllowTransitionBreakout = true,
+        ReboundMaxTrendAlignment = null,
+        WindowBlockStartMinutesFromOpen = null,
+        WindowBlockEndMinutesFromOpen = null
     };
     const int TriggerMinute = 30;
 
