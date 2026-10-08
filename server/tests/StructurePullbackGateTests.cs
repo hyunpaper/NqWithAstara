@@ -56,22 +56,28 @@ public sealed class StructurePullbackGateTests
     static EntryCandidate Pullback(SetupDetectionResult result) =>
         result.Candidates.Single(x => x.Kind == SetupKind.Pullback && x.Side == TradeSide.Long);
 
+    static readonly StructurePolicy GatesOff =
+        StructurePolicy.Default with { PullbackMaxAtrPercent = null, PullbackMaxGapDownPercent = null };
+
     [Fact]
-    public void NullGatesKeepTheDefaultHashAndCanonicalJson()
+    public void DefaultCarriesBothGatesAndNullingThemRemovesThemFromCanonicalJson()
     {
-        var json = StructurePolicy.Default.CanonicalJson;
-        Assert.Null(StructurePolicy.Default.PullbackMaxAtrPercent);
-        Assert.Null(StructurePolicy.Default.PullbackMaxGapDownPercent);
-        Assert.DoesNotContain("PullbackMaxAtrPercent", json);
-        Assert.DoesNotContain("PullbackMaxGapDownPercent", json);
+        Assert.Equal(.25, StructurePolicy.Default.PullbackMaxAtrPercent);
+        Assert.Equal(5.0, StructurePolicy.Default.PullbackMaxGapDownPercent);
+        var defaultJson = StructurePolicy.Default.CanonicalJson;
+        Assert.Contains("\"PullbackMaxAtrPercent\":0.25", defaultJson);
+        Assert.Contains("\"PullbackMaxGapDownPercent\":5", defaultJson);
+        var offJson = GatesOff.CanonicalJson;
+        Assert.DoesNotContain("PullbackMaxAtrPercent", offJson);
+        Assert.DoesNotContain("PullbackMaxGapDownPercent", offJson);
     }
 
     [Fact]
     public void SettingAGateChangesTheHash()
     {
-        var baseline = StructurePolicy.Default.PolicyHash;
-        var atr = StructurePolicy.Default with { PullbackMaxAtrPercent = .25 };
-        var gap = StructurePolicy.Default with { PullbackMaxGapDownPercent = 5 };
+        var baseline = GatesOff.PolicyHash;
+        var atr = GatesOff with { PullbackMaxAtrPercent = .25 };
+        var gap = GatesOff with { PullbackMaxGapDownPercent = 5 };
         Assert.NotEqual(baseline, atr.PolicyHash);
         Assert.NotEqual(baseline, gap.PolicyHash);
         Assert.NotEqual(atr.PolicyHash, gap.PolicyHash);
@@ -82,7 +88,7 @@ public sealed class StructurePullbackGateTests
     [Fact]
     public void NullGatesProduceNoPullbackRejection()
     {
-        var pullback = Pullback(Detect(StructurePolicy.Default, PullbackBars(), PullbackZones(), PullbackEpisodes(),
+        var pullback = Pullback(Detect(GatesOff, PullbackBars(), PullbackZones(), PullbackEpisodes(),
             previousDailyClose: 100m));
         Assert.DoesNotContain(SetupDetector.CodePullbackAtrTooHigh, pullback.RejectionCodes);
         Assert.DoesNotContain(SetupDetector.CodePullbackGapDown, pullback.RejectionCodes);
