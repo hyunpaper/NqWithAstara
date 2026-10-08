@@ -90,6 +90,12 @@ public sealed record StructurePolicy
     /// <summary>H3 구조 판정 창(봉, lc−창..lc). null이면 60을 쓰고 hash에 넣지 않는다(#245 H3).</summary>
     [OmitFromPolicyHashWhenEmpty]
     public int? HigherHighStructureWindowBars { get; init; } = 60;
+    /// <summary>PULLBACK 롱 전용. 계획 시점 Atr1m/진입참조가×100이 이 값 이상이면 거절(PULLBACK_ATR_TOO_HIGH). null이면 끄고 hash에 넣지 않는다(#245 H-PB1).</summary>
+    [OmitFromPolicyHashWhenEmpty]
+    public double? PullbackMaxAtrPercent { get; init; }
+    /// <summary>PULLBACK 롱 전용. 세션 시가가 전일 종가 대비 이 값%만큼 이상 갭다운이면 거절(PULLBACK_GAP_DOWN). null이면 끄고 hash에 넣지 않는다(#245 H4).</summary>
+    [OmitFromPolicyHashWhenEmpty]
+    public double? PullbackMaxGapDownPercent { get; init; }
 
     /// <summary>
     /// §9.3 비용 반영 손익비 상한(#209). netR이 이 값을 넘으면 계획을 거절한다. 목표·손절을 조작하지 않는다(§19-5).
