@@ -27,7 +27,9 @@ public sealed class StructureBottleneckVerificationTests
     {
         ReboundMaxTrendAlignment = null,
         WindowBlockStartMinutesFromOpen = null,
-        WindowBlockEndMinutesFromOpen = null
+        WindowBlockEndMinutesFromOpen = null,
+        PullbackMaxAtrPercent = null,
+        PullbackMaxGapDownPercent = null
     };
 
     static StructureBar Bar(int minute, decimal open, decimal high, decimal low, decimal close, double volume = 1000)

@@ -342,7 +342,9 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
             snapshot.SessionEnd, snapshot.AnalysisAsOf, now, build.Bars.Bars, evaluated.Zones,
             evaluated.Episodes, trend, built.Atr1mAtCutoff, snapshot.QuotePrice, snapshot.QuoteAt,
              snapshot.OptionalLiquidity, build.Quality.BlockersForCandidate.Concat(gate.Blockers)
-                 .Concat(acc.Blockers).ToImmutableArray()), sessionPolicy);
+                 .Concat(acc.Blockers).ToImmutableArray(),
+            previousDailyClose: build.DailyBars.IsDefaultOrEmpty
+                ? (decimal?)null : build.DailyBars[^1].Close), sessionPolicy);
         var candidates = ApplyReplayPositionPolicy(StructuralLifecycle.ApplyLive(
             StructuralLifecycle.ApplyLatch(s.Latch, detected.Candidates, gate.AllowNewTrigger, sessionPolicy,
                 evaluated.Zones), snapshot.QuotePrice, now));
