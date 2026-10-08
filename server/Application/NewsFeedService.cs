@@ -475,55 +475,59 @@ public sealed class NewsFeedService(
     public async Task RunRelevanceAdjudicationWorkerAsync(CancellationToken ct)
     {
         await foreach (var id in _relevanceReviews.Reader.ReadAllAsync(ct))
+            await BackgroundIteration.GuardAsync(() => AdjudicateReviewAsync(id, ct), diagnostics,
+                "sbh-relevance-adjudication-loop", ct);
+    }
+
+    async Task AdjudicateReviewAsync(string id, CancellationToken ct)
+    {
+        NewsFeedItem? item;
+        await _gate.WaitAsync(ct);
+        try { item = (await LoadStateAsync(ct))?.Inbox?.FirstOrDefault(x => !x.Processed && x.Item.Id == id)?.Item; }
+        finally { _gate.Release(); }
+        if (item is null || !IsSbhReview(item) || relevanceAdjudicator is null)
         {
-            NewsFeedItem? item;
+            lock (_queuedRelevanceReviews) _queuedRelevanceReviews.Remove(id);
+            return;
+        }
+        state.RelevanceAdjudication("running", "ollama_adjudication", _relevanceReviews.Reader.Count);
+        NewsRelevanceAssessment? assessment = null;
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(options.SbhRelevanceAdjudicationTimeoutSeconds, 1, 30)));
+            assessment = await relevanceAdjudicator.AdjudicateAsync(item, timeout.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
+        catch (Exception exception) { diagnostics.PollFailed("sbh-relevance-adjudication", exception); }
+        if (assessment is null)
+        {
             await _gate.WaitAsync(ct);
-            try { item = (await LoadStateAsync(ct))?.Inbox?.FirstOrDefault(x => !x.Processed && x.Item.Id == id)?.Item; }
-            finally { _gate.Release(); }
-            if (item is null || !IsSbhReview(item) || relevanceAdjudicator is null)
-            {
-                lock (_queuedRelevanceReviews) _queuedRelevanceReviews.Remove(id);
-                continue;
-            }
-            state.RelevanceAdjudication("running", "ollama_adjudication", _relevanceReviews.Reader.Count);
-            NewsRelevanceAssessment? assessment = null;
-            try
-            {
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeout.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(options.SbhRelevanceAdjudicationTimeoutSeconds, 1, 30)));
-                assessment = await relevanceAdjudicator.AdjudicateAsync(item, timeout.Token);
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
-            catch (Exception exception) { diagnostics.PollFailed("sbh-relevance-adjudication", exception); }
-            if (assessment is null)
-            {
-                await _gate.WaitAsync(ct);
-                try { await RecordFailedReviewAsync(id, ct); }
-                finally
-                {
-                    _gate.Release();
-                    lock (_queuedRelevanceReviews) _queuedRelevanceReviews.Remove(id);
-                }
-                continue;
-            }
-            await _gate.WaitAsync(ct);
-            try
-            {
-                var known = await LoadStateAsync(ct);
-                if (known?.Inbox is null) continue;
-                var inbox = known.Inbox.Select(x => x.Item.Id == id && !x.Processed && IsSbhReview(x.Item)
-                    ? x with { Item = x.Item with { Relevance = assessment }, Processed = assessment.Decision == NewsRelevanceDecisions.Exclude }
-                    : x).ToArray();
-                await SaveStateAsync(known with { Inbox = inbox }, ct);
-                if (assessment.Decision == NewsRelevanceDecisions.Exclude)
-                    state.RelevanceObserved(assessment, item.Title, clock.GetUtcNow(), countDecision: false);
-                state.RelevanceAdjudication("completed", assessment.Reason, _relevanceReviews.Reader.Count);
-            }
+            try { await RecordFailedReviewAsync(id, ct); }
             finally
             {
                 _gate.Release();
                 lock (_queuedRelevanceReviews) _queuedRelevanceReviews.Remove(id);
             }
+            return;
+        }
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var known = await LoadStateAsync(ct);
+            if (known?.Inbox is null) return;
+            var inbox = known.Inbox.Select(x => x.Item.Id == id && !x.Processed && IsSbhReview(x.Item)
+                ? x with { Item = x.Item with { Relevance = assessment }, Processed = assessment.Decision == NewsRelevanceDecisions.Exclude }
+                : x).ToArray();
+            await SaveStateAsync(known with { Inbox = inbox }, ct);
+            if (assessment.Decision == NewsRelevanceDecisions.Exclude)
+                state.RelevanceObserved(assessment, item.Title, clock.GetUtcNow(), countDecision: false);
+            state.RelevanceAdjudication("completed", assessment.Reason, _relevanceReviews.Reader.Count);
+        }
+        finally
+        {
+            _gate.Release();
+            lock (_queuedRelevanceReviews) _queuedRelevanceReviews.Remove(id);
         }
     }
 

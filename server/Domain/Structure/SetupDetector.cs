@@ -102,6 +102,7 @@ public static class SetupDetector
 {
     public const string BlockerStaleLatestBar = "STALE_LATEST_BAR";
     public const string BlockerAfterEntryCutoff = "AFTER_ENTRY_CUTOFF";
+    public const string BlockerEntryWindowBlocked = "ENTRY_WINDOW_BLOCKED";
     public const string CodeHighVolatilityRangeBlocked = "HIGH_VOLATILITY_RANGE_BLOCKED";
     public const string BlockerMissingQuote = "MISSING_QUOTE";
     public const string BlockerStaleQuote = "STALE_QUOTE";
@@ -142,6 +143,11 @@ public static class SetupDetector
     public const string CodeReboundEntryQualityTooLow = "REBOUND_ENTRY_QUALITY_TOO_LOW";
     public const string CodeBreakoutBelowVwap = "BREAKOUT_BELOW_VWAP";
     public const string CodeReboundNetRTooHigh = "REBOUND_NET_R_TOO_HIGH";
+
+    /// <summary>추세가 이미 진입 방향으로 정렬된 뒤의 REBOUND 진입을 막는 거절 사유(#245 U6).</summary>
+    public const string CodeReboundTrendAligned = "REBOUND_TREND_ALIGNED";
+    /// <summary>무효화 지점에 너무 붙은 REBOUND 진입을 막는 거절 사유(#245 U6).</summary>
+    public const string CodeReboundInvalidationTooClose = "REBOUND_INVALIDATION_TOO_CLOSE";
     public const string CodeTransitionPullbackBlocked = "TRANSITION_PULLBACK_BLOCKED";
     public const string CodeTransitionBreakoutBlocked = "TRANSITION_BREAKOUT_BLOCKED";
 
@@ -186,6 +192,8 @@ public static class SetupDetector
         // §9.3 정규장 마감 40분 전 신규 진입 금지(v4 운영 제한 유지) / 정규장 밖 신규 진입 금지(§5.1).
         if (triggerConfirmedAt > request.SessionEnd - TimeSpan.FromMinutes(policy.EntryCutoffBeforeCloseMinutes))
             readyBlockers.Add(BlockerAfterEntryCutoff);
+        if (policy.IsInsideEntryBlockWindow(triggerConfirmedAt - request.SessionStart))
+            readyBlockers.Add(BlockerEntryWindowBlocked);
         if (trigger.Start < request.SessionStart || triggerConfirmedAt > request.SessionEnd)
             readyBlockers.Add(BlockerOutsideSession);
 
@@ -515,6 +523,12 @@ public static class SetupDetector
         var notes = new SortedSet<string>(hypothesis.Notes, StringComparer.Ordinal);
         foreach (var note in entryNotes) notes.Add(note);
 
+        // REBOUND 전용 거절(U6)과 EntryEvidence가 같은 값을 쓰도록 여기서 한 번만 계산한다(#245 U6).
+        var trendAlignment = request.Trend.SignedTrend is { } signedForAlignment && double.IsFinite(signedForAlignment)
+            ? Math.Clamp((side == TradeSide.Long ? signedForAlignment : -signedForAlignment) / 100d, -1d, 1d) : (double?)null;
+        var distance = planning.Stop is { } stopDistance && request.Atr1mAtStructureCutoff is > 0
+            ? (double)Math.Abs(entryReference - stopDistance) / request.Atr1mAtStructureCutoff.Value : (double?)null;
+
         var rejections = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var code in planning.ReasonCodes) rejections.Add(code);
         var structureWaived = false;
@@ -569,6 +583,10 @@ public static class SetupDetector
         var expectedNetR = planning.NetR is { } netR ? (double)netR : (double?)null;
         if (RejectsReboundNetR(hypothesis.Kind, expectedNetR, policy))
             rejections.Add(CodeReboundNetRTooHigh);
+        if (RejectsReboundTrendAligned(hypothesis.Kind, trendAlignment, policy))
+            rejections.Add(CodeReboundTrendAligned);
+        if (RejectsReboundInvalidationTooClose(hypothesis.Kind, distance, policy))
+            rejections.Add(CodeReboundInvalidationTooClose);
         if (expectedNetR is { } expected && expected <= policy.MinimumExpectedNetR)
             rejections.Add("EXPECTED_NET_R_NON_POSITIVE");
         if (expectedNetR is { } feature && !WalkForwardExpectedValue.Allows(policy, feature))
@@ -644,10 +662,6 @@ public static class SetupDetector
         // 같은 note를 달면 코호트가 "구조 결측 후보 전체"로 희석된다(#65).
         if (structureWaived && disposition == CandidateDisposition.Ready) notes.Add(NoteReadyWithout5mStructure);
 
-        var trendAlignment = request.Trend.SignedTrend is { } signed && double.IsFinite(signed)
-            ? Math.Clamp((side == TradeSide.Long ? signed : -signed) / 100d, -1d, 1d) : (double?)null;
-        var distance = planning.Stop is { } stopDistance && request.Atr1mAtStructureCutoff is > 0
-            ? (double)Math.Abs(entryReference - stopDistance) / request.Atr1mAtStructureCutoff.Value : (double?)null;
         var planCosts = planning.Plan?.Costs;
         var forecast = ConditionalReturnForecaster.Evaluate(new ConditionalReturnForecastInput(
             request.AnalysisAsOf, side, quality.Score is { } qualityScore ? qualityScore / 100d : null,
@@ -736,6 +750,16 @@ public static class SetupDetector
     public static bool RejectsReboundNetR(SetupKind kind, double? expectedNetR, StructurePolicy policy) =>
         policy.RequireMaximumReboundNetR && kind == SetupKind.Rebound &&
         expectedNetR is { } netR && double.IsFinite(netR) && netR > policy.MaximumReboundNetR;
+
+    /// <summary>REBOUND 계획의 추세정렬이 상한 이상이면 거절한다(#245 U6). null 정책이면 거절하지 않는다.</summary>
+    public static bool RejectsReboundTrendAligned(SetupKind kind, double? trendAlignment, StructurePolicy policy) =>
+        kind == SetupKind.Rebound && policy.ReboundMaxTrendAlignment is { } max &&
+        trendAlignment is { } align && double.IsFinite(align) && align >= max;
+
+    /// <summary>REBOUND 계획의 무효화 거리(ATR 배수)가 하한 미만이면 거절한다(#245 U6). null 정책이면 거절하지 않는다.</summary>
+    public static bool RejectsReboundInvalidationTooClose(SetupKind kind, double? distanceToInvalidationAtr,
+        StructurePolicy policy) => kind == SetupKind.Rebound && policy.ReboundMinInvalidationAtr is { } min &&
+        distanceToInvalidationAtr is { } dist && double.IsFinite(dist) && dist < min;
 
     /// <summary>§8 stable EventId=(symbol,sessionStart,kind,zoneId,triggerBarStart).</summary>
     public static string EventId(string symbol, DateTimeOffset sessionStart, string kindName, string zoneId,
