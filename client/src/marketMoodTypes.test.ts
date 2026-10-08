@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { marketMoodBadge, normalizeMarketMood, policyRateDelayLabel, policyRateStatusLabel } from "./marketMoodTypes";
+import { marketMoodBadge, marketMoodImpactLabel, normalizeMarketMood, policyRateDelayLabel, policyRateStatusLabel } from "./marketMoodTypes";
 
 describe("시장 분위기 API 계약", () => {
   it("프록시·지연·휴장 근거를 보존한다", () => {
@@ -24,14 +24,16 @@ describe("시장 분위기 API 계약", () => {
         rates: [{ key: "fed", label: "미 연준", value: 4, previous: 3.75, asOf: "2026-09-16", note: "목표범위", checkedAt: "2026-09-22T15:00:00Z", source: "SBHNews 표시값 (원천 미확인)", delayStatus: "fresh", reason: null }],
       },
       assets: [
-        { key: "gold", label: "금", symbol: "GLD", assetKind: "commodity", proxy: true, isAvailable: true, direction: "up", changePercent: 1.25, asOf: "2026-09-22T14:59:00Z", source: "Toss", delayStatus: "fresh", sessionStatus: "open", reason: null },
-        { key: "oil", label: "유가", symbol: "USO", assetKind: "commodity", proxy: true, isAvailable: false, direction: "unknown", changePercent: null, asOf: null, source: "Toss", delayStatus: "unavailable", sessionStatus: "closed", reason: "휴장" },
+        { key: "gold", label: "금", symbol: "GLD", assetKind: "commodity", proxy: true, isAvailable: true, direction: "up", changePercent: 1.25, asOf: "2026-09-22T14:59:00Z", source: "Toss", delayStatus: "fresh", sessionStatus: "open", reason: null, impactSign: -1, contribution: -1.25 },
+        { key: "oil", label: "유가", symbol: "USO", assetKind: "commodity", proxy: true, isAvailable: false, direction: "unknown", changePercent: null, asOf: null, source: "Toss", delayStatus: "unavailable", sessionStatus: "closed", reason: "휴장", impactSign: -1, contribution: null },
       ],
     });
 
     expect(mood?.evidence).toEqual(["gold"]);
     expect(mood?.economicCalendar).toMatchObject({ status: "unsupported", events: [], reason: "검증된 무료 제공자가 없습니다." });
     expect(mood?.assets[0].proxy).toBe(true);
+    expect(mood?.assets[0]).toMatchObject({ impactSign: -1, contribution: -1.25 });
+    expect(marketMoodImpactLabel(mood!.assets[0])).toBe("시장 악재");
     expect(mood?.assets[1]).toMatchObject({ isAvailable: false, sessionStatus: "closed", reason: "휴장" });
     expect(mood?.policyRates).toMatchObject({ status: "available", source: "SBHNews 표시값 (원천 미확인)", rates: [{ key: "fed", value: 4, previous: 3.75, delayStatus: "fresh" }] });
     expect(marketMoodBadge(mood!)).toEqual({ label: "시장 분위기 상승 +1.25%", className: "news-badge positive" });
@@ -50,6 +52,13 @@ describe("시장 분위기 API 계약", () => {
       policyRates: { status: "future", rates: [{ key: "fed", label: "미 연준", value: "4", delayStatus: "future" }] },
     });
     expect(mood?.policyRates).toEqual({ status: "unsupported", checkedAt: null, source: "미연결", reason: null, rates: [] });
+  });
+
+  it("나스닥(QQQ)이 빠지면 불충분으로 표시하고 방향을 내지 않는다", () => {
+    const mood = normalizeMarketMood({ status: "insufficient", score: null, direction: "unavailable", assets: [] });
+    expect(mood?.status).toBe("insufficient");
+    expect(mood?.direction).toBe("unavailable");
+    expect(marketMoodBadge(mood!).label).toBe("시장 분위기 불충분");
   });
 
   it("정책금리 상태를 한국어로 구분한다", () => {

@@ -12,11 +12,13 @@ export type MarketMoodAsset = {
   delayStatus: "fresh" | "stale" | "unavailable";
   sessionStatus: "open" | "closed" | "unknown";
   reason: string | null;
+  impactSign: number;
+  contribution: number | null;
 };
 
 export type MarketMoodResponse = {
   asOf: string;
-  status: "available" | "partial" | "unavailable";
+  status: "available" | "partial" | "insufficient" | "unavailable";
   score: number | null;
   direction: "up" | "down" | "flat" | "unavailable";
   availableCount: number;
@@ -109,6 +111,8 @@ export const normalizeMarketMood = (value: unknown): MarketMoodResponse | null =
       delayStatus: delayStatus === "fresh" || delayStatus === "stale" ? delayStatus : "unavailable",
       sessionStatus: sessionStatus === "open" || sessionStatus === "closed" ? sessionStatus : "unknown",
       reason: text(asset.reason),
+      impactSign: finite(asset.impactSign) ?? 0,
+      contribution: finite(asset.contribution),
     }];
   });
   const status = text(root.status);
@@ -163,7 +167,7 @@ export const normalizeMarketMood = (value: unknown): MarketMoodResponse | null =
   }) : [];
   return {
     asOf: text(root.asOf) ?? "",
-    status: status === "available" || status === "partial" ? status : "unavailable",
+    status: status === "available" || status === "partial" || status === "insufficient" ? status : "unavailable",
     score: finite(root.score),
     direction: direction === "up" || direction === "down" || direction === "flat" ? direction : "unavailable",
     availableCount: finite(root.availableCount) ?? assets.filter((asset) => asset.isAvailable).length,
@@ -194,6 +198,7 @@ export const normalizeMarketMood = (value: unknown): MarketMoodResponse | null =
 };
 
 export const marketMoodBadge = (mood: MarketMoodResponse) => {
+  if (mood.status === "insufficient") return { label: "시장 분위기 불충분", className: "news-badge neutral" };
   if (mood.score == null) return { label: "시장 분위기 정보 없음", className: "news-badge neutral" };
   const value = `${mood.score >= 0 ? "+" : ""}${mood.score.toFixed(2)}%`;
   if (mood.direction === "up") return { label: `시장 분위기 상승 ${value}`, className: "news-badge positive" };
@@ -205,6 +210,13 @@ export const marketMoodDirectionLabel = (asset: MarketMoodAsset): string => {
   const direction = asset.direction === "up" ? "상승" : asset.direction === "down" ? "하락" : asset.direction === "flat" ? "보합" : "";
   if (!asset.isAvailable) return direction ? `집계 제외 · ${direction}` : "집계 제외";
   return direction || "방향 없음";
+};
+
+export const marketMoodImpactLabel = (asset: MarketMoodAsset): string | null => {
+  if (asset.contribution == null || asset.impactSign === 0) return null;
+  if (asset.contribution > 0) return "시장 호재";
+  if (asset.contribution < 0) return "시장 악재";
+  return "시장 중립";
 };
 
 export const policyRateStatusLabel = (status: MarketPolicyRateSnapshot["status"]): string => ({

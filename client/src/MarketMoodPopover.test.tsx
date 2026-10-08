@@ -29,8 +29,8 @@ const mood: MarketMoodResponse = {
     ],
   },
   assets: [
-    { key: "gold", label: "금", symbol: "GLD", assetKind: "commodity", proxy: true, isAvailable: true, direction: "up", changePercent: 1.25, asOf: "2026-09-22T14:59:00Z", source: "Toss", delayStatus: "fresh", sessionStatus: "open", reason: null },
-    { key: "oil", label: "유가", symbol: "USO", assetKind: "commodity", proxy: true, isAvailable: false, direction: "unknown", changePercent: null, asOf: null, source: "Toss", delayStatus: "unavailable", sessionStatus: "closed", reason: "휴장이라 집계에서 제외했습니다." },
+    { key: "gold", label: "금", symbol: "GLD", assetKind: "commodity", proxy: true, isAvailable: true, direction: "up", changePercent: 1.25, asOf: "2026-09-22T14:59:00Z", source: "Toss", delayStatus: "fresh", sessionStatus: "open", reason: null, impactSign: -1, contribution: -1.25 },
+    { key: "oil", label: "유가", symbol: "USO", assetKind: "commodity", proxy: true, isAvailable: false, direction: "unknown", changePercent: null, asOf: null, source: "Toss", delayStatus: "unavailable", sessionStatus: "closed", reason: "휴장이라 집계에서 제외했습니다.", impactSign: -1, contribution: null },
   ],
 };
 
@@ -41,7 +41,8 @@ describe("MarketMoodPopover", () => {
     fireEvent.focus(trigger);
     const dialog = screen.getByRole("dialog", { name: "시장 분위기 근거" });
     expect(dialog.textContent).toContain("금 GLD ETF 프록시");
-    expect(dialog.textContent).toContain("상승 +1.25%");
+    expect(dialog.textContent).toContain("상승 +1.25% → 시장 악재");
+    expect(dialog.textContent).toContain("위험선호 가중 평균 +1.25%");
     expect(dialog.textContent).toContain("휴장이라 집계에서 제외했습니다.");
     expect(dialog.textContent).toContain("발표 2.8%");
     expect(dialog.textContent).toContain("예상 2.7 · 이전 2.6 · 예상 대비 실제 → 국채 영향 부정");
