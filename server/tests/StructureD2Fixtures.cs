@@ -8,7 +8,20 @@ using Astra.Server.Domain.Structure;
 /// </summary>
 static class D2
 {
-    public static readonly StructurePolicy P = StructurePolicy.Default;
+    /// <summary>통합 묶음(#245) 진입 필터를 모두 끈 메커니즘 검증용 기본 정책. 운영 기본값과 달리 격리 테스트용이다.</summary>
+    public static readonly StructurePolicy P = StructurePolicy.Default with
+    {
+        ReboundMaxTrendAlignment = null,
+        WindowBlockStartMinutesFromOpen = null,
+        WindowBlockEndMinutesFromOpen = null,
+        AdaptiveMinimumTargetFeeMultiple = null,
+        MaxFeeToRiskRatio = null,
+        ReboundMinRelativeStrengthPercent = null,
+        MinDistanceToRecentHighPercent = null,
+        RejectHigherHighHigherLow = null,
+        HigherHighPivotK = null,
+        HigherHighStructureWindowBars = null
+    };
 
     /// <summary>지정한 값을 그대로 갖는 강도. D1 계산은 별도 D1 테스트가 검증한다.</summary>
     public static ZoneStrength Strength(double value, int success = 1, int failed = 0, int families = 2) =>
@@ -33,6 +46,16 @@ static class D2
 
     public static readonly StructurePolicy PreCycle45 = StructurePolicy.Default with
     {
+        ReboundMaxTrendAlignment = null,
+        WindowBlockStartMinutesFromOpen = null,
+        WindowBlockEndMinutesFromOpen = null,
+        AdaptiveMinimumTargetFeeMultiple = null,
+        MaxFeeToRiskRatio = null,
+        ReboundMinRelativeStrengthPercent = null,
+        MinDistanceToRecentHighPercent = null,
+        RejectHigherHighHigherLow = null,
+        HigherHighPivotK = null,
+        HigherHighStructureWindowBars = null,
         RequirePullbackNearVwap = false,
         RequireBreakoutNearVwap = false,
         RequireMinimumReboundEntryQuality = false,
@@ -47,7 +70,20 @@ static class D2
     };
 
     /// <summary>#209 netR 상한 밖의 주제를 다루는 fixture용 정책. 상한 자체는 <c>StructureMaxNetRTests</c>가 고정한다.</summary>
-    public static readonly StructurePolicy WideNetR = StructurePolicy.Default with { MaxNetR = 100 };
+    public static readonly StructurePolicy WideNetR = StructurePolicy.Default with
+    {
+        MaxNetR = 100,
+        ReboundMaxTrendAlignment = null,
+        WindowBlockStartMinutesFromOpen = null,
+        WindowBlockEndMinutesFromOpen = null,
+        AdaptiveMinimumTargetFeeMultiple = null,
+        MaxFeeToRiskRatio = null,
+        ReboundMinRelativeStrengthPercent = null,
+        MinDistanceToRecentHighPercent = null,
+        RejectHigherHighHigherLow = null,
+        HigherHighPivotK = null,
+        HigherHighStructureWindowBars = null
+    };
 
     public static PriceZone Support(decimal lower, decimal upper, double strength = .6, string id = "support-zone",
         int confirmedMinute = 5, bool eligible = true) =>
