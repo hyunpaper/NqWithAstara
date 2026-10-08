@@ -106,7 +106,8 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
             && day >= from && day <= to).Order().ToArray();
         var benchmarkByDay = new Dictionary<string, ImmutableArray<Candle>>(StringComparer.Ordinal);
         if (replayPolicy.RequirePositiveBenchmarkForRebound ||
-            replayPolicy.EnableHalfRFeeBreakEvenStopForPositiveBenchmark)
+            replayPolicy.EnableHalfRFeeBreakEvenStopForPositiveBenchmark ||
+            replayPolicy.ReboundMinRelativeStrengthPercent is not null)
             foreach (var day in days)
                 benchmarkByDay[day] = ConfluenceReplay.Parse(await store.ReadLinesAsync(day, benchmarkSymbol, ct))
                     .Select(x => new Candle(x.Start, (double)x.Open, (double)x.High, (double)x.Low,
@@ -207,7 +208,13 @@ public sealed class HistoricalStructureTradeReplay(IBarStore store, StructurePol
                                     BenchmarkContextReason = benchmark.Reason,
                                     BenchmarkReturnPercent = benchmark.ReturnPercent
                                 });
-                            if (benchmark.Allowed)
+                            var chartTa = ChartTaEntryGate.Evaluate(sessionPolicy,
+                                queued.Context.PlanSnapshot.Kind, queued.Pending.Side, bars,
+                                benchmarkByDay.GetValueOrDefault(day), now);
+                            if (benchmark.Allowed && !chartTa.Allowed)
+                                UpdateDiagnostic(candidateDiagnostics, queued.Pending.EntryEventId,
+                                    row => row with { ExecutionStopReason = chartTa.Reason });
+                            if (benchmark.Allowed && chartTa.Allowed)
                             {
                                 var entered = StructuralSimulation.Enter(result, new StructuralEntryRequest(symbol,
                                     queued.Candidate.TriggerBarStart, now, sessionEnd, queued.Context,
