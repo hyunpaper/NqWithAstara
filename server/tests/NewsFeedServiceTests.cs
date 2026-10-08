@@ -519,7 +519,7 @@ public sealed class NewsFeedServiceTests
     }
 
     [Fact]
-    public async Task OllamaDownKeepsTheArticleQueuedAndReportsDown()
+    public async Task OllamaDownStoresIncludedArticleUnclassifiedAndReportsDown()
     {
         var harness = new Harness();
         harness.Classifier.Respond = _ => new NewsClassificationResult(null, "qwen", 0, false);
@@ -530,9 +530,25 @@ public sealed class NewsFeedServiceTests
         await harness.PollAsync();
 
         Assert.False(harness.State.OllamaOk);
-        Assert.Equal(1, harness.State.Queue);
-        Assert.Empty(harness.Saved());
+        Assert.Equal(0, harness.State.Queue);
+        var saved = Assert.Single(harness.Saved());
+        Assert.Equal("101", saved.Id);
+        Assert.Equal(NewsSentiments.Unclassified, saved.Sentiment);
+        Assert.Equal(0, saved.Strength);
         Assert.Empty(harness.Diagnostics.Failures);
+    }
+
+    [Fact]
+    public async Task 분류기_복구뒤_미분류로_저장된_기사를_재분류한다()
+    {
+        var harness = new Harness();
+        harness.Classifier.Respond = _ => new NewsClassificationResult(null, "qwen", 0, false);
+        harness.Page(1, Item("100", "기준"));
+        await harness.PollAsync();
+
+        harness.Page(1, Item("101", "엔비디아", "nvda"), Item("100", "기준"));
+        await harness.PollAsync();
+        Assert.Equal(NewsSentiments.Unclassified, Assert.Single(harness.Saved()).Sentiment);
 
         harness.Classifier.Respond = _ => new NewsClassificationResult(
             new NewsClassification(["NVDA"], NewsSentiments.Positive, 3, "회복"), "qwen", 10, true);
@@ -540,7 +556,7 @@ public sealed class NewsFeedServiceTests
         await harness.PollAsync();
 
         Assert.True(harness.State.OllamaOk);
-        Assert.Single(harness.Saved());
+        Assert.Equal(NewsSentiments.Positive, harness.Saved().Last(x => x.Id == "101").Sentiment);
     }
 
     [Fact]
@@ -837,7 +853,7 @@ public sealed class NewsFeedServiceTests
     }
 
     [Fact]
-    public async Task 미처리_inbox가_재기동후_한번만_분류된다()
+    public async Task 분류기_불가로_저장된_기사는_재기동뒤_재수집도_재분류도_되지_않는다()
     {
         var harness = new Harness();
         harness.Page(1, Item("100", "기준"));
@@ -845,7 +861,7 @@ public sealed class NewsFeedServiceTests
         harness.Classifier.Respond = _ => new NewsClassificationResult(null, "qwen", 0, false);
         harness.Page(1, Item("101", "복구 기사"), Item("100", "기준"));
         await harness.PollAsync();
-        Assert.Empty(harness.Saved());
+        Assert.Equal(NewsSentiments.Unclassified, Assert.Single(harness.Saved()).Sentiment);
 
         var restarted = new Harness();
         restarted.Store.Texts[NewsFeedService.StateFile] = harness.Store.Texts[NewsFeedService.StateFile];
@@ -853,8 +869,8 @@ public sealed class NewsFeedServiceTests
         await restarted.PollAsync();
         await restarted.PollAsync();
 
-        Assert.Single(restarted.Classifier.Requests);
-        Assert.Single(restarted.Saved());
+        Assert.Empty(restarted.Classifier.Requests);
+        Assert.Empty(restarted.Saved());
         var state = JsonSerializer.Deserialize<NewsFeedState>(restarted.Store.Texts[NewsFeedService.StateFile],
             new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
         Assert.All(state.Inbox!, entry => Assert.True(entry.Processed));

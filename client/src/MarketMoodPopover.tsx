@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { absoluteTimeKst } from "./newsFormat";
-import { marketMoodBadge, marketMoodDirectionLabel, policyRateDelayLabel, policyRateStatusLabel, type MarketMoodResponse } from "./marketMoodTypes";
+import { marketMoodBadge, marketMoodDirectionLabel, marketMoodImpactLabel, policyRateDelayLabel, policyRateStatusLabel, type MarketMoodResponse } from "./marketMoodTypes";
 
 const rateValue = (value: number | null) => value == null ? "미제공" : `${value.toLocaleString("ko-KR", { maximumFractionDigits: 4 })}%`;
 const rateDate = (value: string | null) => value || "기준일 미제공";
@@ -82,14 +82,17 @@ export default function MarketMoodPopover({ mood }: { mood: MarketMoodResponse }
     onMouseLeave={scheduleClose}
     onBlur={(event) => keepFocusOpen(event.relatedTarget)}
   >
-    <strong>동일 가중치 평균 {mood.score == null ? "계산 불가" : `${mood.score >= 0 ? "+" : ""}${mood.score.toFixed(2)}%`}</strong>
+    <strong>위험선호 가중 평균 {mood.status === "insufficient" ? "불충분 · 나스닥(QQQ) 없음" : mood.score == null ? "계산 불가" : `${mood.score >= 0 ? "+" : ""}${mood.score.toFixed(2)}%`}</strong>
     <span className="market-mood-summary">집계 {mood.availableCount}/{mood.totalCount} · {absoluteTimeKst(mood.asOf)}</span>
     <ul>
-      {mood.assets.map((asset) => <li key={asset.key} className={asset.isAvailable ? "" : "excluded"}>
-        <span><b>{asset.label}</b> {asset.symbol}{asset.proxy ? " ETF 프록시" : ""}</span>
-        <span>{marketMoodDirectionLabel(asset)}{asset.changePercent == null ? "" : ` ${asset.changePercent >= 0 ? "+" : ""}${asset.changePercent.toFixed(2)}%`}</span>
-        <small>{asset.reason ?? `${absoluteTimeKst(asset.asOf)} · ${asset.source}`}</small>
-      </li>)}
+      {mood.assets.map((asset) => {
+        const impact = marketMoodImpactLabel(asset);
+        return <li key={asset.key} className={asset.isAvailable ? "" : "excluded"}>
+          <span><b>{asset.label}</b> {asset.symbol}{asset.proxy ? " ETF 프록시" : ""}</span>
+          <span>{marketMoodDirectionLabel(asset)}{asset.changePercent == null ? "" : ` ${asset.changePercent >= 0 ? "+" : ""}${asset.changePercent.toFixed(2)}%`}{impact ? ` → ${impact}` : ""}</span>
+          <small>{asset.reason ?? `${absoluteTimeKst(asset.asOf)} · ${asset.source}`}</small>
+        </li>;
+      })}
     </ul>
     <strong>주요 정책금리 · {policyRateStatusLabel(mood.policyRates.status)}</strong>
     <span className="market-mood-summary">{mood.policyRates.source} · 검사 {absoluteTimeKst(mood.policyRates.checkedAt)}</span>
