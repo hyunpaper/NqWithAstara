@@ -15,7 +15,7 @@ public sealed class MarketMoodQueryServiceTests
     static readonly DateTimeOffset SessionStart = Now.AddHours(-1);
 
     [Fact]
-    public async Task AvailableAssetsUseEqualWeightAndExposeProxyEvidence()
+    public async Task SignedRiskDirectionAggregatesAvailableAssets()
     {
         var gateway = OpenGateway();
         gateway.Prices["GLD"] = (110, Now.AddMinutes(-1));
@@ -28,9 +28,16 @@ public sealed class MarketMoodQueryServiceTests
 
         Assert.Equal("available", result.Status);
         Assert.Equal(5, result.AvailableCount);
-        Assert.Equal(0, result.Score);
-        Assert.Equal("flat", result.Direction);
+        Assert.Equal("risk_appetite_signed_average", result.Aggregation);
+        Assert.Equal(2, result.Score);
+        Assert.Equal("up", result.Direction);
         Assert.Equal(["gold", "oil", "nasdaq", "bitcoin", "us-treasury"], result.Evidence);
+        var gold = Assert.Single(result.Assets, asset => asset.Symbol == "GLD");
+        Assert.Equal(-1, gold.ImpactSign);
+        Assert.Equal(-10, gold.Contribution);
+        var oil = Assert.Single(result.Assets, asset => asset.Symbol == "USO");
+        Assert.Equal(-1, oil.ImpactSign);
+        Assert.Equal(10, oil.Contribution);
         Assert.All(result.Assets, asset =>
         {
             Assert.True(asset.Proxy);
@@ -39,6 +46,66 @@ public sealed class MarketMoodQueryServiceTests
             Assert.Equal("open", asset.SessionStatus);
         });
         Assert.Contains(result.Limitations, value => value.Contains("ETF 프록시", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task RisingOilAlonePushesTheMarketDown()
+    {
+        var gateway = OpenGateway();
+        gateway.Prices["USO"] = (103, Now.AddMinutes(-1));
+
+        var result = await Service(gateway).GetAsync();
+
+        Assert.Equal("available", result.Status);
+        Assert.Equal("down", result.Direction);
+        Assert.Equal(-0.6, result.Score);
+        var oil = Assert.Single(result.Assets, asset => asset.Symbol == "USO");
+        Assert.Equal(3, oil.ChangePercent);
+        Assert.Equal(-3, oil.Contribution);
+    }
+
+    [Fact]
+    public async Task RisingNasdaqPushesTheMarketUp()
+    {
+        var gateway = OpenGateway();
+        gateway.Prices["QQQ"] = (102, Now.AddMinutes(-1));
+
+        var result = await Service(gateway).GetAsync();
+
+        Assert.Equal("up", result.Direction);
+        Assert.Equal(0.4, result.Score);
+        var nasdaq = Assert.Single(result.Assets, asset => asset.Symbol == "QQQ");
+        Assert.Equal(1, nasdaq.ImpactSign);
+        Assert.Equal(2, nasdaq.Contribution);
+    }
+
+    [Fact]
+    public async Task MissingNasdaqAnchorYieldsInsufficientWithoutDirection()
+    {
+        var gateway = OpenGateway();
+        gateway.Prices.Remove("QQQ");
+        gateway.Prices["USO"] = (103, Now.AddMinutes(-1));
+
+        var result = await Service(gateway).GetAsync();
+
+        Assert.Equal("insufficient", result.Status);
+        Assert.Null(result.Score);
+        Assert.Equal("unavailable", result.Direction);
+        var nasdaq = Assert.Single(result.Assets, asset => asset.Symbol == "QQQ");
+        Assert.False(nasdaq.IsAvailable);
+    }
+
+    [Fact]
+    public async Task QuoteStampedSlightlyAheadOfNowStaysFresh()
+    {
+        var gateway = OpenGateway();
+        gateway.Prices["QQQ"] = (102, Now.AddSeconds(30));
+
+        var result = await Service(gateway).GetAsync();
+
+        var nasdaq = Assert.Single(result.Assets, asset => asset.Symbol == "QQQ");
+        Assert.True(nasdaq.IsAvailable);
+        Assert.Equal("fresh", nasdaq.DelayStatus);
     }
 
     [Fact]
@@ -86,7 +153,8 @@ public sealed class MarketMoodQueryServiceTests
 
         Assert.Equal("partial", result.Status);
         Assert.Equal(3, result.AvailableCount);
-        Assert.Equal(3.33, result.Score);
+        Assert.Equal(-3.33, result.Score);
+        Assert.Equal("down", result.Direction);
         Assert.Equal(["gold", "nasdaq", "us-treasury"], result.Evidence);
         var stale = Assert.Single(result.Assets, asset => asset.Symbol == "USO");
         Assert.False(stale.IsAvailable);
@@ -206,7 +274,7 @@ public sealed class MarketMoodApiContractTests
             response.EnsureSuccessStatusCode();
             using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
             var rootElement = json.RootElement;
-            Assert.Equal("equal_weight_available_only", rootElement.GetProperty("aggregation").GetString());
+            Assert.Equal("risk_appetite_signed_average", rootElement.GetProperty("aggregation").GetString());
             Assert.Equal(5, rootElement.GetProperty("availableCount").GetInt32());
             Assert.Equal(5, rootElement.GetProperty("evidence").GetArrayLength());
             Assert.Equal("unsupported", rootElement.GetProperty("economicCalendar").GetProperty("status").GetString());
@@ -216,6 +284,8 @@ public sealed class MarketMoodApiContractTests
             Assert.Equal("fresh", asset.GetProperty("delayStatus").GetString());
             Assert.Equal("open", asset.GetProperty("sessionStatus").GetString());
             Assert.Equal(JsonValueKind.Null, asset.GetProperty("reason").ValueKind);
+            Assert.Equal(-1, asset.GetProperty("impactSign").GetInt32());
+            Assert.Equal(-1, asset.GetProperty("contribution").GetDouble());
         }
         finally
         {
