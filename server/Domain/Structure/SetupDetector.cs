@@ -73,17 +73,18 @@ public sealed record SetupDetectionRequest(string Symbol, DateTimeOffset Session
     ImmutableArray<PriceZone> Zones, ImmutableArray<TouchEpisode> Episodes, TrendAssessment Trend,
     double? Atr1mAtStructureCutoff, decimal? LivePrice, DateTimeOffset? QuoteAt,
     StructureLiquidity? Liquidity, ImmutableArray<string> ExternalBlockers, bool PriceTickSupported = true,
-    ConditionalReturnModel? ForecastModel = null)
+    ConditionalReturnModel? ForecastModel = null, decimal? PreviousDailyClose = null)
 {
     public static SetupDetectionRequest Create(string symbol, DateTimeOffset sessionStart, DateTimeOffset sessionEnd,
         DateTimeOffset analysisAsOf, DateTimeOffset now, ImmutableArray<StructureBar> bars,
         ImmutableArray<PriceZone> zones, ImmutableArray<TouchEpisode> episodes, TrendAssessment trend,
         double? atr1mAtStructureCutoff, decimal? livePrice, DateTimeOffset? quoteAt,
         StructureLiquidity? liquidity = null, ImmutableArray<string>? externalBlockers = null,
-        bool priceTickSupported = true, ConditionalReturnModel? forecastModel = null) =>
+        bool priceTickSupported = true, ConditionalReturnModel? forecastModel = null,
+        decimal? previousDailyClose = null) =>
         new(symbol, sessionStart, sessionEnd, analysisAsOf, now, bars, zones, episodes, trend,
             atr1mAtStructureCutoff, livePrice, quoteAt, liquidity,
-            externalBlockers ?? ImmutableArray<string>.Empty, priceTickSupported, forecastModel);
+            externalBlockers ?? ImmutableArray<string>.Empty, priceTickSupported, forecastModel, previousDailyClose);
 }
 
 public sealed record SetupDetectionResult(ImmutableArray<EntryCandidate> Candidates, string? PreferredCandidateId,
@@ -139,6 +140,10 @@ public static class SetupDetector
     public const string CodeTrendDeeplyOpposesShortRebound = "TREND_DEEPLY_OPPOSES_SHORT_REBOUND";
     public const string CodeReboundLongAboveVwap = "REBOUND_LONG_ABOVE_VWAP";
     public const string CodePullbackTooFarFromVwap = "PULLBACK_TOO_FAR_FROM_VWAP";
+    /// <summary>PULLBACK 롱의 계획 시점 ATR%가 상한 이상이면 막는 거절 사유(#245 H-PB1).</summary>
+    public const string CodePullbackAtrTooHigh = "PULLBACK_ATR_TOO_HIGH";
+    /// <summary>세션 갭다운이 상한 이상인 PULLBACK 롱을 막는 거절 사유(#245 H4).</summary>
+    public const string CodePullbackGapDown = "PULLBACK_GAP_DOWN";
     public const string CodeBreakoutTooFarFromVwap = "BREAKOUT_TOO_FAR_FROM_VWAP";
     public const string CodeReboundEntryQualityTooLow = "REBOUND_ENTRY_QUALITY_TOO_LOW";
     /// <summary>REBOUND 신규 진입이 개장 후 허용 상한(ReboundMaxMinutesAfterOpen)을 지난 거절 사유(§9.3, #245 G1).</summary>
@@ -563,6 +568,11 @@ public static class SetupDetector
             rejections.Add(CodeReboundLongAboveVwap);
         if (RejectsPullbackTooFarFromVwap(hypothesis.Kind, side, vwapDistance, policy))
             rejections.Add(CodePullbackTooFarFromVwap);
+        if (RejectsPullbackAtrTooHigh(hypothesis.Kind, side, request.Atr1mAtStructureCutoff, entryReference, policy))
+            rejections.Add(CodePullbackAtrTooHigh);
+        if (RejectsPullbackGapDown(hypothesis.Kind, side, bars.Length > 0 ? bars[0].Open : (decimal?)null,
+                request.PreviousDailyClose, policy))
+            rejections.Add(CodePullbackGapDown);
         if (RejectsBreakoutTooFarFromVwap(hypothesis.Kind, side, vwapDistance, policy))
             rejections.Add(CodeBreakoutTooFarFromVwap);
         if (RejectsBreakoutBelowVwap(hypothesis.Kind, side, vwapDistance, policy))
@@ -738,6 +748,21 @@ public static class SetupDetector
         StructurePolicy policy) => policy.RequirePullbackNearVwap && kind == SetupKind.Pullback &&
         side == TradeSide.Long && vwapDistance is { } distance && double.IsFinite(distance) &&
         distance > policy.PullbackMaximumVwapDistanceAtr;
+
+    /// <summary>PULLBACK 롱의 계획 시점 ATR%가 상한 이상이면 거절한다(#245 H-PB1). null 정책이면 거절하지 않는다.</summary>
+    public static bool RejectsPullbackAtrTooHigh(SetupKind kind, TradeSide side, double? atr1m,
+        decimal entryReference, StructurePolicy policy) =>
+        policy.PullbackMaxAtrPercent is { } maxAtrPercent && kind == SetupKind.Pullback && side == TradeSide.Long &&
+        atr1m is { } atr && double.IsFinite(atr) && atr > 0 && entryReference > 0 &&
+        atr / (double)entryReference * 100d >= maxAtrPercent;
+
+    /// <summary>세션 시가가 전일 종가 대비 상한% 이상 갭다운인 PULLBACK 롱을 거절한다(#245 H4). null 정책이면 거절하지 않는다.</summary>
+    public static bool RejectsPullbackGapDown(SetupKind kind, TradeSide side, decimal? sessionOpen,
+        decimal? previousDailyClose, StructurePolicy policy) =>
+        policy.PullbackMaxGapDownPercent is { } maxGapDownPercent && kind == SetupKind.Pullback &&
+        side == TradeSide.Long && sessionOpen is { } open && open > 0 &&
+        previousDailyClose is { } prior && prior > 0 &&
+        (double)((open - prior) / prior) * 100d <= -maxGapDownPercent;
 
     public static bool RejectsBreakoutTooFarFromVwap(SetupKind kind, TradeSide side, double? vwapDistance,
         StructurePolicy policy) => policy.RequireBreakoutNearVwap && kind == SetupKind.Breakout &&

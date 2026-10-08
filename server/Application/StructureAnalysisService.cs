@@ -390,7 +390,9 @@ public sealed class StructureAnalysisService(
         var detection = SetupDetector.Detect(SetupDetectionRequest.Create(snapshot.Symbol, snapshot.SessionStart,
             snapshot.SessionEnd, snapshot.AnalysisAsOf, now, build.Bars.Bars, candidateLayer.Zones,
             candidateLayer.Episodes, trend, candidateLayer.Atr1m, snapshot.QuotePrice, snapshot.QuoteAt,
-            snapshot.OptionalLiquidity, blockers, tickSupported), _policy);
+            snapshot.OptionalLiquidity, blockers, tickSupported,
+            previousDailyClose: build.DailyBars.IsDefaultOrEmpty
+                ? (decimal?)null : build.DailyBars[^1].Close), _policy);
 
         var candidates = StructuralLifecycle.ApplyLive(
             // zones는 §10 돌파 쿨다운의 zone lineage(Aliases) 확인용이며 후보 계층(structureCutoff) 스냅샷이다.
