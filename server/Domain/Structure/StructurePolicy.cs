@@ -113,6 +113,18 @@ public sealed record StructurePolicy
     /// 고른 잠정값 20이며 배포 후 차단 건의 사후 결과로 재검증한다(#210, §16A).
     /// </summary>
     public int StopReentryCooldownBars { get; init; } = 20;
+    /// <summary>
+    /// §10 U5 전종목 손절 쿨다운(#245). 어느 종목이든 STOP 청산 뒤 이 분 안에는 모든 종목의 신규 진입을 막는다.
+    /// null이면 적용하지 않고 hash에 넣지 않는다(§16A). 종목 간 상태 공유라 replay는 직렬 경로로 돈다.
+    /// </summary>
+    [OmitFromPolicyHashWhenEmpty]
+    public int? CrossSymbolStopCooldownMinutes { get; init; }
+    /// <summary>
+    /// §10 U5 일일 손절 상한(#245 Cycle134). 당일 전종목 누적 STOP 청산이 이 횟수에 도달하면 그 날 남은 시간 동안
+    /// 모든 종목의 신규 진입을 금지한다. null이면 적용하지 않고 hash에 넣지 않는다. 쿨다운의 대안·병용 규칙이다.
+    /// </summary>
+    [OmitFromPolicyHashWhenEmpty]
+    public int? MaxDailyStops { get; init; }
     public long ObservationDailyByteLimit { get; init; } = 20L * 1024 * 1024;
 
     /// <summary>

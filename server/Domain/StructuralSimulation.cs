@@ -27,7 +27,13 @@ public enum StructuralEntryOutcome
     /// </summary>
     BlockedByStopCooldown,
     /// <summary>호가 비용이 결측인 계획은 실제 진입으로 승격하지 않는다.</summary>
-    BlockedByMissingLiquidityCost
+    BlockedByMissingLiquidityCost,
+    /// <summary>
+    /// #245 U5 §10 전종목 손절 쿨다운/일일 손절 상한에 걸렸다. 어느 종목이든 최근 STOP 청산이
+    /// <see cref="StructurePolicy.CrossSymbolStopCooldownMinutes"/> 분 안에 있거나 당일 누적 STOP이
+    /// <see cref="StructurePolicy.MaxDailyStops"/>에 도달했다. 거래를 만들지 않는다.
+    /// </summary>
+    BlockedByCrossSymbolStopCooldown
 }
 
 /// <summary>
@@ -42,7 +48,10 @@ public sealed record StructuralEntryRequest(string Symbol, DateTimeOffset Trigge
     // 확인봉 체결을 사용한 경우 관측 근거를 SimTrade에 전파한다. null은 기존 실시간 호출의
     // 미관측 호가 경로로 남겨 하위 호환한다.
     EntryConfirmation? Confirmation = null, bool RequireCompleteLiquidityCost = false,
-    double? BenchmarkReturnPercent = null);
+    double? BenchmarkReturnPercent = null,
+    // #245 U5: 이번 거래일(세션) 전종목 STOP 청산 시각들. 호출자는 EnteredAt 이후(미래)의 청산을 넣지 않는다(룩어헤드 금지).
+    // null이면 전종목 쿨다운을 적용하지 않는다(기존 실시간·parallel replay 경로와 동일).
+    IReadOnlyList<DateTimeOffset>? CrossSymbolSessionStopExits = null);
 
 public sealed record StructuralEntryResult(List<SimTrade> Trades, StructuralEntryOutcome Outcome, SimTrade? Trade);
 
@@ -122,6 +131,9 @@ public static class StructuralSimulation
 
         if (StopCooldownActive(trades, request, selectedPolicy.StopReentryCooldownBars))
             return new StructuralEntryResult(trades, StructuralEntryOutcome.BlockedByStopCooldown, null);
+
+        if (CrossSymbolStopCooldownActive(request, selectedPolicy))
+            return new StructuralEntryResult(trades, StructuralEntryOutcome.BlockedByCrossSymbolStopCooldown, null);
 
         var plan = request.Context.PlanSnapshot;
         var entry = request.Confirmation is { Decision: PendingEntryDecision.Confirmed, FillPrice: > 0 } confirmation
@@ -206,6 +218,33 @@ public static class StructuralSimulation
 
         return BarCounting.CompletedBarsSince(stoppedAt, bars, request.TriggerBarStart) is { } completed
                && completed < cooldownBars;
+    }
+
+    /// <summary>
+    /// #245 U5 §10 전종목 손절 쿨다운/일일 손절 상한 판정. 실시간·replay가 공유하는 단일 함수다.
+    /// <paramref name="request"/>.CrossSymbolSessionStopExits에는 호출자가 이번 세션의 전종목 STOP 청산 시각(진입 시각 이하)만
+    /// 넣는다 — 미래 청산을 넣으면 룩어헤드다. 둘 중 하나라도 걸리면 차단한다:
+    /// (1) <see cref="StructurePolicy.CrossSymbolStopCooldownMinutes"/> 분 안에 든 청산이 하나라도 있으면,
+    /// (2) 진입 시각 이하의 세션 누적 STOP 수가 <see cref="StructurePolicy.MaxDailyStops"/> 이상이면.
+    /// </summary>
+    public static bool CrossSymbolStopCooldownActive(StructuralEntryRequest request, StructurePolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(policy);
+        if (policy.CrossSymbolStopCooldownMinutes is not > 0 && policy.MaxDailyStops is not > 0) return false;
+        if (request.CrossSymbolSessionStopExits is not { Count: > 0 } exits) return false;
+        var now = request.EnteredAt;
+
+        if (policy.MaxDailyStops is { } maxStops && maxStops > 0 && exits.Count(x => x <= now) >= maxStops)
+            return true;
+
+        if (policy.CrossSymbolStopCooldownMinutes is { } minutes && minutes > 0)
+        {
+            var window = TimeSpan.FromMinutes(minutes);
+            foreach (var exit in exits)
+                if (exit <= now && now - exit < window) return true;
+        }
+        return false;
     }
 
     /// <summary>

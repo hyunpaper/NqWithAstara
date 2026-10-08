@@ -151,6 +151,9 @@ public sealed class StructureAnalysisService(
 
     /// <summary>#117 §10: 같은 심볼의 직전 손절 이후 완료 봉이 정책 개수만큼 쌓이지 않았다.</summary>
     public const string NoteEntryBlockedByStopCooldown = Domain.Validation.EntryBlockCodes.BlockedByStopCooldown;
+    /// <summary>#245 U5 §10: 전종목 손절 쿨다운/일일 손절 상한에 걸렸다.</summary>
+    public const string NoteEntryBlockedByCrossSymbolStopCooldown =
+        Domain.Validation.EntryBlockCodes.BlockedByCrossSymbolStopCooldown;
     public const string NoteEntryUnavailable = "V5_ENTRY_PORT_UNAVAILABLE";
 
     /// <summary>#326: 진입 시 벤치마크 수익률 출처 상태와 선택된 청산 정책 버전(동작 아님, 관측).</summary>
@@ -724,6 +727,8 @@ public sealed class StructureAnalysisService(
             // #117: 같은 심볼의 직전 손절 이후 완료 봉이 부족하다. 후보는 READY로 남고 가드 키를 소비하지 않는다.
             Domain.StructuralEntryOutcome.BlockedByStopCooldown =>
                 Blocked(candidates, chosen, NoteEntryBlockedByStopCooldown),
+            Domain.StructuralEntryOutcome.BlockedByCrossSymbolStopCooldown =>
+                Blocked(candidates, chosen, NoteEntryBlockedByCrossSymbolStopCooldown),
             Domain.StructuralEntryOutcome.BlockedByMissingLiquidityCost =>
                 Blocked(candidates, chosen, NoteEntryBlockedByMissingLiquidity),
             _ => Blocked(candidates, chosen, NoteEntryPlanInvalid)

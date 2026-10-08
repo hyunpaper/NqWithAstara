@@ -230,7 +230,8 @@ public static class ValidationEvaluator
 
     /// <summary>#111: 진입 차단 사유를 코드별로 따로 센다 — 두 코드를 합치면 지연과 차단을 구분할 수 없다.</summary>
     static IReadOnlyList<EntryBlockCount> EntryBlocks(IReadOnlyList<LinkedCandidate> rows) =>
-        new[] { EntryBlockCodes.SuppressedBySamePollExit, EntryBlockCodes.BlockedByStopCooldown }
+        new[] { EntryBlockCodes.SuppressedBySamePollExit, EntryBlockCodes.BlockedByStopCooldown,
+                EntryBlockCodes.BlockedByCrossSymbolStopCooldown }
             .Select(code =>
             {
                 var hits = rows.Where(x => x.RejectionCodes.Contains(code, StringComparer.Ordinal)).ToArray();
