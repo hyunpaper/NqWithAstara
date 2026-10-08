@@ -66,10 +66,10 @@ public sealed record StructurePolicy
     public int? WindowBlockEndMinutesFromOpen { get; init; } = 300;
     /// <summary>실효 목표 gross %가 왕복 수수료의 이 배수 미만이면 계획을 거절한다. null이면 끄고 hash에 넣지 않는다(§9.3, #245 A1).</summary>
     [OmitFromPolicyHashWhenEmpty]
-    public double? AdaptiveMinimumTargetFeeMultiple { get; init; }
+    public double? AdaptiveMinimumTargetFeeMultiple { get; init; } = 4.0;
     /// <summary>§9.1 (왕복 수수료 + 유효 스프레드)가 손절폭의 이 배수를 넘으면 계획을 거절한다. null이면 끄고 hash에 넣지 않는다(#245 U1).</summary>
     [OmitFromPolicyHashWhenEmpty]
-    public double? MaxFeeToRiskRatio { get; init; }
+    public double? MaxFeeToRiskRatio { get; init; } = 0.4;
     /// <summary>REBOUND 신규 진입을 개장 후 이 경과 분(제외) 전까지만 허용한다. 이상이면 REBOUND_AFTER_MAX_MINUTES로 거절. null이면 제한 없음이고 hash에 넣지 않는다(§9.3, #245 G1). 진입 시점 경과 분만 쓴다(룩어헤드 없음).</summary>
     [OmitFromPolicyHashWhenEmpty]
     public int? ReboundMaxMinutesAfterOpen { get; init; }
@@ -77,19 +77,19 @@ public sealed record StructurePolicy
     // ── 차트 TA 진입 게이트 (#245 TA, 전부 null/false=현 동작, 진입 직전 완료봉만 사용) ──
     /// <summary>REBOUND 전용. (종목 시가대비 % − 벤치마크 QQQ 시가대비 %)가 이 값 미만이면 거절. null이면 끄고 hash에 넣지 않는다(#245 H1).</summary>
     [OmitFromPolicyHashWhenEmpty]
-    public double? ReboundMinRelativeStrengthPercent { get; init; }
+    public double? ReboundMinRelativeStrengthPercent { get; init; } = 0.0;
     /// <summary>REBOUND·PULLBACK 전용(BREAKOUT 제외). 직전 60봉 최고가 대비 종가 거리(%)가 이 값 미만이면 거절. null이면 끄고 hash에 넣지 않는다(#245 H2).</summary>
     [OmitFromPolicyHashWhenEmpty]
-    public double? MinDistanceToRecentHighPercent { get; init; }
+    public double? MinDistanceToRecentHighPercent { get; init; } = 0.3;
     /// <summary>전 유형. 진입 직전 구조가 HH_HL(피벗 고점·저점 둘 다 상승)이면 거절. null/false면 끄고 hash에 넣지 않는다(#245 H3).</summary>
     [OmitFromPolicyHashWhenEmpty]
-    public bool? RejectHigherHighHigherLow { get; init; }
+    public bool? RejectHigherHighHigherLow { get; init; } = true;
     /// <summary>H3 구조 피벗의 좌우 봉 수 k. null이면 3을 쓰고 hash에 넣지 않는다(#245 H3).</summary>
     [OmitFromPolicyHashWhenEmpty]
-    public int? HigherHighPivotK { get; init; }
+    public int? HigherHighPivotK { get; init; } = 3;
     /// <summary>H3 구조 판정 창(봉, lc−창..lc). null이면 60을 쓰고 hash에 넣지 않는다(#245 H3).</summary>
     [OmitFromPolicyHashWhenEmpty]
-    public int? HigherHighStructureWindowBars { get; init; }
+    public int? HigherHighStructureWindowBars { get; init; } = 60;
 
     /// <summary>
     /// §9.3 비용 반영 손익비 상한(#209). netR이 이 값을 넘으면 계획을 거절한다. 목표·손절을 조작하지 않는다(§19-5).
@@ -113,6 +113,18 @@ public sealed record StructurePolicy
     /// 고른 잠정값 20이며 배포 후 차단 건의 사후 결과로 재검증한다(#210, §16A).
     /// </summary>
     public int StopReentryCooldownBars { get; init; } = 20;
+    /// <summary>
+    /// §10 U5 전종목 손절 쿨다운(#245). 어느 종목이든 STOP 청산 뒤 이 분 안에는 모든 종목의 신규 진입을 막는다.
+    /// null이면 적용하지 않고 hash에 넣지 않는다(§16A). 종목 간 상태 공유라 replay는 직렬 경로로 돈다.
+    /// </summary>
+    [OmitFromPolicyHashWhenEmpty]
+    public int? CrossSymbolStopCooldownMinutes { get; init; }
+    /// <summary>
+    /// §10 U5 일일 손절 상한(#245 Cycle134). 당일 전종목 누적 STOP 청산이 이 횟수에 도달하면 그 날 남은 시간 동안
+    /// 모든 종목의 신규 진입을 금지한다. null이면 적용하지 않고 hash에 넣지 않는다. 쿨다운의 대안·병용 규칙이다.
+    /// </summary>
+    [OmitFromPolicyHashWhenEmpty]
+    public int? MaxDailyStops { get; init; }
     public long ObservationDailyByteLimit { get; init; } = 20L * 1024 * 1024;
 
     /// <summary>
