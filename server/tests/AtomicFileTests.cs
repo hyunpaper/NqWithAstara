@@ -98,18 +98,16 @@ public sealed class AtomicFileTests : IDisposable
     }
 
     [Fact]
-    public async Task WriteReplaceAsync_대상이_잠겨_최종_실패하면_tmp를_정리하고_예외를_올린다()
+    public async Task WriteReplaceAsync_교체가_실패하면_tmp를_정리하고_예외를_올린다()
     {
-        var path = Path.Combine(_dir, "locked.json");
-        await File.WriteAllTextAsync(path, "원본");
-        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
-        {
-            await Assert.ThrowsAnyAsync<Exception>(() =>
-                AtomicFile.WriteReplaceAsync(path, "대체", CancellationToken.None, maxAttempts: 3, delay: NoDelay));
-        }
+        var path = Path.Combine(_dir, "blocked.json");
+        Directory.CreateDirectory(path);
+
+        await Assert.ThrowsAnyAsync<Exception>(() =>
+            AtomicFile.WriteReplaceAsync(path, "대체", CancellationToken.None, maxAttempts: 3, delay: NoDelay));
 
         Assert.Empty(Directory.GetFiles(_dir, "*.tmp"));
-        Assert.Equal("원본", await File.ReadAllTextAsync(path));
+        Assert.True(Directory.Exists(path));
     }
 
     [Fact]
