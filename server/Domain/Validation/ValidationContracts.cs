@@ -132,10 +132,14 @@ public static class EntryBlockCodes
     /// <summary>#117 §10: 같은 심볼의 직전 손절 이후 완료 봉이 정책 개수만큼 쌓이지 않아 막힌 건.</summary>
     public const string BlockedByStopCooldown = "V5_ENTRY_BLOCKED_BY_STOP_COOLDOWN";
 
+    /// <summary>#245 U5 §10: 어느 종목이든 최근 STOP 청산이 전종목 쿨다운 안에 있거나 당일 누적 STOP 상한에 도달해 막힌 건.</summary>
+    public const string BlockedByCrossSymbolStopCooldown = "V5_ENTRY_BLOCKED_BY_CROSS_SYMBOL_STOP_COOLDOWN";
+
     public static string Label(string code) => code switch
     {
         SuppressedBySamePollExit => "같은 poll 청산으로 1 poll 지연 (#106)",
         BlockedByStopCooldown => "직전 손절 쿨다운 차단 (#117)",
+        BlockedByCrossSymbolStopCooldown => "전종목 손절 쿨다운 차단 (#245 U5)",
         _ => code
     };
 }

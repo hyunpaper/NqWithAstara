@@ -12,7 +12,7 @@ using Xunit;
 /// </summary>
 public sealed class StructureBreakoutCooldownTests
 {
-    static readonly StructurePolicy P = StructurePolicy.Default with { ReboundMaxTrendAlignment = null, WindowBlockStartMinutesFromOpen = null, WindowBlockEndMinutesFromOpen = null };
+    static readonly StructurePolicy P = StructurePolicy.Default with { ReboundMaxTrendAlignment = null, WindowBlockStartMinutesFromOpen = null, WindowBlockEndMinutesFromOpen = null, AdaptiveMinimumTargetFeeMultiple = null, MaxFeeToRiskRatio = null, ReboundMinRelativeStrengthPercent = null, MinDistanceToRecentHighPercent = null, RejectHigherHighHigherLow = null, HigherHighPivotK = null, HigherHighStructureWindowBars = null };
     const string BreakoutZoneId = "breakout-zone";
 
     static StructureBar Bar(int minute, decimal low, decimal high, decimal open, decimal close, double volume = 1000)
