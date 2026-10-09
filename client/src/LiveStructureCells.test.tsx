@@ -55,16 +55,73 @@ describe("LiveStructureCells — 표시 규칙", () => {
     expect(allText(container)).toContain("▼ −18.0 전환");
   });
 
-  it("대표 후보가 없으면 진입 품질은 '미평가'다 — 0으로 렌더하지 않는다(§2-4)", () => {
+  it("후보가 하나도 없으면 진입 품질은 '후보 없음'이고 툴팁에 현재 경고를 적는다 — 0으로 렌더하지 않는다(§2-4)", () => {
     const { container } = render(
       <LiveStructureCells
         mode="active"
-        row={row({ candidateState: "WAIT", preferredCandidateId: null, entryQuality: null })}
+        row={row({
+          candidateState: "WAIT",
+          preferredCandidateId: null,
+          entryQuality: null,
+          latestCandidate: null,
+          warnings: ["MISSING_5M_STRUCTURE"],
+        })}
       />,
     );
     const text = allText(container);
-    expect(text).toContain("미평가");
+    expect(text).toContain("후보 없음");
+    expect(text).not.toContain("미평가");
     expect(text).not.toMatch(/품질\s*0(\.0)?/);
+    const cell = [...container.querySelectorAll(".v5-cell")].find((el) => el.textContent?.includes("진입 품질"));
+    expect(cell?.getAttribute("title")).toContain("구조 후보가 없습니다");
+    expect(cell?.getAttribute("title")).toContain("5분 확정 피벗이 부족합니다");
+  });
+
+  it("대표 후보가 없어도 최근 후보가 있으면 그 품질을 상태와 함께 보여 준다", () => {
+    const { container } = render(
+      <LiveStructureCells
+        mode="active"
+        row={row({
+          candidateState: "REJECTED",
+          preferredCandidateId: null,
+          entryQuality: null,
+          latestCandidate: {
+            eventId: "TEST|e9",
+            kind: "BREAKOUT",
+            state: "REJECTED",
+            entryQuality: 48.13,
+            rejectionCodes: ["COUNTER_TREND_SETUP"],
+          },
+        })}
+      />,
+    );
+    const text = allText(container);
+    expect(text).toContain("48.1");
+    expect(text).toContain("부적합");
+    expect(text).toContain("돌파(BREAKOUT)");
+    expect(text).not.toContain("후보 없음");
+    const cell = [...container.querySelectorAll(".v5-cell")].find((el) => el.textContent?.includes("진입 품질"));
+    expect(cell?.getAttribute("title")).toContain("최근 후보");
+    expect(cell?.getAttribute("title")).toContain("추세와 반대 방향의 후보입니다");
+  });
+
+  it("대표 후보가 있으면 최근 후보보다 대표 후보의 품질을 우선한다", () => {
+    const { container } = render(
+      <LiveStructureCells
+        mode="active"
+        row={row({
+          candidateState: "READY",
+          preferredCandidateId: "TEST|e1",
+          entryQuality: 61.24,
+          preferredKind: "PULLBACK",
+          latestCandidate: { eventId: "TEST|e2", kind: "BREAKOUT", state: "REJECTED", entryQuality: 20.0 },
+        })}
+      />,
+    );
+    const text = allText(container);
+    expect(text).toContain("61.2");
+    expect(text).not.toContain("20.0");
+    expect(text).not.toContain("부적합");
   });
 
   it("데이터 결측: signedTrend null은 '추세 미산정'이고 warmup 상태 문구가 붙는다", () => {
@@ -86,8 +143,12 @@ describe("LiveStructureCells — 표시 규칙", () => {
         row={row({ warnings: ["MISSING_QUOTE", "INSUFFICIENT_1M_BARS"] })}
       />,
     );
-    expect(container.textContent).toContain("⚠ 2");
     const chip = container.querySelector(".v5-warnings");
+    expect(chip?.textContent).toBe("2");
+    expect(chip?.getAttribute("aria-label")).toBe("경고 2건");
+    expect(chip?.querySelector("svg")).not.toBeNull();
+    expect(chip?.getAttribute("title")).toContain("경고 2건");
+    expect(chip?.getAttribute("title")).toContain("진입 판정 결과가 아님");
     expect(chip?.getAttribute("title")).toContain("실시간 호가가 없습니다");
     expect(chip?.getAttribute("title")).toContain("완료된 1분봉이 부족합니다");
   });
@@ -125,6 +186,14 @@ describe("금지 표현 스냅샷 (§6 테스트 13)", () => {
       row({ candidateState: "REJECTED", trendState: "DOWN", signedTrend: -66.6 }),
     ],
     ["진입 처리됨", row({ candidateState: "ENTERED", preferredCandidateId: "TEST|e2", entryQuality: 12.3 })],
+    [
+      "최근 후보만 있음",
+      row({
+        candidateState: "REJECTED",
+        latestCandidate: { eventId: "TEST|e3", kind: "REBOUND", state: "REJECTED", entryQuality: 58.6, rejectionCodes: ["COUNTER_TREND_SETUP"] },
+        warnings: ["MISSING_5M_STRUCTURE", "CURRENT_DAILY_BAR_REMOVED"],
+      }),
+    ],
   ];
   it.each(cases)("v5 셀(%s)에 확률·승률·%%·/100·매수 문구가 없다", (_name, fixture) => {
     const { container } = render(<LiveStructureCells mode="active" row={fixture} />);
@@ -141,7 +210,7 @@ describe("표기 helper — v5 전용 렌더러", () => {
     expect(signedTrendText("UP", null)).toBe("추세 미산정");
     expect(signedTrendText(null, Number.NaN)).toBe("추세 미산정");
   });
-  it("entryQualityText: 대표 후보와 값이 모두 있어야 숫자, 아니면 미평가 고정", () => {
+  it("entryQualityText(알림 문구): 대표 후보와 값이 모두 있어야 숫자, 아니면 미평가 고정", () => {
     expect(entryQualityText("TEST|e1", 61.24)).toBe("61.2");
     expect(entryQualityText(null, 61.2)).toBe("미평가");
     expect(entryQualityText("TEST|e1", null)).toBe("미평가");

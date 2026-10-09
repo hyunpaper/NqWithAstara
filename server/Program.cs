@@ -2,13 +2,11 @@ using Astra.Server;
 using Astra.Server.Api;
 using Astra.Server.Application;
 using Astra.Server.Application.Backtest;
-using Astra.Server.Application.Chat;
 using Astra.Server.Application.Rates;
 using Astra.Server.Application.ScoreCore;
 using Astra.Server.Backtest;
 using Astra.Server.Domain.Confluence;
 using Astra.Server.Infrastructure;
-using Astra.Server.Infrastructure.Chat;
 using Astra.Server.Infrastructure.Rates;
 using Astra.Server.Infrastructure.ScoreCore;
 
@@ -29,12 +27,6 @@ if (args is [ConfluenceBackfillCommand.Name, ..])
     using var http = new HttpClient { BaseAddress = new Uri("https://openapi.tossinvest.com/"), Timeout = TimeSpan.FromSeconds(30) };
     Environment.ExitCode = await ConfluenceBackfillCommand.RunAsync(args, Console.Out, TimeProvider.System,
         new TossHistoricalBarSource(new TossClient(http)), CancellationToken.None);
-    return;
-}
-
-if (args is [OpeningScanMeasureCommand.Name, ..])
-{
-    Environment.ExitCode = await OpeningScanMeasureCommand.RunAsync(args, Console.Out, CancellationToken.None);
     return;
 }
 
@@ -90,15 +82,6 @@ builder.Services.AddSingleton<HistoricalReplayService>();
 builder.Services.AddHostedService<HistoricalReplayLifetime>();
 builder.Services.AddSingleton<BarStoreService>(); builder.Services.AddSingleton<BenchmarkPollingService>();
 builder.Services.AddSingleton<IBenchmarkBarSource>(x => x.GetRequiredService<BenchmarkPollingService>());
-// #371: 개장 초반 스캔. StructurePolicy와 분리된 자체 정책이며 PolicyHash에 영향을 주지 않는다. 임계값은 appsettings "OpeningScan"에서만 덮어쓴다.
-builder.Services.AddSingleton(_ => { var p = Astra.Server.Domain.Opening.OpeningScanPolicy.Default with { }; builder.Configuration.GetSection("OpeningScan").Bind(p); return p; });
-// #375: 거래량 프로파일 원천에 Toss 과거 1분봉을 추가한다(서버 자기 토큰, #332 정규화). 저장 봉은 폴백이다.
-builder.Services.AddSingleton<Astra.Server.Application.Opening.OpeningTossProfileSource>();
-builder.Services.AddSingleton<Astra.Server.Application.Opening.OpeningVolumeProfileSource>();
-builder.Services.AddSingleton<Astra.Server.Application.Opening.OpeningScanObservationWriter>();
-builder.Services.AddSingleton<Astra.Server.Application.Opening.OpeningScanService>();
-builder.Services.AddSingleton<Astra.Server.Application.Opening.OpeningProfileWarmup>();
-builder.Services.AddHostedService<OpeningProfileWarmupService>();
 // 이슈 #167: 컨플루언스 기법 신호·합산. 가중치는 전부 1.0(미검증)에서 시작하고 K4가 파일로 채운다.
 builder.Services.AddSingleton(_ => ConfluencePolicy.Default);
 // 이슈 #169: 측정 결과 가중치 파일을 기동 시 1회만 읽는다. 없거나 깨졌으면 전부 1.0으로 남는다.
@@ -153,16 +136,11 @@ builder.Services.AddSingleton<IDailyRateSource>(x => new FredCsvRateSource(rates
 builder.Services.AddSingleton<IRateObservationStore>(x => new JsonlRateObservationStore(Path.Combine(x.GetRequiredService<IWebHostEnvironment>().ContentRootPath, "App_Data", "rates")));
 builder.Services.AddSingleton<RatesCollector>();
 builder.Services.AddHostedService<RatesCollectorService>();
-// 이슈 #338: Ollama 채팅 프록시. Chat:OllamaUrl이 비면 News.OllamaUrl을 따르고 keep_alive·num_ctx는 보내지 않는다.
-builder.Services.AddSingleton(_ => { var chat = new ChatOptions(); builder.Configuration.GetSection("Chat").Bind(chat); return chat; });
-builder.Services.AddSingleton<IChatModelGateway>(x => new OllamaChatGateway(x.GetRequiredService<ChatOptions>(), x.GetRequiredService<NewsOptions>()));
-builder.Services.AddSingleton<ChatService>();
 var app = builder.Build();
 app.Services.GetRequiredService<TradingCostPolicyCheckService>();
 var clientRoot = Environment.GetEnvironmentVariable("ASTRA_CLIENT_ROOT") ?? Path.Combine(app.Environment.ContentRootPath, "..", "client"); var clientDist = Path.GetFullPath(Path.Combine(clientRoot, "dist"));
 if (Directory.Exists(clientDist)) { var files = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(clientDist); app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = files }); app.UseStaticFiles(new StaticFileOptions { FileProvider = files }); }
 app.MapAstraApi();
-app.MapChatApi();
 if (Directory.Exists(clientDist)) app.MapFallback(async context => { context.Response.ContentType = "text/html; charset=utf-8"; await context.Response.SendFileAsync(Path.Combine(clientDist, "index.html")); });
 app.Run();
 public partial class Program { }
