@@ -58,9 +58,9 @@ public sealed record StructurePolicy
     /// </summary>
     [OmitFromPolicyHashWhenEmpty]
     public double? ReboundMinInvalidationAtr { get; init; }
-    /// <summary>§9.3 신규 진입 차단 창 시작(개장 후 경과 분, 포함). null이면 차단 없음이고 hash에 넣지 않는다(#245 U2/T1). 운영 기본값 90(계열 I 통합 묶음).</summary>
+    /// <summary>§9.3 신규 진입 차단 창 시작(개장 후 경과 분, 포함). null이면 차단 없음이고 hash에 넣지 않는다(#245 U2/T1). 운영 기본값 150(묶음4: 90~150분 조기 반등 구간 재개방).</summary>
     [OmitFromPolicyHashWhenEmpty]
-    public int? WindowBlockStartMinutesFromOpen { get; init; } = 90;
+    public int? WindowBlockStartMinutesFromOpen { get; init; } = 150;
     /// <summary>§9.3 신규 진입 차단 창 끝(개장 후 경과 분, 제외). null이면 차단 없음이고 hash에 넣지 않는다(#245 U2/T1). 운영 기본값 300(계열 I 통합 묶음).</summary>
     [OmitFromPolicyHashWhenEmpty]
     public int? WindowBlockEndMinutesFromOpen { get; init; } = 300;
@@ -75,9 +75,9 @@ public sealed record StructurePolicy
     public int? ReboundMaxMinutesAfterOpen { get; init; }
 
     // ── 차트 TA 진입 게이트 (#245 TA, 전부 null/false=현 동작, 진입 직전 완료봉만 사용) ──
-    /// <summary>REBOUND 전용. (종목 시가대비 % − 벤치마크 QQQ 시가대비 %)가 이 값 미만이면 거절. null이면 끄고 hash에 넣지 않는다(#245 H1).</summary>
+    /// <summary>REBOUND 전용. (종목 시가대비 % − 벤치마크 QQQ 시가대비 %)가 이 값 미만이면 거절. null이면 끄고 hash에 넣지 않는다(#245 H1). 운영 기본값 −0.5(묶음4: eval 이익 반등 보존).</summary>
     [OmitFromPolicyHashWhenEmpty]
-    public double? ReboundMinRelativeStrengthPercent { get; init; } = 0.0;
+    public double? ReboundMinRelativeStrengthPercent { get; init; } = -0.5;
     /// <summary>REBOUND·PULLBACK 전용(BREAKOUT 제외). 직전 60봉 최고가 대비 종가 거리(%)가 이 값 미만이면 거절. null이면 끄고 hash에 넣지 않는다(#245 H2).</summary>
     [OmitFromPolicyHashWhenEmpty]
     public double? MinDistanceToRecentHighPercent { get; init; } = 0.3;
