@@ -72,7 +72,6 @@ import { ConfluenceBadgePopover } from "./ConfluenceTooltip";
 import type { ConfluenceSummary } from "./confluenceTypes";
 import HistoricalReplayPanel from "./HistoricalReplayPanel";
 import MarketMoodPopover from "./MarketMoodPopover";
-import ChatWidget from "./ChatWidget";
 import { normalizeMarketMood, type MarketMoodResponse } from "./marketMoodTypes";
 import TreasuryRatesStrip from "./TreasuryRatesStrip";
 import { normalizeRates, type RatesResponse } from "./ratesTypes";
@@ -1438,7 +1437,6 @@ export default function App() {
           <span className="app-version">v{__ASTRA_VERSION__}</span>
         </footer>
       </main>
-      <ChatWidget />
     </div>
   );
 }
