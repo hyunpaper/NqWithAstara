@@ -10,13 +10,13 @@ public sealed class StructureU6U2PolicyTests
         var json = StructurePolicy.Default.CanonicalJson;
         Assert.Equal(0.0, StructurePolicy.Default.ReboundMaxTrendAlignment);
         Assert.Null(StructurePolicy.Default.ReboundMinInvalidationAtr);
-        Assert.Equal(90, StructurePolicy.Default.WindowBlockStartMinutesFromOpen);
+        Assert.Equal(150, StructurePolicy.Default.WindowBlockStartMinutesFromOpen);
         Assert.Equal(300, StructurePolicy.Default.WindowBlockEndMinutesFromOpen);
         Assert.Contains("\"ReboundMaxTrendAlignment\":0", json);
-        Assert.Contains("\"WindowBlockStartMinutesFromOpen\":90", json);
+        Assert.Contains("\"WindowBlockStartMinutesFromOpen\":150", json);
         Assert.Contains("\"WindowBlockEndMinutesFromOpen\":300", json);
         Assert.DoesNotContain("ReboundMinInvalidationAtr", json);
-        Assert.Equal("375f54e9699b45d08693a06319ebc2c615af20b8183d35724a80cad9ecaafea0", StructurePolicy.Default.PolicyHash);
+        Assert.Equal("a072819da695ee03f9ead6f9e8885f3e29625a18f1bfe08c66785befed29a0fa", StructurePolicy.Default.PolicyHash);
     }
 
     [Fact]
