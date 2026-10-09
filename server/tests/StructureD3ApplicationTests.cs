@@ -585,6 +585,30 @@ public sealed class StructureD3ApplicationTests
     }
 
     [Fact]
+    public void LatestCandidateIsTheMostRecentlyConfirmedOneRegardlessOfState()
+    {
+        var at = DateTimeOffset.Parse("2026-10-09T14:00:00Z");
+        StructureCandidateDto Candidate(string id, string state, DateTimeOffset confirmedAt, double? quality) =>
+            new(id, "BREAKOUT", "zone", confirmedAt.AddMinutes(-1), confirmedAt, confirmedAt.AddMinutes(-1), confirmedAt.AddMinutes(10),
+                state, quality, 100m, null, null, null, null, null, [], [], [], false, false);
+
+        Assert.Null(StructureAnalysisService.LatestCandidate(null));
+        Assert.Null(StructureAnalysisService.LatestCandidate([]));
+
+        var latest = StructureAnalysisService.LatestCandidate(
+        [
+            Candidate("b", "REJECTED", at.AddMinutes(5), 48.1),
+            Candidate("a", "REJECTED", at.AddMinutes(5), 51.0),
+            Candidate("c", "INVALIDATED", at.AddMinutes(1), 70.2),
+        ]);
+
+        Assert.NotNull(latest);
+        Assert.Equal("a", latest!.EventId);
+        Assert.Equal("REJECTED", latest.State);
+        Assert.Equal(51.0, latest.EntryQuality);
+    }
+
+    [Fact]
     public async Task StateSummaryReportsDisabledPerSymbolWhenTheEngineIsOff()
     {
         var harness = await Polled(StructureEngineMode.Off);

@@ -8,8 +8,7 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
     StructureAlertPublisher? alerts = null, SymbolMetadataService? metadata = null,
     FeeRateCheckService? feeCheck = null, TradeTapeFallbackService? tradeTape = null,
     RealFillsService? realFills = null, BarStoreService? barStore = null,
-    BenchmarkPollingService? benchmark = null,
-    Astra.Server.Application.Opening.OpeningScanService? openingScan = null) : IMonitorSignals
+    BenchmarkPollingService? benchmark = null) : IMonitorSignals
 {
     public bool Running => runtime.Snapshot().Running; public long Generation => runtime.Snapshot().Generation;
     public string ConnectionStatus => runtime.Snapshot().ConnectionStatus; public string ConnectionMessage => runtime.Snapshot().ConnectionMessage;
@@ -37,8 +36,6 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
                 if (realFills is not null && market.Start is { } endedSession && market.End is { } endedAt
                     && clock.GetLocalNow() >= endedAt)
                     await realFills.CollectOnSessionEndAsync(MarketRules.TradingDate(endedSession), ct);
-                // #371: 세션 종료 분기에서 개장 스캔 마감 관측을 쓴다(상태 초기화 전).
-                if (openingScan is not null) await openingScan.FinalizeSessionAsync(market, ct);
                 runtime.TryCommit(gen, () => { Signals.Clear(); _setups.Clear(); _breakouts.Clear(); _daily.Clear(); structure?.Clear(); alerts?.Clear(); metadata?.Clear(); });
                 runtime.TryCommit(gen, s => s with { ConnectionStatus = "connected", ConnectionMessage = "", UpdatedAt = clock.GetUtcNow() }); return;
             }
@@ -85,10 +82,6 @@ public sealed class MonitorPollingService(ILocalStore store, IMarketDataGateway 
             if (!validQuote || bars.Any(x => !ValidBar(x))) { runtime.TryCommit(gen, () => Signals.TryRemove(item.Symbol, out _)); return PollOutcome.Invalid; }
             // 이슈 #165: 컨플루언스 측정 파이프라인(K4)의 저장 봉 — 완료 1분봉이 확정되는 지점에서 append한다.
             if (barStore is not null) await barStore.SaveNewBarsAsync(item.Symbol, bars, token);
-            // #371: 개장 초반 스캔은 워밍업 게이트 앞에서 관측한다(개장 1분부터 봉이 들어온다). 표시·기록 전용이며 Toss 추가 호출 0.
-            if (openingScan is not null && watched)
-                await openingScan.ObserveAsync(item, all, bars, quote, validQuote, market,
-                    _daily.TryGetValue(item.Symbol, out var cachedDaily) ? cachedDaily.Data : null, token);
             if (bars.Length < 30 || quote.At - bars[^1].Timestamp > TimeSpan.FromMinutes(3))
             {
                 if (!await UpdateTrades(gen, t => SimulationEngine.Process(t, item.Symbol, bars, quote.Price, quote.At, 50, 0, []), token)) return PollOutcome.Ignored;

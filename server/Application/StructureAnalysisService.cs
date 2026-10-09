@@ -1080,6 +1080,8 @@ public sealed class StructureAnalysisService(
                     preferredKind = view?.Candidates
                         .Where(x => x.EventId == view.PreferredCandidateId)
                         .Select(x => x.Kind).FirstOrDefault(),
+                    // #407: 대표(READY) 후보가 없어도 최근 후보의 품질·상태를 additive로 노출한다. 후보가 없으면 null.
+                    latestCandidate = LatestCandidateSummary(view?.Candidates),
                     analysisAsOf = view?.AnalysisAsOf,
                     quoteAt = view?.QuoteAt,
                     warnings = failed
@@ -1135,6 +1137,14 @@ public sealed class StructureAnalysisService(
 
     static string ReadinessReason(StructureAnalysisView? view, bool failed, string status) =>
         ReadinessReasonForContract(status, failed, view?.CandidateSummary);
+
+    internal static StructureCandidateDto? LatestCandidate(IEnumerable<StructureCandidateDto>? candidates) =>
+        candidates?.OrderByDescending(x => x.TriggerConfirmedAt).ThenBy(x => x.EventId, StringComparer.Ordinal).FirstOrDefault();
+
+    static object? LatestCandidateSummary(IEnumerable<StructureCandidateDto>? candidates) =>
+        LatestCandidate(candidates) is { } c
+            ? new { eventId = c.EventId, kind = c.Kind, state = c.State, entryQuality = c.EntryQuality, triggerConfirmedAt = c.TriggerConfirmedAt, rejectionCodes = c.RejectionCodes }
+            : null;
 
     sealed record StructureLayer(DateTimeOffset Cutoff, ImmutableArray<PriceZone> Zones,
         ImmutableArray<TouchEpisode> Episodes, VolumeProfile Profile, ImmutableArray<string> RetiredZoneIds,

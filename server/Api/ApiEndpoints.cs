@@ -12,8 +12,7 @@ public static class ApiEndpoints
     {
         app.MapGet("/api/health", async (MonitorRuntimeState r, FeeRateCheckService? feeCheck, NewsQueryService? news,
             BarStoreService? bars, ConfluenceOptions? confluence, ScoreCoreRuntimeState? scoreCore, RatesRuntimeState? rates, TimeProvider clock,
-            MonitorOptions? monitor, MonitorAutoStartService? autoStart, StructuralEntryHealthService? structureEntries,
-            Astra.Server.Application.Opening.OpeningScanService? openingScan) =>
+            MonitorOptions? monitor, MonitorAutoStartService? autoStart, StructuralEntryHealthService? structureEntries) =>
         {
             var s = r.Snapshot();
             var warnings = (feeCheck?.Warnings ?? Array.Empty<string>()).Concat(autoStart?.Warnings ?? Array.Empty<string>()).ToArray();
@@ -21,7 +20,7 @@ public static class ApiEndpoints
             var barsHealth = bars is null ? null : await bars.HealthAsync(tradingDate,
                 confluence?.BenchmarkSymbol ?? "QQQ", CancellationToken.None);
             var entriesHealth = structureEntries is null ? null : await structureEntries.HealthAsync(tradingDate);
-            return Results.Ok(new { app = "Astra", status = "ready", connection = s.ConnectionStatus, credentialsRequired = s.ConnectionStatus is "idle" or "error", guideUrl = s.ConnectionMessage.Contains("허용 IP") ? "https://developers.tossinvest.com/docs" : null, autoStart = monitor?.AutoStart ?? false, startedAt = s.StartedAt, startedBy = s.StartedBy, warnings, news = news?.Health(), bars = barsHealth, scoreCore = scoreCore?.Health(), rates = rates?.Health(), structureEntries = entriesHealth, openingScan = openingScan?.Health() });
+            return Results.Ok(new { app = "Astra", status = "ready", connection = s.ConnectionStatus, credentialsRequired = s.ConnectionStatus is "idle" or "error", guideUrl = s.ConnectionMessage.Contains("허용 IP") ? "https://developers.tossinvest.com/docs" : null, autoStart = monitor?.AutoStart ?? false, startedAt = s.StartedAt, startedBy = s.StartedBy, warnings, news = news?.Health(), bars = barsHealth, scoreCore = scoreCore?.Health(), rates = rates?.Health(), structureEntries = entriesHealth });
         });
         app.MapScoreCoreApi();
         app.MapRatesApi();
@@ -33,7 +32,6 @@ public static class ApiEndpoints
         app.MapPost("/api/news/migration/preview", NewsMigrationPreviewAsync);
         app.MapPost("/api/news/migration/execute", NewsMigrationExecuteAsync);
         app.MapGet("/api/market-mood", async (MarketMoodQueryService q, CancellationToken ct) => Results.Ok(await q.GetAsync(ct)));
-        app.MapGet("/api/opening-scan", (Astra.Server.Application.Opening.OpeningScanService q) => Results.Ok(q.Query()));
         app.MapGet("/api/state", async (StateQueryService q) => Results.Ok(await q.GetAsync())); app.MapGet("/api/search", SearchAsync);
         app.MapPost("/api/watchlist", AddWatchAsync);
         app.MapDelete("/api/watchlist/{symbol}", async (string symbol, MonitorControlService c, CancellationToken ct) => { await c.RemoveAsync(symbol, ct); return Results.NoContent(); });
