@@ -1909,20 +1909,3 @@ footer {
 @media (max-width: 520px) { .chat-window { right:0; bottom:0; width:100vw; height:min(88vh, 720px); border-radius:14px 14px 0 0; } .chat-window--min { height:auto; } .chat-fab { right:14px; } }
 @media (prefers-reduced-motion: reduce) { .chat-cursor { animation:none; } }
 
-/* #371 개장 초반 스캔 */
-.opening-scan-trigger { position:relative; display:inline-flex; overflow:visible; }
-.opening-scan-trigger > button { cursor:pointer; }
-.opening-mini-badge { font-size:11px; padding:1px 5px; border-radius:6px; border:1px solid var(--line); color:var(--text); white-space:nowrap; }
-.opening-scan-popover { position:fixed; z-index:60; max-height:min(72vh, 560px); overflow:auto; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--panel); box-shadow:0 8px 24px #0007; color:var(--text); font-size:11px; }
-.opening-scan-popover.above { transform:translateY(-100%); }
-.opening-scan-popover > strong, .opening-scan-sub, .opening-scan-empty, .opening-scan-note { display:block; margin:4px 3px; }
-.opening-scan-sub { color:var(--muted); font-weight:600; margin-top:8px; }
-.opening-scan-note { color:var(--muted); margin-top:8px; }
-.opening-scan-empty { color:var(--muted); }
-.opening-scan-table { width:100%; border-collapse:collapse; margin:4px 0; }
-.opening-scan-table th { text-align:left; color:var(--muted); font-weight:600; padding:3px 6px; border-bottom:1px solid var(--line); }
-.opening-scan-table td { padding:3px 6px; border-top:1px solid var(--line); white-space:nowrap; }
-.opening-scan-table td.opening-rvol-cell { cursor:help; font-variant-numeric:tabular-nums; }
-.opening-scan-table tr.opening-grade-strong td { color:var(--accent-vivid, var(--text)); }
-.opening-scan-weak { margin-top:8px; }
-.opening-scan-weak > summary { cursor:pointer; color:var(--muted); }

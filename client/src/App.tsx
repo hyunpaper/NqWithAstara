@@ -72,10 +72,8 @@ import { ConfluenceBadgePopover } from "./ConfluenceTooltip";
 import type { ConfluenceSummary } from "./confluenceTypes";
 import HistoricalReplayPanel from "./HistoricalReplayPanel";
 import MarketMoodPopover from "./MarketMoodPopover";
-import OpeningScanPopover from "./OpeningScanPopover";
 import ChatWidget from "./ChatWidget";
 import { normalizeMarketMood, type MarketMoodResponse } from "./marketMoodTypes";
-import { normalizeOpeningScan, openingScanBadge, type OpeningScanResponse } from "./openingScanTypes";
 import TreasuryRatesStrip from "./TreasuryRatesStrip";
 import { normalizeRates, type RatesResponse } from "./ratesTypes";
 import { WatchList } from "./WatchRowContent";
@@ -492,7 +490,6 @@ export default function App() {
     [newsHealthEnabled, setNewsHealthEnabled] = useState<boolean | null>(null),
     [newsSentiment, setNewsSentiment] = useState<NewsSentimentResponse | null>(null),
     [marketMood, setMarketMood] = useState<MarketMoodResponse | null>(null),
-    [openingScan, setOpeningScan] = useState<OpeningScanResponse | null>(null),
     [rates, setRates] = useState<RatesResponse | null>(null),
     // 이슈 #168/#181: 선택 종목은 ConfluencePanel의 기존 폴링 결과를, 나머지 행은
     // structureSummary 캐시 요약을 그대로 쓴다(추가 호출 없음, §4).
@@ -570,11 +567,6 @@ export default function App() {
     const next = normalizeRates(await api("/api/rates"));
     if (next) setRates(next);
   }, 30000);
-  // #371: 개장 초반 스캔은 60초 폴링(창 밖/휴장이면 300초로 늦춘다).
-  useVisiblePolling(async () => {
-    const next = normalizeOpeningScan(await api("/api/opening-scan"));
-    if (next) setOpeningScan(next);
-  }, openingScan?.phase === "scanning" || openingScan?.phase === "pending" || openingScan?.phase === "summary" ? 60000 : 300000);
   useEffect(() => {
     let active = true;
     let id: ReturnType<typeof setTimeout>;
@@ -848,10 +840,6 @@ export default function App() {
           return compareByV5State(rowOf(a.symbol), rowOf(b.symbol));
       }
     });
-  // #371: scanning 중에만 종목별 개장 배지를 붙인다(10:00 이후·휴장이면 rows가 비어 배지도 사라진다).
-  const openingRows = new Map(
-    (openingScan?.phase === "scanning" ? openingScan.rows : []).map((r) => [r.symbol, r] as const),
-  );
   const watchItems: WatchListItem[] = (state?.watchlist ?? []).map((w) => {
     const s = state?.signals.find((v) => v.symbol === w.symbol);
     const newsScore = newsUiEnabled
@@ -868,14 +856,6 @@ export default function App() {
       summaryRow?.confluence,
       (evidence, trigger) => newsDetail.open(articleFromEvidence(evidence), trigger, w.symbol),
     );
-    const openingRow = openingRows.get(w.symbol);
-    const openingBadge = openingRow ? openingScanBadge(openingRow) : null;
-    if (openingBadge)
-      badges.push(
-        <span key="opening" className="opening-mini-badge" title={openingBadge.title}>
-          {openingBadge.label}
-        </span>,
-      );
     return {
       symbol: w.symbol,
       name: w.name,
@@ -1018,7 +998,6 @@ export default function App() {
           <div className="header-actions">
             {rates && <TreasuryRatesStrip rates={rates} />}
             {marketMood && <MarketMoodPopover mood={marketMood} />}
-            {openingScan && <OpeningScanPopover scan={openingScan} />}
             <FeeWarningBadge warnings={state?.warnings} />
             <div className={`market ${state?.market.isOpen ? "open" : ""}`}>
               <span />
