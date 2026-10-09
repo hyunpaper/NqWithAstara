@@ -214,6 +214,17 @@ export type StructureSummaryRow = {
   warnings?: string[] | null;
   /** 이슈 #181: ConfluenceService 캐시를 읽기만 한 additive 요약. 캐시 없음/warmup이면 null이다. */
   confluence?: ConfluenceSummary | null;
+  /** #407: 대표 후보가 없어도 최근 후보(상태 무관)의 품질을 보여 주기 위한 additive 요약. 후보가 없으면 null. */
+  latestCandidate?: StructureLatestCandidate | null;
+};
+
+export type StructureLatestCandidate = {
+  eventId?: string | null;
+  kind?: string | null;
+  state?: string | null;
+  entryQuality?: number | null;
+  triggerConfirmedAt?: string | null;
+  rejectionCodes?: string[] | null;
 };
 
 /**
@@ -408,7 +419,7 @@ export const sidebarConfluenceScore = (
   return row?.confluence?.score ?? null;
 };
 
-/** EntryQuality 표기: 대표 후보가 없거나 값이 결측이면 "미평가" 고정 — null을 0으로 만들지 않는다(§2-4). */
+/** EntryQuality 표기(알림 문구용): 대표 후보가 없거나 값이 결측이면 "미평가" 고정 — null을 0으로 만들지 않는다(§2-4). */
 export const entryQualityText = (
   preferredCandidateId: string | null | undefined,
   entryQuality: number | null | undefined,
@@ -416,6 +427,76 @@ export const entryQualityText = (
   !preferredCandidateId || entryQuality == null || !Number.isFinite(entryQuality)
     ? "미평가"
     : entryQuality.toFixed(1);
+
+const finite = (value: number | null | undefined): value is number =>
+  value != null && Number.isFinite(value);
+
+export type EntryQualityDisplay = {
+  /** 셀 본문. 숫자(소수 1자리) 또는 "후보 없음". */
+  value: string;
+  /** 숫자 옆 보조 문구(최근 후보 상태). 대표 후보이거나 후보가 없으면 null. */
+  note: string | null;
+  /** 어떤 후보의 값인지·왜 값이 없는지 설명하는 툴팁. */
+  title: string;
+  kind: string | null;
+};
+
+const ENTRY_QUALITY_SCALE = "후보 간 비교용 순위 지표 (0~100)";
+
+/**
+ * #407 EntryQuality 표기. 대표(READY) 후보 → 그 값, 없으면 최근 후보(부적합·만료 포함)의 값을 상태와 함께,
+ * 후보 자체가 없으면 "후보 없음"과 사유. null을 0으로 만들지 않는다(§2-4).
+ */
+export const entryQualityDisplay = (
+  row: StructureSummaryRow | null | undefined,
+): EntryQualityDisplay => {
+  if (row?.preferredCandidateId && finite(row.entryQuality))
+    return {
+      value: row.entryQuality.toFixed(1),
+      note: null,
+      title: `대표 후보 ${setupKindLabel(row.preferredKind)} · 진입 품질 ${row.entryQuality.toFixed(1)}\n${ENTRY_QUALITY_SCALE}`,
+      kind: row.preferredKind ?? null,
+    };
+  const latest = row?.latestCandidate;
+  if (latest && finite(latest.entryQuality)) {
+    const state = candidateStateLabel(latest.state);
+    const reasons = codeTexts(latest.rejectionCodes);
+    return {
+      value: latest.entryQuality.toFixed(1),
+      note: state,
+      title: [
+        `최근 후보 ${setupKindLabel(latest.kind)} · ${state} · 진입 품질 ${latest.entryQuality.toFixed(1)}`,
+        "대표 후보가 아니므로 진입 대상이 아닙니다",
+        ...(reasons.length > 0 ? ["사유:", ...reasons.map((r) => `• ${r}`)] : []),
+        ENTRY_QUALITY_SCALE,
+      ].join("\n"),
+      kind: latest.kind ?? null,
+    };
+  }
+  const blockers = codeTexts(row?.warnings);
+  return {
+    value: "후보 없음",
+    note: null,
+    title: [
+      "이번 세션에 생성된 구조 후보가 없습니다",
+      row?.status && row.status !== "available" ? statusLabel(row.status) : null,
+      ...(blockers.length > 0 ? ["현재 경고:", ...blockers.map((r) => `• ${r}`)] : []),
+      ENTRY_QUALITY_SCALE,
+    ]
+      .filter((x): x is string => !!x)
+      .join("\n"),
+    kind: null,
+  };
+};
+
+/** #407 경고 칩 툴팁: 숫자가 무엇을 세는지(구조 분석 입력·전제 경고 건수)와 각 항목. */
+export const warningsTitle = (warnings: string[] | null | undefined): string => {
+  const texts = codeTexts(warnings);
+  return [
+    `경고 ${texts.length}건 — 구조 분석의 입력·전제 경고 수입니다 (진입 판정 결과가 아님)`,
+    ...texts.map((t) => `• ${t}`),
+  ].join("\n");
+};
 
 /** D3 계약 문서는 `FLIPPED_*`, 실제 직렬화는 enum 이름 그대로인 `FLIPPEDSUPPORT`다. 둘 다 받는다. */
 const normalizeRole = (role: string | null | undefined): string =>

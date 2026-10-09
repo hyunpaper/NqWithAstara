@@ -18,6 +18,7 @@ import {
   candidateGroup,
   candidateStateLabel,
   clock,
+  entryQualityDisplay,
   num1,
   price,
   setupKindLabel,
@@ -331,9 +332,14 @@ export default function StructurePanel({
                           강도 {row.signedTrend == null ? "—" : num1(row.signedTrend)}
                         </span>
                       </div>
-                      <div className="sr-quality">
+                      <div className="sr-quality" title={entryQualityDisplay(row).title}>
                         <small>진입 품질</small>
-                        <b>{row.entryQuality == null ? "—" : num1(row.entryQuality)}</b>
+                        <b>
+                          {entryQualityDisplay(row).value}
+                          {entryQualityDisplay(row).note ? (
+                            <small className="v5-quality-note">{entryQualityDisplay(row).note}</small>
+                          ) : null}
+                        </b>
                         {/* 이슈 #29: 지표 범위(0~100)는 유지하고 반복 교육 문구만 뺀다. */}
                         <span>0~100</span>
                       </div>

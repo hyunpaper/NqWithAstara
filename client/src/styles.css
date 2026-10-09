@@ -762,6 +762,12 @@ h2 {
 .eyebrow {
   font-size: 9px;
   color: var(--muted);
+  white-space: nowrap;
+}
+.v5-quality-note {
+  font-size: 9px;
+  color: var(--muted);
+  white-space: nowrap;
   letter-spacing: 1px;
   margin-bottom: 6px;
 }
@@ -1568,6 +1574,10 @@ footer {
   place-items: center;
   height: 100%;
   padding: 0 20px;
+.sr-quality .v5-quality-note {
+  display: inline;
+  margin-left: 4px;
+}
   text-align: center;
   color: var(--muted);
   font-size: 11px;
