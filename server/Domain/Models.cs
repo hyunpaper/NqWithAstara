@@ -51,7 +51,12 @@ public sealed record FrozenStructureContext(string EntryEventId, FrozenPlanSnaps
     // #326 additive: 진입 시 벤치마크 수익률 출처 상태. 이 계약 이전 행은 null(미수집)로 복원된다.
     EntryBenchmarkTags? Benchmark = null,
     // #314 additive: 후보 생성 시점 asOf의 Score Core snapshot 참조. 이 계약 이전 행은 null(미수집)로 복원된다.
-    EntryScoreCoreTags? ScoreCore = null);
+    EntryScoreCoreTags? ScoreCore = null,
+    // #245 H-B3-3 additive: 진입 시 정책에서 동결한 트레일 청산 계약. 이 계약 이전 행은 null(트레일 없음)로 복원된다.
+    // TrailingStopTriggerR·TrailingStopDistanceR가 둘 다 있으면 봉 replay가 트레일을 적용한다.
+    // StructuralTargetExtensionR: null=목표 유지, 0=목표 해제, 양수=진입+R로 연장(진입 시 Target에 이미 반영).
+    double? TrailingStopTriggerR = null, double? TrailingStopDistanceR = null,
+    double? StructuralTargetExtensionR = null);
 
 /// <summary>#326 진입 시점 벤치마크(QQQ) 관측. Status는 AVAILABLE|UNAVAILABLE이며 진입·청산 판정에 쓰이지 않는다.</summary>
 public sealed record EntryBenchmarkTags(string Status, double? ReturnPercent);
