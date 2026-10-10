@@ -264,20 +264,18 @@ public sealed record StructurePolicy
     /// §9.2 트레일 청산 트리거(R 배수, #245 H-B3-3). 완료봉 종가가 진입 + 이 R 이상 유리해지면 트레일을 무장한다.
     /// 무장 후에는 매 완료봉마다 손절을 max(현재 손절, 보유 중 최고가 − <see cref="TrailingStopDistanceR"/>·R)로 올린다(단조 상향).
     /// <see cref="TrailingStopDistanceR"/>와 함께 설정해야 작동한다. null이면 트레일 없음이고 hash에 넣지 않는다.
-    /// 묶음 5 운영 기본값 0.5(judge35 확장 우주 Cycle157, #245).
     /// </summary>
     [OmitFromPolicyHashWhenEmpty]
-    public double? TrailingStopTriggerR { get; init; } = 0.5;
-    /// <summary>§9.2 트레일 손절 거리(R 배수, #245 H-B3-3). 무장 후 손절 = 보유 중 최고가 − 이 R. null이면 트레일 없음이고 hash에 넣지 않는다. 묶음 5 운영 기본값 1.25(#245 Cycle157).</summary>
+    public double? TrailingStopTriggerR { get; init; }
+    /// <summary>§9.2 트레일 손절 거리(R 배수, #245 H-B3-3). 무장 후 손절 = 보유 중 최고가 − 이 R. null이면 트레일 없음이고 hash에 넣지 않는다.</summary>
     [OmitFromPolicyHashWhenEmpty]
-    public double? TrailingStopDistanceR { get; init; } = 1.25;
+    public double? TrailingStopDistanceR { get; init; }
     /// <summary>
     /// §9.2 구조 목표 연장/해제(R 배수, #245 H-B3-3). null=목표 유지, 0=목표 해제(트레일·EOD만), 양수=목표를 max(구조목표, 진입+이 R)로 연장한다.
     /// 2R 상한(<see cref="CapStructuralTargetAtTwoR"/>)보다 우선한다. null이면 hash에 넣지 않는다.
-    /// 묶음 5 운영 기본값 0(목표 해제 — 트레일·손절·EOD로만 청산, #245 Cycle157).
     /// </summary>
     [OmitFromPolicyHashWhenEmpty]
-    public double? StructuralTargetExtensionR { get; init; } = 0.0;
+    public double? StructuralTargetExtensionR { get; init; }
 
     /// <summary>§7 UP/DOWN 진입·이탈에 요구하는 연속 완료 봉 수. TRANSITION은 여기서 제외된다(§7, #148).</summary>
     public int TrendStateHoldBars { get; init; } = 2;

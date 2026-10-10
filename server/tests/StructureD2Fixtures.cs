@@ -66,10 +66,7 @@ static class D2
         EnableHalfRFeeBreakEvenStopForPositiveBenchmark = false,
         AllowQualifiedTransitionPullback = false,
         AllowQualifiedTransitionBreakout = false,
-        ExemptBreakoutFromPositiveBenchmarkHalfRStop = false,
-        TrailingStopTriggerR = null,
-        TrailingStopDistanceR = null,
-        StructuralTargetExtensionR = null
+        ExemptBreakoutFromPositiveBenchmarkHalfRStop = false
     };
 
     /// <summary>#209 netR 상한 밖의 주제를 다루는 fixture용 정책. 상한 자체는 <c>StructureMaxNetRTests</c>가 고정한다.</summary>
