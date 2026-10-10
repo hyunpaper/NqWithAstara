@@ -13,8 +13,8 @@ public sealed class StructureMaxNetRTests
     }
 
     [Theory]
-    [InlineData(101.43, 1.19)]
-    [InlineData(101.44, 1.20)]
+    [InlineData(101.33, 1.09)]
+    [InlineData(101.34, 1.10)]
     [InlineData(102.24, 2.00)]
     [InlineData(102.25, 2.01)]
     public void NetRisOneDollarSoTheTargetPriceSetsNetRExactly(double resistanceLower, double expectedNetR)
@@ -29,7 +29,7 @@ public sealed class StructureMaxNetRTests
     [Fact]
     public void NetRJustBelowTheMinimumIsRejectedAsInsufficient()
     {
-        var result = StructuralPlanner.Evaluate(WithResistanceLower(101.43m), P);
+        var result = StructuralPlanner.Evaluate(WithResistanceLower(101.33m), P);
 
         Assert.False(result.Viable);
         Assert.Contains(StructuralPlanner.InsufficientRewardToRisk, result.ReasonCodes);
@@ -39,11 +39,11 @@ public sealed class StructureMaxNetRTests
     [Fact]
     public void NetRExactlyAtTheMinimumIsAccepted()
     {
-        var result = StructuralPlanner.Evaluate(WithResistanceLower(101.44m), P);
+        var result = StructuralPlanner.Evaluate(WithResistanceLower(101.34m), P);
 
         Assert.True(result.Viable);
         Assert.Empty(result.ReasonCodes);
-        Assert.Equal(1.20m, result.NetR);
+        Assert.Equal(1.10m, result.NetR);
     }
 
     [Fact]
