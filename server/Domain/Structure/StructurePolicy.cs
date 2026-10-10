@@ -36,7 +36,7 @@ public sealed record StructurePolicy
     // ── 자격·위험·시간 (§16A 표) ──
     public double ZoneEligibilityStrength { get; init; } = .35;
     public double MaxRiskPercent { get; init; } = 2.0;
-    public double MinimumNetR { get; init; } = 1.2;
+    public double MinimumNetR { get; init; } = 1.1;
     /// <summary>REBOUND 계획 전용 손절폭 상한. null이면 <see cref="MaxRiskPercent"/>를 쓰고 hash에 넣지 않는다(§9.1, #245).</summary>
     [OmitFromPolicyHashWhenEmpty]
     public double? ReboundMaxRiskPercent { get; init; }
