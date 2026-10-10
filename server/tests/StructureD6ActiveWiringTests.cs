@@ -12,7 +12,6 @@ using Xunit;
 public sealed class StructureD6StructuralSimulationTests
 {
     static readonly StructurePolicy P = D6.WiringPolicy;
-    static readonly StructurePolicy NoTrail = StructurePolicy.Default with { TrailingStopTriggerR = null, TrailingStopDistanceR = null, StructuralTargetExtensionR = null };
 
     static StructuralTradePlan PlanA()
     {
@@ -80,7 +79,7 @@ public sealed class StructureD6StructuralSimulationTests
 
         var result = StructuralSimulation.Enter([], new StructuralEntryRequest(
             Fx.Symbol, Fx.At(39), Fx.At(41), Fx.SessionEnd, ContextA(plan),
-            [Fx.At(39), Fx.At(40), Fx.At(41)], Fx.At(0), null, confirmation), NoTrail);
+            [Fx.At(39), Fx.At(40), Fx.At(41)], Fx.At(0), null, confirmation));
 
         var trade = Assert.Single(result.Trades);
         Assert.Equal(fill, trade.EntryPrice, 10);
@@ -166,7 +165,7 @@ public sealed class StructureD6StructuralSimulationTests
     [Fact]
     public void V5TradesExitThroughTheExistingReplayAndEodPaths()
     {
-        var open = StructuralSimulation.Enter([], RequestA(), NoTrail).Trade!;
+        var open = StructuralSimulation.Enter([], RequestA()).Trade!;
         var stop = open.Stop;
 
         // 봉 저가가 손절에 닿으면 손절가로 청산된다.
@@ -363,7 +362,7 @@ public sealed class StructureD6ActiveWiringTests
         var obs = observations ?? new MemoryObservationStore();
         var runtime = new MonitorRuntimeState();
         var diagnostics = new SilentDiagnostics();
-        var entries = new CountingEntryPort(new StructuralTradeEntryService(recording, selectedPolicy));
+        var entries = new CountingEntryPort(new StructuralTradeEntryService(recording));
         var structure = new StructureAnalysisService(recording, new StructureObservationWriter(obs, selectedPolicy), runtime,
             clock, diagnostics, new StructureEngineOptions(mode), selectedPolicy, entries);
         var gateway = new ScriptedGateway(D6.Session, () => defaultFixture ? DefaultBars(clock.Now) : D6.CompletedBars(clock.Now),

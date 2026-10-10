@@ -174,9 +174,6 @@ public sealed class StructurePolicyTests
         Assert.Equal(.35, p.ZoneEligibilityStrength);
         Assert.Equal(2.0, p.MaxRiskPercent);
         Assert.Equal(1.1, p.MinimumNetR);
-        Assert.Equal(0.5, p.TrailingStopTriggerR);
-        Assert.Equal(1.25, p.TrailingStopDistanceR);
-        Assert.Equal(0.0, p.StructuralTargetExtensionR);
         Assert.Equal(40, p.EntryCutoffBeforeCloseMinutes);
         Assert.Equal(5, p.CandidateTtlMinutes);
         Assert.Equal(30, p.BreakoutCooldownMinutes);

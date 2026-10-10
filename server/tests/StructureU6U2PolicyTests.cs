@@ -16,7 +16,7 @@ public sealed class StructureU6U2PolicyTests
         Assert.Contains("\"WindowBlockStartMinutesFromOpen\":150", json);
         Assert.Contains("\"WindowBlockEndMinutesFromOpen\":300", json);
         Assert.DoesNotContain("ReboundMinInvalidationAtr", json);
-        Assert.Equal("8e72f31b9bf189c1cdaa2d4c8ac7d29f6edba2b65d54f898d2061183e00f8891", StructurePolicy.Default.PolicyHash);
+        Assert.Equal("252c300a0c1876d7f25dc1d712879f900367f4f2ab67720856915eb20f8018d5", StructurePolicy.Default.PolicyHash);
     }
 
     [Fact]

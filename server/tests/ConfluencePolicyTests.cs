@@ -149,7 +149,7 @@ public sealed class ConfluencePolicyTests
         Assert.Contains("\"EnableHalfRFeeBreakEvenStopForPositiveBenchmark\":true", StructurePolicy.Default.CanonicalJson);
         Assert.Contains("\"ExemptBreakoutFromPositiveBenchmarkHalfRStop\":true", StructurePolicy.Default.CanonicalJson);
         // #332 봉 시작 시각 규약으로 Version을 v5-structure.2로 올린 뒤의 정책 해시.
-        Assert.Equal("8e72f31b9bf189c1cdaa2d4c8ac7d29f6edba2b65d54f898d2061183e00f8891",
+        Assert.Equal("252c300a0c1876d7f25dc1d712879f900367f4f2ab67720856915eb20f8018d5",
             StructurePolicy.Default.PolicyHash);
         Assert.NotEqual(StructurePolicy.Default.PolicyHash, ConfluencePolicy.Default.PolicyHash);
     }
