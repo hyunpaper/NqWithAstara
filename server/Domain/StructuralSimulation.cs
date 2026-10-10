@@ -67,6 +67,27 @@ public static class StructuralSimulation
     public const string HalfRPositiveBenchmarkFeeBreakEvenExitPolicyVersion = "v5-exit.positive-benchmark-half-r-fee-break-even.1";
     public const string HalfRQualifiedTransitionFeeBreakEvenExitPolicyVersion = "v5-exit.qualified-transition-half-r-fee-break-even.1";
 
+    /// <summary>§9.2 트레일 청산이 켜진 거래의 청산 버전 꼬리표 접두(#245 H-B3-3). 기본 청산 버전 뒤에 붙여 provenance를 남긴다.</summary>
+    const string TrailingExitPolicyVersionMarker = "+trail.";
+
+    /// <summary>§9.2 트레일 꼬리표를 떼어 낸 기본 청산 버전. BE 손절 판정은 이 기본 버전으로 한다(#245 H-B3-3).</summary>
+    public static string BaseExitVersion(string version)
+    {
+        ArgumentNullException.ThrowIfNull(version);
+        var idx = version.IndexOf(TrailingExitPolicyVersionMarker, StringComparison.Ordinal);
+        return idx < 0 ? version : version[..idx];
+    }
+
+    /// <summary>§9.2 트레일 필드가 켜졌을 때만 기본 청산 버전에 트레일 꼬리표를 붙인다. 꺼져 있으면 기본 버전 그대로다(hash·parity 불변, #245 H-B3-3).</summary>
+    static string WithTrailing(string baseVersion, double? triggerR, double? distanceR, double? targetExtensionR)
+    {
+        if (triggerR is null && distanceR is null && targetExtensionR is null) return baseVersion;
+        var trigger = triggerR is { } t ? t.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) : "na";
+        var distance = distanceR is { } d ? d.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) : "na";
+        var target = targetExtensionR is { } x ? x.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) : "keep";
+        return $"{baseVersion}{TrailingExitPolicyVersionMarker}t{trigger}-d{distance}-x{target}.1";
+    }
+
     /// <summary>#326 진입 시 벤치마크 수익률 출처 상태.</summary>
     public const string BenchmarkAvailable = "AVAILABLE";
     public const string BenchmarkUnavailable = "UNAVAILABLE";
@@ -146,6 +167,14 @@ public static class StructuralSimulation
             var twoRTarget = plan.Side == TradeSide.Long ? entry + 2 * risk : entry - 2 * risk;
             target = plan.Side == TradeSide.Long ? Math.Min(target, twoRTarget) : Math.Max(target, twoRTarget);
         }
+        // §9.2 구조 목표 연장(#245 H-B3-3). 양수면 목표를 진입+R로 연장하되(2R 상한 우선 override), 구조 목표가 더 멀면 그대로 둔다.
+        // 0(해제)은 Target을 바꾸지 않고 봉 replay에서 목표 판정만 건너뛴다. 가격 순서는 유지된다.
+        if (selectedPolicy.StructuralTargetExtensionR is { } extensionR && extensionR > 0)
+        {
+            var risk = Math.Abs(entry - stop);
+            var extendedTarget = plan.Side == TradeSide.Long ? entry + extensionR * risk : entry - extensionR * risk;
+            target = plan.Side == TradeSide.Long ? Math.Max(target, extendedTarget) : Math.Min(target, extendedTarget);
+        }
         var ordered = plan.Side == TradeSide.Long
             ? stop > 0 && stop < entry && target > entry
             : stop > entry && target > 0 && target < entry;
@@ -163,13 +192,21 @@ public static class StructuralSimulation
               !(selectedPolicy.ExemptBreakoutFromPositiveBenchmarkHalfRStop && string.Equals(plan.Kind, "BREAKOUT", StringComparison.Ordinal))
                 ? HalfRPositiveBenchmarkFeeBreakEvenExitPolicyVersion
                 : request.Context.StructuralExitPolicyVersion;
+        // §9.2 트레일 청산은 트리거·거리가 둘 다 있을 때만 무장한다. 둘 중 하나만 있으면 동결하지 않아 기존 동작이 유지된다(#245 H-B3-3).
+        var trailTriggerR = selectedPolicy.TrailingStopTriggerR is { } tr && selectedPolicy.TrailingStopDistanceR is { } td && tr >= 0 && td > 0
+            ? (double?)tr : null;
+        var trailDistanceR = trailTriggerR is not null ? selectedPolicy.TrailingStopDistanceR : null;
+        var targetExtensionR = selectedPolicy.StructuralTargetExtensionR;
+        exitPolicyVersion = WithTrailing(BaseExitVersion(exitPolicyVersion), trailTriggerR, trailDistanceR, targetExtensionR);
         var benchmark = new EntryBenchmarkTags(
             request.BenchmarkReturnPercent is { } observed && double.IsFinite(observed) ? BenchmarkAvailable : BenchmarkUnavailable,
             request.BenchmarkReturnPercent is { } value && double.IsFinite(value) ? value : null);
         var context = request.Context with
         {
             PlanSnapshot = plan, Reentry = Reentry(trades, request), StructuralExitPolicyVersion = exitPolicyVersion,
-            Benchmark = benchmark
+            Benchmark = benchmark,
+            TrailingStopTriggerR = trailTriggerR, TrailingStopDistanceR = trailDistanceR,
+            StructuralTargetExtensionR = targetExtensionR
         };
         var trade = new SimTrade(id, request.Symbol, plan.Kind, request.EnteredAt, entry, target, stop,
             TargetBasis, StopBasis, "OPEN", null, null, null, entry,

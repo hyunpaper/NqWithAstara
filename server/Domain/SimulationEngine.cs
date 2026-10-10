@@ -28,7 +28,7 @@ public static class SimulationEngine
                 if (!CanApplyQuote(trade, quoteAt)) { trades[i] = trade; continue; }
                 if (IsStopHit(trade.Side, quotePrice, trade.Stop))
                     trade = Close(trade, "STOP", quotePrice, quoteAt, quotePrice, false, "SAMPLED_QUOTE", "QUOTE_STOP");
-                else if (IsTargetHit(trade.Side, quotePrice, trade.Target))
+                else if (!TargetRemoved(trade) && IsTargetHit(trade.Side, quotePrice, trade.Target))
                     trade = Close(trade, "TARGET", trade.Target, quoteAt, quotePrice, false, "SAMPLED_QUOTE", "QUOTE_TARGET");
                 // v4 전용 조기 청산(score<40 CUT). v5 구조 거래에는 적용하지 않는다 — v5는 동결된 구조
                 // Stop/Target과 EOD만으로 관리한다(설계 §10 "v5에 v4 score<40 CUT을 적용하지 않는다").
@@ -111,6 +111,8 @@ public static class SimulationEngine
 
     static SimTrade EvaluateBar(SimTrade trade, Candle bar)
     {
+        // §9.2 목표 해제(#245 H-B3-3): StructuralTargetExtensionR==0이면 목표 판정을 전부 건너뛰고 트레일·손절·EOD로만 닫는다.
+        var targetActive = !TargetRemoved(trade);
         // A stop gap fills at the opening print; this avoids the optimistic assumption
         // that a sell order could execute at a stop already skipped by the market.
         if (IsStopHit(trade.Side, bar.Open, trade.Stop))
@@ -118,33 +120,38 @@ public static class SimulationEngine
         // A gap-up open already at/beyond target has the target order filled before the bar's
         // own low can be checked against stop — the target print came first. Fill conservatively
         // at Target rather than the more favorable Open (mirrors the stop-gap treatment above).
-        if (IsTargetHit(trade.Side, bar.Open, trade.Target))
+        if (targetActive && IsTargetHit(trade.Side, bar.Open, trade.Target))
             return Close(trade, "TARGET", trade.Target, bar.Timestamp, bar.Close, false, "GAP_OPEN", "GAP_TARGET", bar) with { LastEvaluatedBarAt = bar.Timestamp };
         if (IsStopHit(trade.Side, bar.Low, trade.Stop) || IsStopHit(trade.Side, bar.High, trade.Stop))
             return Close(trade, "STOP", trade.Stop, bar.Timestamp, bar.Close, false, "COMPLETED_BAR_REPLAY",
-                IsTargetHit(trade.Side, bar.High, trade.Target) || IsTargetHit(trade.Side, bar.Low, trade.Target)
+                targetActive && (IsTargetHit(trade.Side, bar.High, trade.Target) || IsTargetHit(trade.Side, bar.Low, trade.Target))
                     ? "SAME_BAR_STOP_FIRST" : "BAR_STOP", bar) with { LastEvaluatedBarAt = bar.Timestamp };
         // When both levels occur within one minute and order is unknowable, stop-first is conservative.
-        if (IsTargetHit(trade.Side, bar.High, trade.Target) || IsTargetHit(trade.Side, bar.Low, trade.Target))
+        if (targetActive && (IsTargetHit(trade.Side, bar.High, trade.Target) || IsTargetHit(trade.Side, bar.Low, trade.Target)))
             return Close(trade, "TARGET", trade.Target, bar.Timestamp, bar.Close, false, "COMPLETED_BAR_REPLAY", "BAR_TARGET_AFTER_STOP_CHECK", bar) with { LastEvaluatedBarAt = bar.Timestamp };
         var observed = trade with { LastPrice = bar.Close, LastPriceAt = BarCloseAt(bar), LastEvaluatedBarAt = bar.Timestamp,
             Execution = WithBarEvidence(trade.Execution, bar) };
-        return ArmTwoRFeeBreakEvenStop(observed, bar.Close);
+        return ArmTrailingStop(ArmTwoRFeeBreakEvenStop(observed, bar.Close), bar);
     }
+
+    /// <summary>§9.2 목표 해제 여부(#245 H-B3-3). 동결 계약의 StructuralTargetExtensionR가 0이면 목표를 쓰지 않는다.</summary>
+    static bool TargetRemoved(SimTrade trade) => trade.Structure?.StructuralTargetExtensionR == 0;
 
     static SimTrade ArmTwoRFeeBreakEvenStop(SimTrade trade, double completedClose)
     {
         var context = trade.Structure;
-        if (context?.StructuralExitPolicyVersion is not (StructuralSimulation.TwoRFeeBreakEvenExitPolicyVersion or
+        // §9.2 트레일 꼬리표가 붙어도 BE 판정은 기본 청산 버전으로 한다(#245 H-B3-3). 둘은 함께 작동한다.
+        var baseVersion = context?.StructuralExitPolicyVersion is { } version ? StructuralSimulation.BaseExitVersion(version) : null;
+        if (baseVersion is not (StructuralSimulation.TwoRFeeBreakEvenExitPolicyVersion or
             StructuralSimulation.TwoRTargetAndFeeBreakEvenExitPolicyVersion or
             StructuralSimulation.HalfRPositiveBenchmarkFeeBreakEvenExitPolicyVersion or
             StructuralSimulation.HalfRQualifiedTransitionFeeBreakEvenExitPolicyVersion))
             return trade;
-        var plan = context.PlanSnapshot;
+        var plan = context!.PlanSnapshot;
         var originalStop = (double)plan.Stop;
         var risk = Math.Abs(trade.EntryPrice - originalStop);
         if (!(risk > 0) || !double.IsFinite(risk)) return trade;
-        var triggerR = context.StructuralExitPolicyVersion is StructuralSimulation.HalfRPositiveBenchmarkFeeBreakEvenExitPolicyVersion or
+        var triggerR = baseVersion is StructuralSimulation.HalfRPositiveBenchmarkFeeBreakEvenExitPolicyVersion or
             StructuralSimulation.HalfRQualifiedTransitionFeeBreakEvenExitPolicyVersion ? .5 : 2;
         var reachedTrigger = trade.Side == TradeSide.Long
             ? completedClose >= trade.EntryPrice + triggerR * risk
@@ -156,6 +163,37 @@ public static class SimulationEngine
         if (trade.Side == TradeSide.Long && feeBreakEven <= trade.Stop ||
             trade.Side == TradeSide.Short && feeBreakEven >= trade.Stop) return trade;
         return trade with { Stop = feeBreakEven, StopBasis = $"{triggerR:0.##}R 완료봉 이후 비용 회수 손절" };
+    }
+
+    /// <summary>§9.2 트레일 손절(#245 H-B3-3). 동결 계약의 트리거·거리가 둘 다 있으면: 완료봉 종가가 진입+트리거R에
+    /// 한 번이라도 도달한 뒤부터 손절을 max(현재 손절, 보유 중 최고가 − 거리R)로 올린다. 단조 상향만 하며,
+    /// 무장 상태는 StopBasis 꼬리표로 보존해 종가가 트리거 아래로 되돌아와도 계속 고점을 추종한다. BE 손절과 함께 작동한다.</summary>
+    const string TrailingStopBasis = "트레일: 고점 추종 손절";
+
+    static SimTrade ArmTrailingStop(SimTrade trade, Candle bar)
+    {
+        var context = trade.Structure;
+        if (context?.TrailingStopTriggerR is not { } triggerR || context.TrailingStopDistanceR is not { } distanceR)
+            return trade;
+        if (!double.IsFinite(triggerR) || !double.IsFinite(distanceR) || triggerR < 0 || !(distanceR > 0)) return trade;
+        var risk = Math.Abs(trade.EntryPrice - (double)context.PlanSnapshot.Stop);
+        if (!(risk > 0) || !double.IsFinite(risk)) return trade;
+
+        var armed = string.Equals(trade.StopBasis, TrailingStopBasis, StringComparison.Ordinal);
+        if (!armed)
+        {
+            var reachedTrigger = trade.Side == TradeSide.Long
+                ? bar.Close >= trade.EntryPrice + triggerR * risk
+                : bar.Close <= trade.EntryPrice - triggerR * risk;
+            if (!reachedTrigger) return trade;
+        }
+        var candidate = trade.Side == TradeSide.Long
+            ? bar.High - distanceR * risk
+            : bar.Low + distanceR * risk;
+        var newStop = trade.Side == TradeSide.Long
+            ? Math.Max(trade.Stop, candidate)
+            : Math.Min(trade.Stop, candidate);
+        return trade with { Stop = newStop, StopBasis = TrailingStopBasis };
     }
 
     static SimTrade ObserveQuote(SimTrade trade, double quotePrice, DateTimeOffset quoteAt)
