@@ -30,15 +30,29 @@ public sealed class StructureTrailingExitTests
         Assert.Single(SimulationEngine.ReplayBars([trade], Fx.Symbol, [Fx.Candle(minute, open, high, low, close)]));
 
     [Fact]
+    public void DefaultCarriesTheBundle5TrailingExitInHashAndCanonicalJson()
+    {
+        Assert.Equal(0.5, StructurePolicy.Default.TrailingStopTriggerR);
+        Assert.Equal(1.25, StructurePolicy.Default.TrailingStopDistanceR);
+        Assert.Equal(0.0, StructurePolicy.Default.StructuralTargetExtensionR);
+        var canonical = StructurePolicy.Default.CanonicalJson;
+        Assert.Contains("\"TrailingStopTriggerR\":0.5", canonical);
+        Assert.Contains("\"TrailingStopDistanceR\":1.25", canonical);
+        Assert.Contains("\"StructuralTargetExtensionR\":0", canonical);
+        Assert.EndsWith("+trail.t0.5-d1.25-x0.1", Open(Wiring with { TrailingStopTriggerR = StructurePolicy.Default.TrailingStopTriggerR, TrailingStopDistanceR = StructurePolicy.Default.TrailingStopDistanceR, StructuralTargetExtensionR = StructurePolicy.Default.StructuralTargetExtensionR }, FarTargetPlan()).Structure!.StructuralExitPolicyVersion);
+    }
+
+    [Fact]
     public void TrailingFieldsNullKeepsHashAndExitVersionAndBehaviourUnchanged()
     {
-        Assert.Null(StructurePolicy.Default.TrailingStopTriggerR);
-        Assert.Null(StructurePolicy.Default.TrailingStopDistanceR);
-        Assert.Null(StructurePolicy.Default.StructuralTargetExtensionR);
-        var canonical = StructurePolicy.Default.CanonicalJson;
+        Assert.Null(Wiring.TrailingStopTriggerR);
+        Assert.Null(Wiring.TrailingStopDistanceR);
+        Assert.Null(Wiring.StructuralTargetExtensionR);
+        var canonical = Wiring.CanonicalJson;
         Assert.DoesNotContain("TrailingStopTriggerR", canonical);
         Assert.DoesNotContain("TrailingStopDistanceR", canonical);
         Assert.DoesNotContain("StructuralTargetExtensionR", canonical);
+        Assert.NotEqual(StructurePolicy.Default.PolicyHash, (StructurePolicy.Default with { TrailingStopTriggerR = null, TrailingStopDistanceR = null, StructuralTargetExtensionR = null }).PolicyHash);
 
         var plan = FarTargetPlan();
         var trade = Open(Wiring, plan);
